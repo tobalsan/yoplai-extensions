@@ -42,6 +42,7 @@ export interface ConnectorDefinition {
   id: string;
   displayName: string;
   description: string;
+  systemPrompt?: string;
   configSchema: z.ZodTypeAny;
   agentConfigSchema?: z.ZodTypeAny;
   requiredSecrets: string[];
@@ -58,6 +59,25 @@ export default {
   id: "hiveage",
   displayName: "Hiveage",
   description: "Billing connector for invoices, estimates, payments, items, clients, and trash.",
+  systemPrompt: `Use this connector for Hiveage billing and invoicing operations.
+
+Available tools:
+- list_invoices, get_invoice, create_invoice, search_invoices: invoice management
+- list_recurring_invoices, get_recurring_invoice, create_recurring_invoice, search_recurring_invoices: recurring invoice management
+- list_estimates, get_estimate, create_estimate, search_estimates: estimate and quote management
+- list_payments, get_payment, create_payment: payment tracking
+- list_items, get_item, search_items: catalog item management
+- list_connections, get_connection, search_connections: client and connection management
+- list_trash: view deleted items
+
+Key concepts:
+- connections are clients or customers in Hiveage
+- invoices, estimates, and recurring invoices use hash keys as identifiers
+- line items define billable rows on invoices and estimates
+
+Common workflows:
+- To create an invoice, first find the connection (client) using search_connections or list_connections, then create_invoice with the connection hash key and line items.
+- To find a specific invoice, use search_invoices with a query string, or list_invoices with pagination.`,
   configSchema: HiveageConfigSchema,
   requiredSecrets: ["apiKey"],
   createTools(config: ResolvedConnectorConfig): ConnectorTool[] {
