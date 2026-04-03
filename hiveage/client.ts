@@ -48,7 +48,14 @@ import {
   HiveageValidationError,
 } from "./errors.js";
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+type JsonPrimitive = null | boolean | number | string;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+export interface HiveageClientOptions {
+  apiKey: string;
+  subdomain: string;
+  timeoutMs?: number;
+}
 
 function toSnakeCase(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
@@ -58,20 +65,20 @@ function toCamelCase(value: string): string {
   return value.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 }
 
-function mapKeysDeep(value: JsonValue, mapper: (key: string) => string): JsonValue {
+function mapDeep(value: JsonValue, mapper: (key: string) => string): JsonValue {
   if (Array.isArray(value)) {
-    return value.map((item) => mapKeysDeep(item, mapper));
+    return value.map((item) => mapDeep(item, mapper));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, nested]) => [mapper(key), mapKeysDeep(nested as JsonValue, mapper)]),
+      Object.entries(value).map(([key, nested]) => [mapper(key), mapDeep(nested as JsonValue, mapper)]),
     );
   }
   return value;
 }
 
-function compact(params: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
+function compact(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -84,129 +91,125 @@ export class HiveageClient {
   readonly timeoutMs: number;
   readonly baseUrl: string;
 
-  constructor(config: { apiKey: string; subdomain: string; timeoutMs?: number }) {
-    this.apiKey = config.apiKey;
-    this.subdomain = config.subdomain;
-    this.timeoutMs = config.timeoutMs ?? 30000;
-    this.baseUrl = `https://${this.subdomain}.hiveage.com/api`;
-  }
-
-  private authHeader(): string {
-    return `Basic ${Buffer.from(`${this.apiKey}:`).toString("base64")}`;
-  }
-
-  private async parseResponse(response: Response): Promise<unknown> {
-    const text = await response.text();
-    if (!text) {
-      return {};
-    }
-
-    try {
-      return JSON.parse(text) as unknown;
-    } catch {
-      return text;
-    }
-  }
-
-  private errorOptions(response: Response, endpoint: string) {
-    return {
-      endpoint,
-      status: response.status,
-      correlationId:
-        response.headers.get("x-correlation-id") ?? response.headers.get("x-request-id") ?? undefined,
-    };
+  constructor({ apiKey, subdomain, timeoutMs = 30000 }: HiveageClientOptions) {
+    this.apiKey = apiKey;
+    this.subdomain = subdomain;
+    this.timeoutMs = timeoutMs;
+    this.baseUrl = `https://${subdomain}.hiveage.com/api`;
   }
 
   private async request(
     method: string,
-    endpoint: string,
+    path: string,
     params?: Record<string, unknown>,
     body?: Record<string, unknown>,
   ): Promise<JsonValue> {
-    const url = new URL(`${this.baseUrl}/${endpoint}`);
-
+    const url = new URL(`${this.baseUrl}/${path}`);
     for (const [key, value] of Object.entries(compact(params ?? {}))) {
       url.searchParams.set(toSnakeCase(key), String(value));
     }
 
-    const payload = body ? JSON.stringify(mapKeysDeep(body as JsonValue, toSnakeCase)) : undefined;
+    const payload = body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
+    const auth = `Basic ${Buffer.from(`${this.apiKey}:`).toString("base64")}`;
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         const response = await fetch(url.toString(), {
           method,
           headers: {
             Accept: "application/json",
-            Authorization: this.authHeader(),
+            Authorization: auth,
             ...(payload ? { "Content-Type": "application/json" } : {}),
           },
           body: payload,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
 
+        const correlationId =
+          response.headers.get("x-correlation-id") ?? response.headers.get("x-request-id") ?? undefined;
+
         if (response.status === 429) {
-          if (attempt < 2) {
+          if (attempt < 3) {
             const retryAfter = Number(response.headers.get("retry-after") ?? "1");
             await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000);
             continue;
           }
-          throw new HiveageRateLimitError("Rate limit exceeded", this.errorOptions(response, endpoint));
+          throw new HiveageRateLimitError("Rate limit exceeded", {
+            endpoint: path,
+            status: 429,
+            correlationId,
+          });
         }
 
         if (response.status === 401 || response.status === 403) {
-          throw new HiveageAuthError("Authentication failed", this.errorOptions(response, endpoint));
+          throw new HiveageAuthError("Authentication failed", {
+            endpoint: path,
+            status: response.status,
+            correlationId,
+          });
         }
 
         if (response.status === 404) {
-          throw new HiveageNotFoundError(`Resource not found: ${endpoint}`, this.errorOptions(response, endpoint));
+          throw new HiveageNotFoundError(`Resource not found: ${path}`, {
+            endpoint: path,
+            status: 404,
+            correlationId,
+          });
         }
 
         if (response.status === 400 || response.status === 422) {
-          const payloadText = await response.text();
-          throw new HiveageValidationError(payloadText || "Validation failed", this.errorOptions(response, endpoint));
+          throw new HiveageValidationError((await response.text()) || "Validation failed", {
+            endpoint: path,
+            status: response.status,
+            correlationId,
+          });
         }
 
         if (response.status >= 500) {
-          if (attempt < 2) {
+          if (attempt < 3) {
             await sleep((attempt + 1) * 250);
             continue;
           }
-          throw new HiveageError(`Server error: ${response.status}`, this.errorOptions(response, endpoint));
+          throw new HiveageError(`Server error: ${response.status}`, {
+            endpoint: path,
+            status: response.status,
+            correlationId,
+          });
         }
 
         if (!response.ok) {
-          throw new HiveageError(`Request failed: ${response.status}`, this.errorOptions(response, endpoint));
+          throw new HiveageError(`Request failed: ${response.status}`, {
+            endpoint: path,
+            status: response.status,
+            correlationId,
+          });
         }
 
-        return mapKeysDeep((await this.parseResponse(response)) as JsonValue, toCamelCase);
+        const text = await response.text();
+        return text ? mapDeep(JSON.parse(text) as JsonValue, toCamelCase) : {};
       } catch (error) {
         if (error instanceof HiveageError) {
           throw error;
         }
-        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-          throw new HiveageConnectionError(error.message, { endpoint });
-        }
-        if (error instanceof TypeError) {
-          throw new HiveageConnectionError(error.message, { endpoint });
+        if (error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError)) {
+          throw new HiveageConnectionError(error.message, { endpoint: path });
         }
         throw error;
       }
     }
 
-    throw new HiveageRateLimitError("Rate limit exceeded", { endpoint });
+    throw new HiveageRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
   }
 
   async listInvoices(input: unknown = {}): Promise<{ invoices: Invoice[] }> {
     const params = ListInvoicesParamsSchema.parse(input);
     const data = (await this.request("GET", "invs", params)) as { invoices?: unknown[] };
-    return {
-      invoices: (data.invoices ?? []).map((invoice) => addInvoiceUrl(InvoiceSchema.parse(invoice), this.subdomain)),
-    };
+    return { invoices: (data.invoices ?? []).map((invoice) => addInvoiceUrl(InvoiceSchema.parse(invoice), this.subdomain)) };
   }
 
   async getInvoice(input: unknown): Promise<{ invoice: Invoice }> {
-    const params = GetInvoiceParamsSchema.parse(input);
-    const data = (await this.request("GET", `invs/${params.hashKey}`)) as { invoice: unknown };
+    const { hashKey } = GetInvoiceParamsSchema.parse(input);
+    const data = (await this.request("GET", `invs/${hashKey}`)) as { invoice: unknown };
     return { invoice: addInvoiceUrl(InvoiceSchema.parse(data.invoice), this.subdomain) };
   }
 
@@ -224,9 +227,7 @@ export class HiveageClient {
       order: params.order,
       column: params.column,
     })) as { invoices?: unknown[] };
-    return {
-      invoices: (data.invoices ?? []).map((invoice) => addInvoiceUrl(InvoiceSchema.parse(invoice), this.subdomain)),
-    };
+    return { invoices: (data.invoices ?? []).map((invoice) => addInvoiceUrl(InvoiceSchema.parse(invoice), this.subdomain)) };
   }
 
   async listRecurringInvoices(input: unknown = {}): Promise<{ recurringInvoices: RecurringInvoice[] }> {
@@ -240,8 +241,8 @@ export class HiveageClient {
   }
 
   async getRecurringInvoice(input: unknown): Promise<{ recurringInvoice: RecurringInvoice }> {
-    const params = GetRecurringInvoiceParamsSchema.parse(input);
-    const data = (await this.request("GET", `rinv/${params.hashKey}`)) as { recurringInvoice: unknown };
+    const { hashKey } = GetRecurringInvoiceParamsSchema.parse(input);
+    const data = (await this.request("GET", `rinv/${hashKey}`)) as { recurringInvoice: unknown };
     return {
       recurringInvoice: addRecurringInvoiceUrl(RecurringInvoiceSchema.parse(data.recurringInvoice), this.subdomain),
     };
@@ -275,14 +276,12 @@ export class HiveageClient {
   async listEstimates(input: unknown = {}): Promise<{ estimates: Estimate[] }> {
     const params = ListEstimatesParamsSchema.parse(input);
     const data = (await this.request("GET", "estm", params)) as { estimates?: unknown[] };
-    return {
-      estimates: (data.estimates ?? []).map((estimate) => addEstimateUrl(EstimateSchema.parse(estimate), this.subdomain)),
-    };
+    return { estimates: (data.estimates ?? []).map((estimate) => addEstimateUrl(EstimateSchema.parse(estimate), this.subdomain)) };
   }
 
   async getEstimate(input: unknown): Promise<{ estimate: Estimate }> {
-    const params = GetEstimateParamsSchema.parse(input);
-    const data = (await this.request("GET", `estm/${params.hashKey}`)) as { estimate: unknown };
+    const { hashKey } = GetEstimateParamsSchema.parse(input);
+    const data = (await this.request("GET", `estm/${hashKey}`)) as { estimate: unknown };
     return { estimate: addEstimateUrl(EstimateSchema.parse(data.estimate), this.subdomain) };
   }
 
@@ -300,9 +299,7 @@ export class HiveageClient {
       order: params.order,
       column: params.column,
     })) as { estimates?: unknown[] };
-    return {
-      estimates: (data.estimates ?? []).map((estimate) => addEstimateUrl(EstimateSchema.parse(estimate), this.subdomain)),
-    };
+    return { estimates: (data.estimates ?? []).map((estimate) => addEstimateUrl(EstimateSchema.parse(estimate), this.subdomain)) };
   }
 
   async listPayments(input: unknown): Promise<{ payments: Payment[] }> {
@@ -315,8 +312,8 @@ export class HiveageClient {
   }
 
   async getPayment(input: unknown): Promise<{ payment: Payment }> {
-    const params = GetPaymentParamsSchema.parse(input);
-    const data = (await this.request("GET", `invs/${params.invoiceHashKey}/payments/${params.paymentId}`)) as {
+    const { invoiceHashKey, paymentId } = GetPaymentParamsSchema.parse(input);
+    const data = (await this.request("GET", `invs/${invoiceHashKey}/payments/${paymentId}`)) as {
       payment: unknown;
     };
     return { payment: PaymentSchema.parse(data.payment) };
@@ -338,8 +335,8 @@ export class HiveageClient {
   }
 
   async getItem(input: unknown): Promise<{ itemCategory: ItemDetail }> {
-    const params = GetItemParamsSchema.parse(input);
-    const data = (await this.request("GET", `categories/items/${params.itemId}`)) as { itemCategory: unknown };
+    const { itemId } = GetItemParamsSchema.parse(input);
+    const data = (await this.request("GET", `categories/items/${itemId}`)) as { itemCategory: unknown };
     return { itemCategory: ItemDetailSchema.parse(data.itemCategory) };
   }
 
@@ -361,8 +358,8 @@ export class HiveageClient {
   }
 
   async getConnection(input: unknown): Promise<{ network: Connection }> {
-    const params = GetConnectionParamsSchema.parse(input);
-    const data = (await this.request("GET", `network/${params.hashKey}`)) as { network: unknown };
+    const { hashKey } = GetConnectionParamsSchema.parse(input);
+    const data = (await this.request("GET", `network/${hashKey}`)) as { network: unknown };
     return { network: ConnectionSchema.parse(data.network) };
   }
 
