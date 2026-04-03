@@ -1,0 +1,14 @@
+{
+  "name": "aihub-connectors",
+  "version": "0.1.0",
+  "description": "AIHub connectors — self-contained agent tools for external APIs",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "keywords": ["aihub", "connectors"],
+  "author": "algodyn",
+  "license": "MIT"
+}
