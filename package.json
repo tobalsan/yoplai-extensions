@@ -8,7 +8,18 @@
     "build": "tsc",
     "test": "vitest run"
   },
-  "keywords": ["aihub", "connectors"],
+  "keywords": [
+    "aihub",
+    "connectors"
+  ],
   "author": "algodyn",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.5.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  }
 }
