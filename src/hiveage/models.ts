@@ -185,7 +185,7 @@ export const EstimateSchema = z.object({
   connection: ConnectionSchema.nullable().optional(),
   date: NullableString,
   expireDate: NullableString,
-  state: z.enum(["draft", "viewed", "sent", "accept"]).nullable().optional(),
+  state: z.enum(["draft", "viewed", "sent", "accept", "invoiced"]).nullable().optional(),
   summary: NullableString,
   note: NullableString,
   companyId: NullableNumber,
