@@ -23,6 +23,8 @@ import {
   SearchInvoicesParamsSchema,
   SearchItemsParamsSchema,
   SearchRecurringInvoicesParamsSchema,
+  ValidateEstimateParamsSchema,
+  validateEstimateData,
 } from "./models.js";
 
 export interface ConnectorTool {
@@ -69,6 +71,7 @@ Available tools:
 - list_items, get_item, search_items: catalog item management
 - list_connections, get_connection, search_connections: client and connection management
 - list_trash: view deleted items
+- validate_estimate: validate estimate payload before creation (checks required fields, dates, line items, discounts)
 
 Key concepts:
 - connections are clients or customers in Hiveage
@@ -216,6 +219,13 @@ Common workflows:
         description: "List trash items.",
         parameters: ListTrashParamsSchema,
         execute: (params) => client.listTrash(params),
+      },
+      {
+        name: "validate_estimate",
+        description:
+          "Validate a renewal estimate payload before creating it. Checks required fields (connectionId, date, expireDate, statementNo), date formats, line item completeness, and discount structure. Returns {valid, issues}.",
+        parameters: ValidateEstimateParamsSchema,
+        execute: async (params) => validateEstimateData(params),
       },
     ];
   },

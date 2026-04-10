@@ -374,6 +374,127 @@ export const SearchConnectionsParamsSchema = z.object({
   column: z.string().optional().default("created_at"),
 });
 
+export const ValidateEstimateLineItemSchema = z.object({
+  description: z.string().nullable().optional(),
+  price: z.string().nullable().optional(),
+  quantity: z.string().nullable().optional(),
+  unit: z.string().nullable().optional(),
+  sortOrder: z.number().nullable().optional(),
+}).passthrough();
+
+export const ValidateEstimateDiscountSchema = z.object({
+  name: z.string().nullable().optional(),
+  combinedAmountPercent: z.string().nullable().optional(),
+  amount: z.string().nullable().optional(),
+  percentage: z.boolean().nullable().optional(),
+}).passthrough();
+
+export const ValidateEstimateParamsSchema = z.object({
+  connectionId: z.number().int().optional(),
+  date: z.string().optional(),
+  expireDate: z.string().optional(),
+  statementNo: z.string().optional(),
+  summary: z.string().optional(),
+  note: z.string().optional(),
+  sendReminders: z.boolean().optional(),
+  itemsAttributes: z.array(ValidateEstimateLineItemSchema).optional(),
+  expensesAttributes: z.array(z.record(z.unknown())).optional(),
+  tasksAttributes: z.array(z.record(z.unknown())).optional(),
+  tripsAttributes: z.array(z.record(z.unknown())).optional(),
+  taxesAttributes: z.array(z.record(z.unknown())).optional(),
+  discountsAttributes: z.array(ValidateEstimateDiscountSchema).optional(),
+  shippingAmountsAttributes: z.array(z.record(z.unknown())).optional(),
+});
+
+export interface ValidationIssue {
+  field: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  issues: ValidationIssue[];
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function validateEstimateData(input: unknown): ValidationResult {
+  const parsed = ValidateEstimateParamsSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      valid: false,
+      issues: parsed.error.issues.map((issue) => ({
+        field: issue.path.join("."),
+        message: issue.message,
+      })),
+    };
+  }
+
+  const data = parsed.data;
+  const issues: ValidationIssue[] = [];
+
+  // Required fields
+  if (data.connectionId == null) {
+    issues.push({ field: "connectionId", message: "connectionId is required" });
+  }
+  if (!data.date) {
+    issues.push({ field: "date", message: "date is required" });
+  }
+  if (!data.expireDate) {
+    issues.push({ field: "expireDate", message: "expireDate is required" });
+  }
+  if (!data.statementNo) {
+    issues.push({ field: "statementNo", message: "statementNo is required" });
+  }
+
+  // Date format
+  if (data.date && !DATE_RE.test(data.date)) {
+    issues.push({ field: "date", message: "date must be YYYY-MM-DD format" });
+  }
+  if (data.expireDate && !DATE_RE.test(data.expireDate)) {
+    issues.push({ field: "expireDate", message: "expireDate must be YYYY-MM-DD format" });
+  }
+
+  // expireDate after date
+  if (data.date && data.expireDate && DATE_RE.test(data.date) && DATE_RE.test(data.expireDate)) {
+    if (data.expireDate <= data.date) {
+      issues.push({ field: "expireDate", message: "expireDate must be after date" });
+    }
+  }
+
+  // Line items
+  const items = data.itemsAttributes ?? [];
+  if (items.length === 0) {
+    issues.push({ field: "itemsAttributes", message: "at least one line item is required" });
+  }
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item.description) {
+      issues.push({ field: `itemsAttributes[${i}].description`, message: "line item description is required" });
+    }
+    if (!item.price) {
+      issues.push({ field: `itemsAttributes[${i}].price`, message: "line item price is required" });
+    }
+    if (item.price && Number.isNaN(Number(item.price))) {
+      issues.push({ field: `itemsAttributes[${i}].price`, message: "line item price must be numeric" });
+    }
+    if (item.quantity && Number.isNaN(Number(item.quantity))) {
+      issues.push({ field: `itemsAttributes[${i}].quantity`, message: "line item quantity must be numeric" });
+    }
+  }
+
+  // Discounts
+  const discounts = data.discountsAttributes ?? [];
+  for (let i = 0; i < discounts.length; i++) {
+    const d = discounts[i];
+    if (!d.name) {
+      issues.push({ field: `discountsAttributes[${i}].name`, message: "discount name is required" });
+    }
+  }
+
+  return { valid: issues.length === 0, issues };
+}
+
 export const ListTrashParamsSchema = z.object({
   perPage: z.number().int().min(1).max(100).optional().default(20),
   page: z.number().int().min(1).optional().default(1),

@@ -3,14 +3,14 @@ import { ZodObject } from "zod";
 import connector from "../index.js";
 
 describe("hiveage connector", () => {
-  it("creates 22 tools", () => {
+  it("creates 23 tools", () => {
     const tools = connector.createTools({
       global: {},
       agent: {},
       merged: { apiKey: "secret", subdomain: "acme" },
     });
 
-    expect(tools).toHaveLength(22);
+    expect(tools).toHaveLength(23);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_invoices",
       "get_invoice",
@@ -34,6 +34,7 @@ describe("hiveage connector", () => {
       "get_connection",
       "search_connections",
       "list_trash",
+      "validate_estimate",
     ]);
   });
 
