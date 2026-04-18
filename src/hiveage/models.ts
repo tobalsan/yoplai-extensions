@@ -5,6 +5,40 @@ const NullableNumber = z.number().nullable().optional();
 const NullableBoolean = z.boolean().nullable().optional();
 const NullableStringArray = z.array(z.string()).nullable().optional();
 
+function parseJsonArrayInput(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function ArrayInput<T extends z.ZodTypeAny>(schema: T): z.ZodEffects<z.ZodUnion<[z.ZodArray<T>, z.ZodString]>, z.output<T>[], z.output<T>[] | string> {
+  const arraySchema = z.array(schema);
+  return z.union([arraySchema, z.string()]).transform((value, ctx) => {
+    const parsed = arraySchema.safeParse(parseJsonArrayInput(value));
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) ctx.addIssue(issue);
+      return z.NEVER;
+    }
+    return parsed.data;
+  });
+}
+
+const IntegerInput = z.union([z.number().int(), z.string()]).transform((value, ctx) => {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (!Number.isInteger(parsed)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.invalid_type,
+      expected: "integer",
+      received: typeof value === "string" ? "string" : "number",
+    });
+    return z.NEVER;
+  }
+  return parsed;
+});
+
 export const ConnectionSchema = z.object({
   id: NullableNumber,
   hashKey: NullableString,
@@ -41,6 +75,14 @@ export const LineItemSchema = z.object({
   createdAt: NullableString,
 }).passthrough();
 export type LineItem = z.infer<typeof LineItemSchema>;
+
+export const EstimateLineItemParamsSchema = z.object({
+  description: NullableString,
+  price: NullableString,
+  quantity: NullableString,
+  unit: NullableString,
+  sortOrder: z.coerce.number().int().nullable().optional(),
+}).strict();
 
 export const TaxSchema = z.object({
   id: NullableNumber,
@@ -324,20 +366,20 @@ export const GetEstimateParamsSchema = z.object({
   hashKey: z.string(),
 });
 export const CreateEstimateParamsSchema = z.object({
-  connectionId: z.number().int(),
+  connectionId: IntegerInput,
   date: z.string(),
   expireDate: z.string(),
   statementNo: z.string(),
   summary: z.string().optional(),
   note: z.string().optional(),
   sendReminders: z.boolean().optional(),
-  itemsAttributes: z.array(LineItemSchema).optional(),
-  expensesAttributes: z.array(ExpenseAttributeSchema).optional(),
-  tasksAttributes: z.array(TaskAttributeSchema).optional(),
-  tripsAttributes: z.array(TripAttributeSchema).optional(),
-  taxesAttributes: z.array(TaxSchema).optional(),
-  discountsAttributes: z.array(DiscountSchema).optional(),
-  shippingAmountsAttributes: z.array(ShippingAmountSchema).optional(),
+  itemsAttributes: ArrayInput(EstimateLineItemParamsSchema).optional(),
+  expensesAttributes: ArrayInput(ExpenseAttributeSchema).optional(),
+  tasksAttributes: ArrayInput(TaskAttributeSchema).optional(),
+  tripsAttributes: ArrayInput(TripAttributeSchema).optional(),
+  taxesAttributes: ArrayInput(TaxSchema).optional(),
+  discountsAttributes: ArrayInput(DiscountSchema).optional(),
+  shippingAmountsAttributes: ArrayInput(ShippingAmountSchema).optional(),
 });
 export const SearchEstimatesParamsSchema = SearchParamsSchema;
 
@@ -374,13 +416,7 @@ export const SearchConnectionsParamsSchema = z.object({
   column: z.string().optional().default("created_at"),
 });
 
-export const ValidateEstimateLineItemSchema = z.object({
-  description: z.string().nullable().optional(),
-  price: z.string().nullable().optional(),
-  quantity: z.string().nullable().optional(),
-  unit: z.string().nullable().optional(),
-  sortOrder: z.number().nullable().optional(),
-}).passthrough();
+export const ValidateEstimateLineItemSchema = EstimateLineItemParamsSchema;
 
 export const ValidateEstimateDiscountSchema = z.object({
   name: z.string().nullable().optional(),
@@ -390,20 +426,20 @@ export const ValidateEstimateDiscountSchema = z.object({
 }).passthrough();
 
 export const ValidateEstimateParamsSchema = z.object({
-  connectionId: z.number().int().optional(),
+  connectionId: IntegerInput.optional(),
   date: z.string().optional(),
   expireDate: z.string().optional(),
   statementNo: z.string().optional(),
   summary: z.string().optional(),
   note: z.string().optional(),
   sendReminders: z.boolean().optional(),
-  itemsAttributes: z.array(ValidateEstimateLineItemSchema).optional(),
-  expensesAttributes: z.array(z.record(z.unknown())).optional(),
-  tasksAttributes: z.array(z.record(z.unknown())).optional(),
-  tripsAttributes: z.array(z.record(z.unknown())).optional(),
-  taxesAttributes: z.array(z.record(z.unknown())).optional(),
-  discountsAttributes: z.array(ValidateEstimateDiscountSchema).optional(),
-  shippingAmountsAttributes: z.array(z.record(z.unknown())).optional(),
+  itemsAttributes: ArrayInput(ValidateEstimateLineItemSchema).optional(),
+  expensesAttributes: ArrayInput(z.record(z.unknown())).optional(),
+  tasksAttributes: ArrayInput(z.record(z.unknown())).optional(),
+  tripsAttributes: ArrayInput(z.record(z.unknown())).optional(),
+  taxesAttributes: ArrayInput(z.record(z.unknown())).optional(),
+  discountsAttributes: ArrayInput(ValidateEstimateDiscountSchema).optional(),
+  shippingAmountsAttributes: ArrayInput(z.record(z.unknown())).optional(),
 });
 
 export interface ValidationIssue {

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   ConnectionSchema,
+  CreateEstimateParamsSchema,
   InvoiceSchema,
   PaymentSchema,
   RecurringInvoiceSchema,
   TrashItemSchema,
+  ValidateEstimateParamsSchema,
+  validateEstimateData,
 } from "../models.js";
 
 describe("hiveage models", () => {
@@ -62,5 +65,53 @@ describe("hiveage models", () => {
     });
 
     expect(connection.customField).toBe("value");
+  });
+
+  it("parses stringified estimate line item arrays", () => {
+    const payload = ValidateEstimateParamsSchema.parse({
+      connectionId: "1260219",
+      date: "2026-04-18",
+      expireDate: "2026-05-18",
+      statementNo: "QU-01990",
+      itemsAttributes:
+        '[{"description":"CFI-STO-BO : Store subscription","price":"1747.2","quantity":"13","sortOrder":1,"unit":""}]',
+    });
+
+    expect(payload.connectionId).toBe(1260219);
+    expect(payload.itemsAttributes).toHaveLength(1);
+    expect(payload.itemsAttributes?.[0]?.sortOrder).toBe(1);
+  });
+
+  it("validates stringified estimate line item arrays", () => {
+    const result = validateEstimateData({
+      connectionId: "1260219",
+      date: "2026-04-18",
+      expireDate: "2026-05-18",
+      statementNo: "QU-01990",
+      itemsAttributes:
+        '[{"description":"CFI-STO-BO : Store subscription","price":"1747.2","quantity":"13","sortOrder":1,"unit":""}]',
+    });
+
+    expect(result).toEqual({ valid: true, issues: [] });
+  });
+
+  it("rejects date fields on estimate creation line items", () => {
+    expect(() =>
+      CreateEstimateParamsSchema.parse({
+        connectionId: 1260219,
+        date: "2026-04-18",
+        expireDate: "2026-05-18",
+        statementNo: "QU-01990",
+        itemsAttributes: [
+          {
+            date: "2026-04-18",
+            description: "CFI-STO-BO : Store subscription",
+            price: "1747.2",
+            quantity: "13",
+            sortOrder: 1,
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
