@@ -1,0 +1,447 @@
+import mammoth from "mammoth";
+
+import {
+  NotionAuthError,
+  NotionConnectionError,
+  NotionError,
+  NotionNotFoundError,
+  NotionRateLimitError,
+  NotionServerError,
+  NotionValidationError,
+} from "./errors.js";
+import { type NotionConfig } from "./models.js";
+
+type JsonPrimitive = null | boolean | number | string;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toSnakeCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase();
+}
+
+function mapKeysDeep(value: unknown, mapper: (key: string) => string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => mapKeysDeep(item, mapper));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [mapper(key), mapKeysDeep(nested, mapper)]),
+    );
+  }
+  return value;
+}
+
+function compact<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, nested]) => nested !== undefined));
+}
+
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function extractRequestId(response: Response): string | undefined {
+  return (
+    response.headers.get("x-request-id") ??
+    response.headers.get("x-notion-request-id") ??
+    response.headers.get("request-id") ??
+    undefined
+  );
+}
+
+function withPropertyValues<T extends Record<string, unknown>>(properties: T): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(properties).map(([key, value]) => [key, mapKeysDeep(value, toSnakeCase)]),
+  );
+}
+
+function withBlocks(blocks: unknown[]): unknown[] {
+  return blocks.map((block) => mapKeysDeep(block, toSnakeCase));
+}
+
+function normalizeRichTextItem(item: unknown): unknown {
+  if (typeof item === "string") {
+    return { type: "text", text: { content: item } };
+  }
+  if (isPlainObject(item) && typeof item.text === "string") {
+    return {
+      ...item,
+      type: typeof item.type === "string" ? item.type : "text",
+      text: { content: item.text },
+    };
+  }
+  return item;
+}
+
+function normalizePagePropertyValue(value: unknown, property: unknown): unknown {
+  const mappedValue = mapKeysDeep(value, toSnakeCase);
+  const propertyType =
+    isPlainObject(property) && typeof property.type === "string" ? property.type : undefined;
+  if (propertyType !== "rich_text") {
+    return mappedValue;
+  }
+  if (typeof mappedValue === "string") {
+    return { rich_text: [{ type: "text", text: { content: mappedValue } }] };
+  }
+  if (isPlainObject(mappedValue) && Array.isArray(mappedValue.rich_text)) {
+    return {
+      ...mappedValue,
+      rich_text: mappedValue.rich_text.map(normalizeRichTextItem),
+    };
+  }
+  return mappedValue;
+}
+
+function withPropertyNameMap(properties: Record<string, unknown>): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const [name, prop] of Object.entries(properties)) {
+    if (isPlainObject(prop)) {
+      const id = typeof prop.id === "string" ? prop.id : undefined;
+      if (id) {
+        map[id] = name;
+      }
+    }
+    map[normalizeName(name)] = name;
+  }
+  return map;
+}
+
+function resolvePagePropertyName(page: Record<string, unknown>, key: string): string {
+  const properties = isPlainObject(page.properties) ? page.properties : {};
+  const map = withPropertyNameMap(properties);
+  return map[key] ?? map[normalizeName(key)] ?? key;
+}
+
+function looksLikePdf(url: string, filename?: string, contentType?: string): boolean {
+  const hint = `${url} ${filename ?? ""} ${contentType ?? ""}`.toLowerCase();
+  return hint.includes("pdf") || hint.includes("application/pdf");
+}
+
+function looksLikeDocx(url: string, filename?: string, contentType?: string): boolean {
+  const hint = `${url} ${filename ?? ""} ${contentType ?? ""}`.toLowerCase();
+  return (
+    hint.includes("docx") ||
+    hint.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+  );
+}
+
+function normalizeText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export interface NotionClientOptions extends NotionConfig {}
+
+export class NotionClient {
+  readonly apiKey: string;
+  readonly notionVersion: string;
+  readonly timeoutMs: number;
+  readonly baseUrl = "https://api.notion.com/v1";
+
+  constructor(options: NotionClientOptions) {
+    this.apiKey = options.apiKey;
+    this.notionVersion = options.notionVersion;
+    this.timeoutMs = options.timeoutMs;
+  }
+
+  async listDataSources(query?: string, pageSize?: number, startCursor?: string): Promise<Record<string, unknown>> {
+    return await this.requestJson("POST", "/search", {
+      query,
+      filter: {
+        property: "object",
+        value: "data_source",
+      },
+      page_size: pageSize,
+      start_cursor: startCursor,
+    });
+  }
+
+  async getDataSource(dataSourceId: string): Promise<Record<string, unknown>> {
+    return await this.requestJson("GET", `/data_sources/${dataSourceId}`);
+  }
+
+  async updateDataSource(input: {
+    dataSourceId: string;
+    title?: string | unknown[];
+    description?: string | unknown[];
+    properties?: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = compact({
+      title: input.title ? mapKeysDeep(input.title, toSnakeCase) : undefined,
+      description: input.description ? mapKeysDeep(input.description, toSnakeCase) : undefined,
+      properties: input.properties ? withPropertyValues(input.properties) : undefined,
+    });
+    return await this.requestJson("PATCH", `/data_sources/${input.dataSourceId}`, body);
+  }
+
+  async queryDataSource(input: {
+    dataSourceId: string;
+    filter?: Record<string, unknown>;
+    sorts?: unknown[];
+    pageSize?: number;
+    startCursor?: string;
+  }): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = compact({
+      filter: input.filter ? mapKeysDeep(input.filter, toSnakeCase) : undefined,
+      sorts: input.sorts ? mapKeysDeep(input.sorts, toSnakeCase) : undefined,
+      page_size: input.pageSize,
+      start_cursor: input.startCursor,
+    });
+    return await this.requestJson("POST", `/data_sources/${input.dataSourceId}/query`, body);
+  }
+
+  async getPage(pageId: string): Promise<Record<string, unknown>> {
+    return await this.requestJson("GET", `/pages/${pageId}`);
+  }
+
+  async updatePageProperties(input: {
+    pageId: string;
+    properties: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    const page = (await this.getPage(input.pageId)) as Record<string, unknown>;
+    const pageProperties = isPlainObject(page.properties) ? page.properties : {};
+    const mappedProperties = Object.fromEntries(
+      Object.entries(input.properties).map(([key, value]) => {
+        const propertyName = resolvePagePropertyName(page, key);
+        return [propertyName, normalizePagePropertyValue(value, pageProperties[propertyName])];
+      }),
+    );
+    return await this.requestJson("PATCH", `/pages/${input.pageId}`, {
+      properties: mappedProperties,
+    });
+  }
+
+  async getBlocks(input: {
+    blockId: string;
+    pageSize?: number;
+    startCursor?: string;
+  }): Promise<Record<string, unknown>> {
+    return await this.requestJson("GET", `/blocks/${input.blockId}/children`, undefined, {
+      page_size: input.pageSize,
+      start_cursor: input.startCursor,
+    });
+  }
+
+  async appendBlocks(input: {
+    blockId: string;
+    children: unknown[];
+  }): Promise<Record<string, unknown>> {
+    return await this.requestJson("PATCH", `/blocks/${input.blockId}/children`, {
+      children: withBlocks(input.children),
+    });
+  }
+
+  async deleteBlock(blockId: string): Promise<Record<string, unknown>> {
+    return await this.requestJson("DELETE", `/blocks/${blockId}`);
+  }
+
+  async downloadAndExtractFile(input: {
+    url: string;
+    filename?: string;
+    contentType?: string;
+  }): Promise<Record<string, unknown>> {
+    const response = await fetch(input.url, {
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      throw new NotionError(`File download failed with status ${response.status}`, {
+        endpoint: input.url,
+        status: response.status,
+      });
+    }
+
+    const contentType = input.contentType ?? response.headers.get("content-type") ?? undefined;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const text = await this.extractText(buffer, input.url, input.filename, contentType);
+
+    return {
+      text,
+      source: {
+        url: input.url,
+        filename: input.filename ?? null,
+        contentType: contentType ?? null,
+        bytes: buffer.byteLength,
+      },
+    };
+  }
+
+  async validate(): Promise<Record<string, unknown>> {
+    const user = await this.requestJson("GET", "/users/me");
+    return {
+      ok: true,
+      message: "Notion API reachable",
+      user,
+      notionVersion: this.notionVersion,
+    };
+  }
+
+  private async extractText(
+    buffer: Buffer,
+    url: string,
+    filename?: string,
+    contentType?: string,
+  ): Promise<string> {
+    if (looksLikePdf(url, filename, contentType)) {
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      const task = pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        useWorkerFetch: false,
+      });
+      const document = await task.promise;
+      const parts: string[] = [];
+      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        const page = await document.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const lines = content.items
+          .map((item) => (item as { str?: string }).str ?? "")
+          .filter(Boolean);
+        if (lines.length > 0) {
+          parts.push(lines.join(" "));
+        }
+      }
+      return normalizeText(parts.join("\n\n"));
+    }
+
+    if (looksLikeDocx(url, filename, contentType)) {
+      const result = await mammoth.extractRawText({ buffer });
+      return normalizeText(result.value);
+    }
+
+    return buffer.toString("utf8");
+  }
+
+  private async requestJson(
+    method: string,
+    path: string,
+    body?: Record<string, unknown>,
+    query?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const url = new URL(`${this.baseUrl}${path}`);
+    for (const [key, value] of Object.entries(compact(query ?? {}))) {
+      url.searchParams.set(key, String(value));
+    }
+    const requestBody = body ? JSON.stringify(body) : undefined;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const response = await fetch(url.toString(), {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Notion-Version": this.notionVersion,
+            Accept: "application/json",
+            ...(requestBody ? { "Content-Type": "application/json" } : {}),
+          },
+          body: requestBody,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+
+        const requestId = extractRequestId(response);
+
+        if (response.status === 429) {
+          if (attempt < 3) {
+            const retryAfter = Number(response.headers.get("retry-after") ?? "1");
+            await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000);
+            continue;
+          }
+          throw new NotionRateLimitError("Notion rate limit exceeded", {
+            endpoint: path,
+            status: 429,
+            requestId,
+          });
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          throw new NotionAuthError(`Notion authentication failed with status ${response.status}`, {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
+        }
+
+        if (response.status === 404) {
+          throw new NotionNotFoundError(`Notion resource not found: ${path}`, {
+            endpoint: path,
+            status: 404,
+            requestId,
+          });
+        }
+
+        if (response.status === 400 || response.status === 409 || response.status === 422) {
+          throw new NotionValidationError(await this.readErrorMessage(response, path, requestId), {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
+        }
+
+        if (response.status >= 500) {
+          if (attempt < 3) {
+            await sleep((attempt + 1) * 250);
+            continue;
+          }
+          throw new NotionServerError(`Notion server error with status ${response.status}`, {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
+        }
+
+        if (!response.ok) {
+          throw new NotionError(`Notion request failed with status ${response.status}`, {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
+        }
+
+        const text = await response.text();
+        if (!text) {
+          return {};
+        }
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch (error) {
+        if (error instanceof NotionError) {
+          throw error;
+        }
+        if (error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError)) {
+          throw new NotionConnectionError(error.message, { endpoint: path });
+        }
+        throw error;
+      }
+    }
+
+    throw new NotionRateLimitError("Notion rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private async readErrorMessage(response: Response, path: string, requestId?: string): Promise<string> {
+    const text = await response.text();
+    if (!text) {
+      return `Notion request failed with status ${response.status}`;
+    }
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const message = typeof parsed.message === "string" ? parsed.message : text;
+      const code = typeof parsed.code === "string" ? parsed.code : undefined;
+      const prefix = code ? `${code}: ` : "";
+      return `${prefix}${message}`.trim();
+    } catch {
+      void path;
+      void requestId;
+      return text;
+    }
+  }
+}

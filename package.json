@@ -22,5 +22,9 @@
   },
   "peerDependencies": {
     "zod": ">=3"
+  },
+  "dependencies": {
+    "mammoth": "^1.11.0",
+    "pdfjs-dist": "^5.4.296"
   }
 }
