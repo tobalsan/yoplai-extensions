@@ -24,6 +24,7 @@
     "zod": ">=3"
   },
   "dependencies": {
+    "googleapis": "^171.4.0",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^5.4.296"
   }
