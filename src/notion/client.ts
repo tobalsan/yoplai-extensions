@@ -13,6 +13,7 @@ import { type NotionConfig } from "./models.js";
 
 type JsonPrimitive = null | boolean | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+const HEADING_TYPES = new Set(["heading_1", "heading_2", "heading_3"]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,6 +143,44 @@ function normalizeText(text: string): string {
     .trim();
 }
 
+function normalizeHeadingText(text: string): string {
+  return text.trim().toLowerCase();
+}
+
+function getBlockId(block: unknown): string | undefined {
+  return isPlainObject(block) && typeof block.id === "string" ? block.id : undefined;
+}
+
+function getBlockType(block: unknown): string | undefined {
+  return isPlainObject(block) && typeof block.type === "string" ? block.type : undefined;
+}
+
+function isHeadingBlock(block: unknown): boolean {
+  const type = getBlockType(block);
+  return Boolean(type && HEADING_TYPES.has(type));
+}
+
+function extractRichTextText(richText: unknown): string {
+  if (!Array.isArray(richText)) return "";
+  return richText
+    .map((item) => {
+      if (!isPlainObject(item)) return "";
+      if (typeof item.plain_text === "string") return item.plain_text;
+      const text = item.text;
+      if (isPlainObject(text) && typeof text.content === "string") return text.content;
+      return "";
+    })
+    .join("");
+}
+
+function extractHeadingText(block: unknown): string | undefined {
+  const type = getBlockType(block);
+  if (!type || !HEADING_TYPES.has(type) || !isPlainObject(block)) return undefined;
+  const heading = block[type];
+  if (!isPlainObject(heading)) return undefined;
+  return extractRichTextText(heading.rich_text);
+}
+
 export interface NotionClientOptions extends NotionConfig {}
 
 export class NotionClient {
@@ -247,6 +286,60 @@ export class NotionClient {
     return await this.requestJson("DELETE", `/blocks/${blockId}`);
   }
 
+  async replaceChildBlocks(input: {
+    blockId: string;
+    headingTexts: string[];
+    headingTypes?: Array<"heading_1" | "heading_2" | "heading_3">;
+    children: unknown[];
+    pageSize?: number;
+  }): Promise<Record<string, unknown>> {
+    const children = await this.getAllBlockChildren(input.blockId, input.pageSize);
+    const allowedHeadingTypes = input.headingTypes ? new Set(input.headingTypes) : undefined;
+    const targetHeadings = new Set(input.headingTexts.map(normalizeHeadingText));
+    const matchedHeadingTexts: string[] = [];
+    const idsToDelete: string[] = [];
+
+    for (let index = 0; index < children.length; index += 1) {
+      const block = children[index];
+      const type = getBlockType(block);
+      const headingText = extractHeadingText(block);
+      if (
+        !type ||
+        !headingText ||
+        !targetHeadings.has(normalizeHeadingText(headingText)) ||
+        (allowedHeadingTypes && !allowedHeadingTypes.has(type as "heading_1" | "heading_2" | "heading_3"))
+      ) {
+        continue;
+      }
+
+      matchedHeadingTexts.push(headingText.trim());
+      for (let nestedIndex = index; nestedIndex < children.length; nestedIndex += 1) {
+        const nestedBlock = children[nestedIndex];
+        if (nestedIndex > index && isHeadingBlock(nestedBlock)) {
+          break;
+        }
+        const id = getBlockId(nestedBlock);
+        if (id) {
+          idsToDelete.push(id);
+        }
+      }
+    }
+
+    await this.appendBlocks({ blockId: input.blockId, children: input.children });
+    for (const blockId of idsToDelete) {
+      await this.deleteBlock(blockId);
+    }
+
+    return {
+      object: "replace_child_blocks_result",
+      blockId: input.blockId,
+      matchedHeadingTexts: Array.from(new Set(matchedHeadingTexts)),
+      deletedBlockCount: idsToDelete.length,
+      appendedBlockCount: input.children.length,
+      deletedBlockIds: idsToDelete,
+    };
+  }
+
   async downloadAndExtractFile(input: {
     url: string;
     filename?: string;
@@ -321,6 +414,28 @@ export class NotionClient {
     }
 
     return buffer.toString("utf8");
+  }
+
+  private async getAllBlockChildren(blockId: string, pageSize?: number): Promise<unknown[]> {
+    const results: unknown[] = [];
+    let startCursor: string | undefined;
+
+    do {
+      const response = await this.getBlocks({
+        blockId,
+        pageSize,
+        startCursor,
+      });
+      if (Array.isArray(response.results)) {
+        results.push(...response.results);
+      }
+      startCursor = typeof response.next_cursor === "string" ? response.next_cursor : undefined;
+      if (response.has_more !== true) {
+        startCursor = undefined;
+      }
+    } while (startCursor);
+
+    return results;
   }
 
   private async requestJson(

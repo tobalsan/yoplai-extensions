@@ -9,6 +9,7 @@ import {
   ListDataSourcesParamsSchema,
   NotionConfigSchema,
   QueryDataSourceParamsSchema,
+  ReplaceChildBlocksParamsSchema,
   UpdateDataSourceParamsSchema,
   UpdatePagePropertiesParamsSchema,
   ValidateParamsSchema,
@@ -101,6 +102,21 @@ describe("notion models", () => {
       blockId: "block-123",
     });
     expect(
+      ReplaceChildBlocksParamsSchema.parse({
+        blockId: "page-123",
+        headingTexts: ["Resume Summary"],
+        headingTypes: ["heading_3"],
+        children: [{ object: "block", type: "paragraph" }],
+        pageSize: 100,
+      }),
+    ).toEqual({
+      blockId: "page-123",
+      headingTexts: ["Resume Summary"],
+      headingTypes: ["heading_3"],
+      children: [{ object: "block", type: "paragraph" }],
+      pageSize: 100,
+    });
+    expect(
       DownloadAndExtractFileParamsSchema.parse({
         url: "https://example.com/resume.pdf",
         filename: "resume.pdf",
@@ -172,6 +188,32 @@ describe("notion models", () => {
     ).toEqual({
       blockId: "page-123",
       children: [{ object: "block", type: "paragraph" }],
+    });
+
+    expect(
+      ReplaceChildBlocksParamsSchema.parse({
+        blockId: "page-123",
+        headingTexts: ["AI Assessment"],
+        headingTypes: JSON.stringify(["heading_2"]),
+        children: JSON.stringify([{ object: "block", type: "paragraph" }]),
+        pageSize: "100",
+      }),
+    ).toEqual({
+      blockId: "page-123",
+      headingTexts: ["AI Assessment"],
+      headingTypes: ["heading_2"],
+      children: [{ object: "block", type: "paragraph" }],
+      pageSize: 100,
+    });
+
+    expect(
+      ReplaceChildBlocksParamsSchema.parse({
+        blockId: "page-123",
+        headingTexts: JSON.stringify(["Resume Summary", "AI Summary", "AI Assessment"]),
+        children: JSON.stringify([{ object: "block", type: "paragraph" }]),
+      }),
+    ).toMatchObject({
+      headingTexts: ["Resume Summary", "AI Summary", "AI Assessment"],
     });
   });
 });

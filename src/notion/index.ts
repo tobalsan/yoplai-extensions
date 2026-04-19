@@ -11,6 +11,7 @@ import {
   ListDataSourcesParamsSchema,
   NotionConfigSchema,
   QueryDataSourceParamsSchema,
+  ReplaceChildBlocksParamsSchema,
   UpdateDataSourceParamsSchema,
   UpdatePagePropertiesParamsSchema,
   ValidateParamsSchema,
@@ -56,6 +57,7 @@ Tools:
 - get_blocks: fetch block children with pagination
 - append_blocks: append block children
 - delete_block: delete/archive a block
+- replace_child_blocks: replace direct child sections identified by heading text
 - download_and_extract_file: download a Notion file URL and extract text from PDF or DOCX
 - validate: verify auth and API reachability
 
@@ -146,6 +148,16 @@ Return and consume JSON-serializable data only.`,
         execute: async (params) => {
           const parsed = DeleteBlockParamsSchema.parse(params);
           return await client.deleteBlock(parsed.blockId);
+        },
+      },
+      {
+        name: "replace_child_blocks",
+        description:
+          "Replace direct child sections identified by heading text; appends new blocks before deleting old matches.",
+        parameters: ReplaceChildBlocksParamsSchema,
+        execute: async (params) => {
+          const parsed = ReplaceChildBlocksParamsSchema.parse(params);
+          return await client.replaceChildBlocks(parsed);
         },
       },
       {

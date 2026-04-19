@@ -32,7 +32,7 @@ describe("notion connector", () => {
       },
     });
 
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(12);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_data_sources",
       "get_data_source",
@@ -43,6 +43,7 @@ describe("notion connector", () => {
       "get_blocks",
       "append_blocks",
       "delete_block",
+      "replace_child_blocks",
       "download_and_extract_file",
       "validate",
     ]);

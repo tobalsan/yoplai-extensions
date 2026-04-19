@@ -63,6 +63,62 @@ const JsonArrayString = z.string().transform((value, ctx) => {
 
 const JsonObjectInput = z.union([JsonObject, JsonObjectString]);
 const JsonArrayInput = z.union([JsonArray, JsonArrayString]);
+const HeadingTypeSchema = z.enum(["heading_1", "heading_2", "heading_3"]);
+const StringArrayString = z.string().transform((value, ctx) => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((item) => typeof item === "string" && item.length > 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Expected JSON string array",
+      });
+      return z.NEVER;
+    }
+    return parsed as string[];
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid JSON string array",
+    });
+    return z.NEVER;
+  }
+});
+const HeadingTypeArrayString = z.string().transform((value, ctx) => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const allowed = new Set(["heading_1", "heading_2", "heading_3"]);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((item) => typeof item === "string" && allowed.has(item))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Expected JSON heading type array",
+      });
+      return z.NEVER;
+    }
+    return parsed as Array<z.infer<typeof HeadingTypeSchema>>;
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid JSON heading type array",
+    });
+    return z.NEVER;
+  }
+});
+const StringArrayInput = z.union([
+  z.array(z.string().min(1)).min(1),
+  StringArrayString,
+]);
+const HeadingTypeArrayInput = z.union([
+  z.array(HeadingTypeSchema).min(1),
+  HeadingTypeArrayString,
+]);
 
 export const NotionConfigSchema = z.object({
   apiKey: z.string(),
@@ -134,6 +190,16 @@ export const AppendBlocksParamsSchema = z
 export const DeleteBlockParamsSchema = z
   .object({
     blockId: StringInput,
+  })
+  .strict();
+
+export const ReplaceChildBlocksParamsSchema = z
+  .object({
+    blockId: StringInput,
+    headingTexts: StringArrayInput,
+    headingTypes: HeadingTypeArrayInput.optional(),
+    children: JsonArrayInput,
+    pageSize: OptionalNumber,
   })
   .strict();
 

@@ -182,6 +182,180 @@ describe("Notion connector request handling", () => {
     );
   });
 
+  it("replaces matching direct child heading sections after appending new blocks", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                object: "block",
+                id: "intro",
+                type: "paragraph",
+                paragraph: { rich_text: [{ plain_text: "Keep" }] },
+              },
+              {
+                object: "block",
+                id: "summary-heading",
+                type: "heading_3",
+                heading_3: { rich_text: [{ plain_text: " resume summary " }] },
+              },
+              {
+                object: "block",
+                id: "summary-bullet",
+                type: "bulleted_list_item",
+                bulleted_list_item: { rich_text: [{ plain_text: "Old summary" }] },
+              },
+            ],
+            next_cursor: "cursor-2",
+            has_more: true,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                object: "block",
+                id: "assessment-heading",
+                type: "heading_2",
+                heading_2: { rich_text: [{ text: { content: "AI Assessment" } }] },
+              },
+              {
+                object: "block",
+                id: "assessment-bullet",
+                type: "bulleted_list_item",
+                bulleted_list_item: { rich_text: [{ plain_text: "Old assessment" }] },
+              },
+              {
+                object: "block",
+                id: "other-heading",
+                type: "heading_3",
+                heading_3: { rich_text: [{ plain_text: "Other" }] },
+              },
+              {
+                object: "block",
+                id: "other-body",
+                type: "paragraph",
+                paragraph: { rich_text: [{ plain_text: "Keep" }] },
+              },
+            ],
+            next_cursor: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ object: "list", results: [{ id: "new-block" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockImplementation(async () => new Response(JSON.stringify({ object: "block" }), { status: 200 }));
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.replaceChildBlocks({
+        blockId: "page-123",
+        headingTexts: ["Resume Summary", "AI Assessment"],
+        children: [
+          {
+            type: "heading_3",
+            heading_3: { richText: [{ text: "Resume Summary" }] },
+          },
+        ],
+        pageSize: 3,
+      }),
+    ).resolves.toEqual({
+      object: "replace_child_blocks_result",
+      blockId: "page-123",
+      matchedHeadingTexts: ["resume summary", "AI Assessment"],
+      deletedBlockCount: 4,
+      appendedBlockCount: 1,
+      deletedBlockIds: ["summary-heading", "summary-bullet", "assessment-heading", "assessment-bullet"],
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://api.notion.com/v1/blocks/page-123/children?page_size=3",
+    );
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toBe(
+      "https://api.notion.com/v1/blocks/page-123/children?page_size=3&start_cursor=cursor-2",
+    );
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe("https://api.notion.com/v1/blocks/page-123/children");
+    expect(fetchSpy.mock.calls[2]?.[1]?.method).toBe("PATCH");
+    expect(fetchSpy.mock.calls.slice(3).map((call) => call[0])).toEqual([
+      "https://api.notion.com/v1/blocks/summary-heading",
+      "https://api.notion.com/v1/blocks/summary-bullet",
+      "https://api.notion.com/v1/blocks/assessment-heading",
+      "https://api.notion.com/v1/blocks/assessment-bullet",
+    ]);
+    expect(fetchSpy.mock.calls.slice(3).map((call) => call[1]?.method)).toEqual([
+      "DELETE",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+    ]);
+  });
+
+  it("appends without deleting when no child headings match", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                object: "block",
+                id: "other-heading",
+                type: "heading_3",
+                heading_3: { rich_text: [{ plain_text: "Other" }] },
+              },
+            ],
+            next_cursor: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ object: "list", results: [{ id: "new-block" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.replaceChildBlocks({
+        blockId: "page-123",
+        headingTexts: ["Resume Summary"],
+        children: [{ type: "paragraph", paragraph: { richText: ["New"] } }],
+      }),
+    ).resolves.toMatchObject({
+      deletedBlockCount: 0,
+      appendedBlockCount: 1,
+      deletedBlockIds: [],
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]?.[1]?.method).toBe("PATCH");
+  });
+
   it.each([
     [401, NotionAuthError],
     [403, NotionAuthError],
