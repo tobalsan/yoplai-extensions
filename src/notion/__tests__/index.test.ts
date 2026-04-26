@@ -1,19 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { ZodObject } from "zod";
 
-import connector from "../index.js";
+import extension from "../index.js";
+import { NotionConfigSchema } from "../models.js";
 
-describe("notion connector", () => {
-  it("exports the expected connector contract", () => {
-    expect(connector.id).toBe("notion");
-    expect(connector.displayName).toBe("Notion");
-    expect(connector.description).toContain("Notion");
-    expect(connector.requiredSecrets).toEqual(["apiKey"]);
+describe("notion extension", () => {
+  it("exports the expected extension contract", () => {
+    expect(extension.id).toBe("notion");
+    expect(extension.displayName).toBe("Notion");
+    expect(extension.description).toContain("Notion");
+    expect(extension.requiredSecrets).toEqual(["apiKey"]);
   });
 
   it("parses config defaults", () => {
     expect(
-      connector.configSchema.parse({
+      NotionConfigSchema.parse({
         apiKey: "secret",
       }),
     ).toEqual({
@@ -24,7 +25,7 @@ describe("notion connector", () => {
   });
 
   it("creates the expected tools with object parameter schemas", () => {
-    const tools = connector.createTools({
+    const tools = extension.createTools({
       global: {},
       agent: {},
       merged: {

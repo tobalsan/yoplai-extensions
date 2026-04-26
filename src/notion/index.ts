@@ -16,55 +16,32 @@ import {
   UpdatePagePropertiesParamsSchema,
   ValidateParamsSchema,
 } from "./models.js";
+import { defineToolExtension } from "../tool-extension.js";
 
-interface ConnectorTool {
-  name: string;
-  description: string;
-  parameters: z.ZodObject<any>;
-  execute(params: unknown): Promise<unknown>;
-}
-
-interface ResolvedConnectorConfig {
-  global: Record<string, unknown>;
-  agent: Record<string, unknown>;
-  merged: Record<string, unknown>;
-}
-
-interface ConnectorDefinition {
-  id: string;
-  displayName: string;
-  description: string;
-  systemPrompt?: string;
-  configSchema: z.ZodTypeAny;
-  agentConfigSchema?: z.ZodTypeAny;
-  requiredSecrets: string[];
-  createTools(config: ResolvedConnectorConfig): ConnectorTool[];
-}
-
-export default {
+export default defineToolExtension({
   id: "notion",
   displayName: "Notion",
-  description: "Generic Notion connector for data sources, pages, blocks, and file extraction.",
-  systemPrompt: `Use this connector for generic Notion operations.
+  description: "Generic Notion extension for data sources, pages, blocks, and file extraction.",
+  systemPrompt: `Use this extension for generic Notion operations.
 
 Tools:
-- list_data_sources: discover shared data sources by title
-- get_data_source: inspect a data source schema and metadata
-- update_data_source: patch a data source schema or metadata
-- query_data_source: query rows from a data source
-- get_page: fetch a page and its property values
-- update_page_properties: patch page property values
-- get_blocks: fetch block children with pagination
-- append_blocks: append block children
-- delete_block: delete/archive a block
-- replace_child_blocks: replace direct child sections identified by heading text
-- download_and_extract_file: download a Notion file URL and extract text from PDF or DOCX
-- validate: verify auth and API reachability
+- notion_list_data_sources: discover shared data sources by title
+- notion_get_data_source: inspect a data source schema and metadata
+- notion_update_data_source: patch a data source schema or metadata
+- notion_query_data_source: query rows from a data source
+- notion_get_page: fetch a page and its property values
+- notion_update_page_properties: patch page property values
+- notion_get_blocks: fetch block children with pagination
+- notion_append_blocks: append block children
+- notion_delete_block: delete/archive a block
+- notion_replace_child_blocks: replace direct child sections identified by heading text
+- notion_download_and_extract_file: download a Notion file URL and extract text from PDF or DOCX
+- notion_validate: verify auth and API reachability
 
 Return and consume JSON-serializable data only.`,
   configSchema: NotionConfigSchema,
   requiredSecrets: ["apiKey"],
-  createTools(config: ResolvedConnectorConfig): ConnectorTool[] {
+  createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
     const client = new NotionClient(resolved);
 
@@ -180,4 +157,4 @@ Return and consume JSON-serializable data only.`,
       },
     ];
   },
-} satisfies ConnectorDefinition;
+});

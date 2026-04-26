@@ -24,7 +24,7 @@ vi.mock("mammoth", () => ({
   },
 }));
 
-describe("Notion connector request handling", () => {
+describe("Notion extension request handling", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     pdfGetDocumentMock.mockReset();

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ZodObject } from "zod";
-import connector from "../index.js";
+import extension from "../index.js";
 
-describe("hiveage connector", () => {
+describe("hiveage extension", () => {
   it("creates 23 tools", () => {
-    const tools = connector.createTools({
+    const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { apiKey: "secret", subdomain: "acme" },
@@ -39,7 +39,7 @@ describe("hiveage connector", () => {
   });
 
   it("uses z.object parameter schemas", () => {
-    const tools = connector.createTools({
+    const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { apiKey: "secret", subdomain: "acme" },

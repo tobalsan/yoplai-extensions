@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { ZodObject } from "zod";
 
-import connector from "../index.js";
+import extension from "../index.js";
 
-describe("gsheets connector", () => {
-  it("exports the expected connector contract", () => {
-    expect(connector.id).toBe("gsheets");
-    expect(connector.requiredSecrets).toEqual(["serviceAccountJson"]);
+describe("gsheets extension", () => {
+  it("exports the expected extension contract", () => {
+    expect(extension.id).toBe("gsheets");
+    expect(extension.requiredSecrets).toEqual(["serviceAccountJson"]);
   });
 
   it("creates 5 tools with object parameter schemas", () => {
-    const tools = connector.createTools({
+    const tools = extension.createTools({
       global: {},
       agent: {},
       merged: {

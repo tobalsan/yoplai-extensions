@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 import { GSheetsClient } from "./client.js";
 import {
   EmptyParamsSchema,
@@ -9,45 +7,22 @@ import {
   ReadRangeParamsSchema,
   ReadSheetParamsSchema,
 } from "./models.js";
+import { defineToolExtension } from "../tool-extension.js";
 
-interface ConnectorTool {
-  name: string;
-  description: string;
-  parameters: z.ZodObject<z.ZodRawShape>;
-  execute(params: unknown): Promise<unknown>;
-}
-
-interface ResolvedConnectorConfig {
-  global: Record<string, unknown>;
-  agent: Record<string, unknown>;
-  merged: Record<string, unknown>;
-}
-
-interface ConnectorDefinition {
-  id: string;
-  displayName: string;
-  description: string;
-  systemPrompt?: string;
-  configSchema: z.ZodTypeAny;
-  agentConfigSchema?: z.ZodTypeAny;
-  requiredSecrets: string[];
-  createTools(config: ResolvedConnectorConfig): ConnectorTool[];
-}
-
-const connector: ConnectorDefinition = {
+const extension = defineToolExtension({
   id: "gsheets",
   displayName: "Google Sheets",
-  description: "Read-only Google Sheets connector for spreadsheet discovery, metadata, tab reads, and range reads.",
-  systemPrompt: `Use this connector for read-only Google Sheets access.
+  description: "Read-only Google Sheets extension for spreadsheet discovery, metadata, tab reads, and range reads.",
+  systemPrompt: `Use this extension for read-only Google Sheets access.
 
-Authentication is handled by AIHub connector config. Do not ask for or inspect Google service account environment variables.
+Authentication is handled by AIHub extension config. Do not ask for or inspect Google service account environment variables.
 
 Tools:
 - gsheets_list_spreadsheets: list accessible spreadsheets, optionally filtered by name
 - gsheets_inspect_spreadsheet: inspect worksheet tabs, dimensions, and detected headers
 - gsheets_read_sheet: read one worksheet as headers plus row objects
 - gsheets_read_range: read an arbitrary A1 range as raw values
-- gsheets_validate: check connector authentication and access`,
+- gsheets_validate: check extension authentication and access`,
   configSchema: GSheetsConfigSchema,
   requiredSecrets: ["serviceAccountJson"],
   createTools(config) {
@@ -89,7 +64,7 @@ Tools:
       },
       {
         name: "validate",
-        description: "Validate Google Sheets connector authentication and API access.",
+        description: "Validate Google Sheets extension authentication and API access.",
         parameters: EmptyParamsSchema,
         execute(params) {
           EmptyParamsSchema.parse(params);
@@ -98,6 +73,6 @@ Tools:
       },
     ];
   },
-};
+});
 
-export default connector;
+export default extension;

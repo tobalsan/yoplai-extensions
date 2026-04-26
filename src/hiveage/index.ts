@@ -26,30 +26,7 @@ import {
   ValidateEstimateParamsSchema,
   validateEstimateData,
 } from "./models.js";
-
-export interface ConnectorTool {
-  name: string;
-  description: string;
-  parameters: z.ZodObject<any>;
-  execute(params: unknown): Promise<unknown>;
-}
-
-export interface ResolvedConnectorConfig {
-  global: Record<string, unknown>;
-  agent: Record<string, unknown>;
-  merged: Record<string, unknown>;
-}
-
-export interface ConnectorDefinition {
-  id: string;
-  displayName: string;
-  description: string;
-  systemPrompt?: string;
-  configSchema: z.ZodTypeAny;
-  agentConfigSchema?: z.ZodTypeAny;
-  requiredSecrets: string[];
-  createTools(config: ResolvedConnectorConfig): ConnectorTool[];
-}
+import { defineToolExtension } from "../tool-extension.js";
 
 export const HiveageConfigSchema = z.object({
   apiKey: z.string(),
@@ -57,21 +34,21 @@ export const HiveageConfigSchema = z.object({
   timeoutMs: z.number().optional().default(30_000),
 });
 
-export default {
+export default defineToolExtension({
   id: "hiveage",
   displayName: "Hiveage",
-  description: "Billing connector for invoices, estimates, payments, items, clients, and trash.",
-  systemPrompt: `Use this connector for Hiveage billing and invoicing operations.
+  description: "Billing extension for invoices, estimates, payments, items, clients, and trash.",
+  systemPrompt: `Use this extension for Hiveage billing and invoicing operations.
 
 Available tools:
-- list_invoices, get_invoice, create_invoice, search_invoices: invoice management
-- list_recurring_invoices, get_recurring_invoice, create_recurring_invoice, search_recurring_invoices: recurring invoice management
-- list_estimates, get_estimate, create_estimate, search_estimates: estimate and quote management
-- list_payments, get_payment, create_payment: payment tracking
-- list_items, get_item, search_items: catalog item management
-- list_connections, get_connection, search_connections: client and connection management
-- list_trash: view deleted items
-- validate_estimate: validate estimate payload before creation (checks required fields, dates, line items, discounts)
+- hiveage_list_invoices, hiveage_get_invoice, hiveage_create_invoice, hiveage_search_invoices: invoice management
+- hiveage_list_recurring_invoices, hiveage_get_recurring_invoice, hiveage_create_recurring_invoice, hiveage_search_recurring_invoices: recurring invoice management
+- hiveage_list_estimates, hiveage_get_estimate, hiveage_create_estimate, hiveage_search_estimates: estimate and quote management
+- hiveage_list_payments, hiveage_get_payment, hiveage_create_payment: payment tracking
+- hiveage_list_items, hiveage_get_item, hiveage_search_items: catalog item management
+- hiveage_list_connections, hiveage_get_connection, hiveage_search_connections: client and connection management
+- hiveage_list_trash: view deleted items
+- hiveage_validate_estimate: validate estimate payload before creation (checks required fields, dates, line items, discounts)
 
 Key concepts:
 - connections are clients or customers in Hiveage
@@ -79,11 +56,11 @@ Key concepts:
 - line items define billable rows on invoices and estimates
 
 Common workflows:
-- To create an invoice, first find the connection (client) using search_connections or list_connections, then create_invoice with the connection hash key and line items.
-- To find a specific invoice, use search_invoices with a query string, or list_invoices with pagination.`,
+- To create an invoice, first find the connection (client) using hiveage_search_connections or hiveage_list_connections, then hiveage_create_invoice with the connection hash key and line items.
+- To find a specific invoice, use hiveage_search_invoices with a query string, or hiveage_list_invoices with pagination.`,
   configSchema: HiveageConfigSchema,
   requiredSecrets: ["apiKey"],
-  createTools(config: ResolvedConnectorConfig): ConnectorTool[] {
+  createTools(config) {
     const resolved = HiveageConfigSchema.parse(config.merged);
     const client = new HiveageClient(resolved);
 
@@ -229,4 +206,4 @@ Common workflows:
       },
     ];
   },
-} satisfies ConnectorDefinition;
+});
