@@ -85,6 +85,35 @@ function rowsFromValues(values: SheetValues, headerRowIndex: number, headers: st
   });
 }
 
+function filterColumns(
+  rows: Record<string, string>[],
+  headers: string[],
+  requestedColumns?: string[],
+): {
+  rows: Record<string, string>[];
+  headers: string[];
+  requestedColumns?: string[];
+  missingColumns?: string[];
+} {
+  if (!requestedColumns?.length) return { rows, headers };
+
+  const available = new Set(headers);
+  const selected = requestedColumns.filter((column) => available.has(column));
+  const missing = requestedColumns.filter((column) => !available.has(column));
+  return {
+    rows: rows.map((row) => {
+      const entry: Record<string, string> = {};
+      selected.forEach((column) => {
+        entry[column] = row[column] ?? "";
+      });
+      return entry;
+    }),
+    headers: selected,
+    requestedColumns,
+    missingColumns: missing.length > 0 ? missing : undefined,
+  };
+}
+
 function parseServiceAccountJson(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw);
@@ -222,13 +251,26 @@ export class GSheetsClient {
         : detectHeaderRow(values);
     const headerRowIndex = detected.headerRowIndex ?? 1;
 
+    const allRows = rowsFromValues(values, headerRowIndex, detected.headers);
+    const rowOffset = params.rowOffset;
+    const rows =
+      params.maxRows === undefined
+        ? allRows.slice(rowOffset)
+        : allRows.slice(rowOffset, rowOffset + params.maxRows);
+    const filtered = filterColumns(rows, detected.headers, params.columns);
+
     return {
       spreadsheetId,
       spreadsheetUrl: spreadsheetUrl(spreadsheetId),
       tabName: params.tabName,
       headerRowIndex: detected.headerRowIndex,
-      headers: detected.headers,
-      rows: rowsFromValues(values, headerRowIndex, detected.headers),
+      headers: filtered.headers,
+      rows: filtered.rows,
+      rowOffset,
+      rowCount: filtered.rows.length,
+      totalRowCount: allRows.length,
+      requestedColumns: filtered.requestedColumns,
+      missingColumns: filtered.missingColumns,
     };
   }
 

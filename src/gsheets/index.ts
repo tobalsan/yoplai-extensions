@@ -20,7 +20,7 @@ Authentication is handled by AIHub extension config. Do not ask for or inspect G
 Tools:
 - gsheets_list_spreadsheets: list accessible spreadsheets, optionally filtered by name
 - gsheets_inspect_spreadsheet: inspect worksheet tabs, dimensions, and detected headers
-- gsheets_read_sheet: read one worksheet as headers plus row objects
+- gsheets_read_sheet: read one worksheet as headers plus row objects. Use rowOffset, maxRows, and columns to limit large tabs when a full read is not needed
 - gsheets_read_range: read an arbitrary A1 range as raw values
 - gsheets_validate: check extension authentication and access`,
   configSchema: GSheetsConfigSchema,
@@ -48,7 +48,7 @@ Tools:
       },
       {
         name: "read_sheet",
-        description: "Read one worksheet as detected headers plus row objects.",
+        description: "Read one worksheet as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.",
         parameters: ReadSheetParamsSchema,
         execute(params) {
           return client.readSheet(ReadSheetParamsSchema.parse(params));

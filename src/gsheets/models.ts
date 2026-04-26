@@ -26,6 +26,9 @@ export const InspectSpreadsheetParamsSchema = SpreadsheetRefSchema.extend({
 export const ReadSheetParamsSchema = SpreadsheetRefSchema.extend({
   tabName: z.string().min(1),
   headerRowIndex: z.number().int().min(0).optional().default(0),
+  rowOffset: z.number().int().min(0).optional().default(0),
+  maxRows: z.number().int().min(1).max(5000).optional(),
+  columns: z.array(z.string().min(1)).optional(),
 });
 
 export const ReadRangeParamsSchema = SpreadsheetRefSchema.extend({

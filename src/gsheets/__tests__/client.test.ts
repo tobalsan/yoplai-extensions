@@ -154,6 +154,7 @@ describe("GSheetsClient", () => {
       spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit",
       tabName: "2026-02",
       headerRowIndex: 0,
+      rowOffset: 0,
     });
 
     expect(valuesGetMock).toHaveBeenCalledWith(
@@ -172,6 +173,38 @@ describe("GSheetsClient", () => {
         { Company: "Acme", MRR: "10", ARR: "120" },
         { Company: "Globex", MRR: "20", ARR: "240" },
       ],
+    });
+  });
+
+  it("reads a projected page of sheet rows", async () => {
+    valuesGetMock.mockResolvedValue({
+      data: {
+        values: [
+          ["Company", "MRR", "ARR"],
+          ["Acme", "10", "120"],
+          ["Globex", "20", "240"],
+          ["Initech", "30", "360"],
+        ],
+      },
+    });
+
+    const result = await makeClient().readSheet({
+      spreadsheetId: "sheet-1",
+      tabName: "2026-02",
+      headerRowIndex: 0,
+      rowOffset: 1,
+      maxRows: 1,
+      columns: ["Company", "ARR", "Missing"],
+    });
+
+    expect(result).toMatchObject({
+      headers: ["Company", "ARR"],
+      rowOffset: 1,
+      rowCount: 1,
+      totalRowCount: 3,
+      requestedColumns: ["Company", "ARR", "Missing"],
+      missingColumns: ["Missing"],
+      rows: [{ Company: "Globex", ARR: "240" }],
     });
   });
 

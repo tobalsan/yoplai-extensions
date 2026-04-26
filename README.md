@@ -4,7 +4,7 @@ Self-contained agent tool packages for external APIs, used with [AIHub](https://
 
 ## Extensions
 
-- **`gsheets`** — Google Sheets read-only access (list, inspect, read tabs/ranges)
+- **`gsheets`** — Google Sheets read-only access (list, inspect, read tabs/ranges; `read_sheet` supports `rowOffset`, `maxRows`, and `columns`)
 - **`hiveage`** — HiveAge invoicing API (invoices, estimates, connections, payments, items, recurring invoices)
 - **`notion`** - CRUD operations for Notion pages and databases via Notion API
 
