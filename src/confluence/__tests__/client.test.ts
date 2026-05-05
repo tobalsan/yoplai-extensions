@@ -254,6 +254,69 @@ describe("ConfluenceClient", () => {
     });
   });
 
+  it("wraps CQL with space filter when confluenceSpace is set", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ results: [], start: 0, limit: 25, size: 0 }));
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    await client.search({ cql: 'text ~ "panda" ORDER BY lastmodified DESC' });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("cql")).toBe(
+      '(text ~ "panda") AND space = "ENG" ORDER BY lastmodified DESC',
+    );
+  });
+
+  it("forces keys filter to scoped space on list_spaces", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ results: [] }));
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    await client.listSpaces({ keys: "OTHER" });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("keys")).toBe("ENG");
+  });
+
+  it("uses space-scoped labels endpoint and pages-by-label space-id when scoped", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/api/v2/spaces")) {
+        return jsonResponse({ results: [{ id: "55", key: "ENG" }] });
+      }
+      if (url.pathname.endsWith("/api/v2/spaces/55/labels")) {
+        return jsonResponse({ results: [{ id: "lbl-1", name: "runbook" }] });
+      }
+      if (url.pathname.endsWith("/api/v2/labels/lbl-1/pages")) {
+        return jsonResponse({ results: [] });
+      }
+      throw new Error(`unexpected ${url.toString()}`);
+    });
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    await client.listLabels({});
+    await client.getPagesByLabel({ labelId: "lbl-1" });
+
+    const calls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(calls).toContain(
+      "https://mycompany.atlassian.net/wiki/api/v2/spaces?keys=ENG&limit=1",
+    );
+    expect(calls).toContain("https://mycompany.atlassian.net/wiki/api/v2/spaces/55/labels");
+    const pagesCall = calls.find((url) => url.includes("/labels/lbl-1/pages"));
+    expect(new URL(pagesCall ?? "").searchParams.get("space-id")).toBe("55");
+  });
+
+  it("returns scopedSpace metadata from validate when scoped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ results: [{ id: "55", key: "ENG", name: "Engineering" }] }),
+    );
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    const result = await client.validate();
+
+    expect(result).toMatchObject({ ok: true, scopedSpace: { key: "ENG", id: "55" } });
+  });
+
   it("downloads a DOCX without auth when URL is off-site", async () => {
     mammothExtractRawTextMock.mockResolvedValue({ value: "doc text" });
 

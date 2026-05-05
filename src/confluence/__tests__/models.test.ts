@@ -9,6 +9,7 @@ import {
   GetPagesByLabelParamsSchema,
   ListAttachmentsParamsSchema,
   ListLabelsParamsSchema,
+  ListSpacesParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
 } from "../models.js";
@@ -27,6 +28,15 @@ describe("confluence models", () => {
       apiToken: "token",
       timeoutMs: 30_000,
     });
+
+    expect(
+      ConfluenceConfigSchema.parse({
+        subdomain: "mycompany",
+        email: "user@example.com",
+        apiToken: "token",
+        confluenceSpace: "ENG",
+      }),
+    ).toMatchObject({ confluenceSpace: "ENG" });
 
     expect(() =>
       ConfluenceConfigSchema.parse({
@@ -88,6 +98,12 @@ describe("confluence models", () => {
       contentType: "application/pdf",
     });
     expect(ListLabelsParamsSchema.parse({})).toEqual({});
+    expect(ListSpacesParamsSchema.parse({ keys: "ENG", type: "global", limit: 5 })).toEqual({
+      keys: "ENG",
+      type: "global",
+      limit: 5,
+    });
+    expect(() => ListSpacesParamsSchema.parse({ type: "wiki" })).toThrow();
     expect(GetPagesByLabelParamsSchema.parse({ labelId: "lbl-1" })).toEqual({ labelId: "lbl-1" });
     expect(ValidateParamsSchema.parse({})).toEqual({});
   });

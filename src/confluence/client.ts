@@ -61,13 +61,51 @@ export class ConfluenceClient {
   readonly apiToken: string;
   readonly timeoutMs: number;
   readonly baseUrl: string;
+  readonly space?: string;
+  private resolvedSpaceId?: string;
 
   constructor(options: ConfluenceClientOptions) {
     this.subdomain = options.subdomain;
     this.email = options.email;
     this.apiToken = options.apiToken;
     this.timeoutMs = options.timeoutMs;
+    this.space = options.confluenceSpace;
     this.baseUrl = `https://${options.subdomain}.atlassian.net/wiki`;
+  }
+
+  private scopeCql(cql: string): string {
+    if (!this.space) return cql;
+    const match = cql.match(/\bORDER\s+BY\b/i);
+    const escapedKey = this.space.replace(/"/g, '\\"');
+    const filter = `space = "${escapedKey}"`;
+    if (match && match.index !== undefined) {
+      const predicate = cql.slice(0, match.index).trim();
+      const ordering = cql.slice(match.index).trim();
+      const wrapped = predicate ? `(${predicate}) AND ${filter}` : filter;
+      return `${wrapped} ${ordering}`;
+    }
+    const trimmed = cql.trim();
+    return trimmed ? `(${trimmed}) AND ${filter}` : filter;
+  }
+
+  private async getScopedSpaceId(): Promise<string> {
+    if (!this.space) {
+      throw new ConfluenceError("No confluenceSpace configured", { endpoint: "(scope)" });
+    }
+    if (this.resolvedSpaceId) return this.resolvedSpaceId;
+    const response = await this.requestJson("GET", "/api/v2/spaces", undefined, {
+      keys: this.space,
+      limit: 1,
+    });
+    const results = Array.isArray(response.results) ? response.results : [];
+    const first = results[0];
+    if (!isPlainObject(first) || (typeof first.id !== "string" && typeof first.id !== "number")) {
+      throw new ConfluenceValidationError(`Confluence space "${this.space}" not found`, {
+        endpoint: "/api/v2/spaces",
+      });
+    }
+    this.resolvedSpaceId = String(first.id);
+    return this.resolvedSpaceId;
   }
 
   async search(input: {
@@ -77,12 +115,28 @@ export class ConfluenceClient {
     expand?: string;
   }): Promise<Record<string, unknown>> {
     const response = await this.requestJson("GET", "/rest/api/search", undefined, {
-      cql: input.cql,
+      cql: this.scopeCql(input.cql),
       limit: input.limit,
       start: input.start,
       expand: input.expand,
     });
     return this.decorateSearchResults(response);
+  }
+
+  async listSpaces(input: {
+    keys?: string;
+    type?: "global" | "collaboration" | "knowledge_base" | "personal";
+    status?: "current" | "archived";
+    limit?: number;
+    cursor?: string;
+  }): Promise<Record<string, unknown>> {
+    return await this.requestJson("GET", "/api/v2/spaces", undefined, {
+      keys: this.space ?? input.keys,
+      type: input.type,
+      status: input.status,
+      limit: input.limit,
+      cursor: input.cursor,
+    });
   }
 
   async getPage(input: {
@@ -152,6 +206,18 @@ export class ConfluenceClient {
     limit?: number;
     cursor?: string;
   }): Promise<Record<string, unknown>> {
+    if (this.space) {
+      const spaceId = await this.getScopedSpaceId();
+      return await this.requestJson(
+        "GET",
+        `/api/v2/spaces/${encodeURIComponent(spaceId)}/labels`,
+        undefined,
+        {
+          limit: input.limit,
+          cursor: input.cursor,
+        },
+      );
+    }
     return await this.requestJson("GET", "/api/v2/labels", undefined, {
       limit: input.limit,
       cursor: input.cursor,
@@ -163,11 +229,13 @@ export class ConfluenceClient {
     limit?: number;
     cursor?: string;
   }): Promise<Record<string, unknown>> {
+    const spaceId = this.space ? await this.getScopedSpaceId() : undefined;
     const response = await this.requestJson(
       "GET",
       `/api/v2/labels/${encodeURIComponent(input.labelId)}/pages`,
       undefined,
       {
+        "space-id": spaceId,
         limit: input.limit,
         cursor: input.cursor,
       },
@@ -176,12 +244,29 @@ export class ConfluenceClient {
   }
 
   async validate(): Promise<Record<string, unknown>> {
-    const spaces = await this.requestJson("GET", "/api/v2/spaces", undefined, { limit: 1 });
+    const spaces = await this.requestJson("GET", "/api/v2/spaces", undefined, {
+      keys: this.space,
+      limit: 1,
+    });
+    const results = Array.isArray(spaces.results) ? spaces.results : [];
+    let scopedSpace: { key: string; id: string } | undefined;
+    if (this.space) {
+      const first = results[0];
+      if (!isPlainObject(first) || (typeof first.id !== "string" && typeof first.id !== "number")) {
+        throw new ConfluenceValidationError(
+          `Confluence space "${this.space}" not found`,
+          { endpoint: "/api/v2/spaces" },
+        );
+      }
+      this.resolvedSpaceId = String(first.id);
+      scopedSpace = { key: this.space, id: this.resolvedSpaceId };
+    }
     return {
       ok: true,
       message: "Confluence API reachable",
       subdomain: this.subdomain,
-      sampleSpaceCount: Array.isArray(spaces.results) ? spaces.results.length : 0,
+      sampleSpaceCount: results.length,
+      ...(scopedSpace ? { scopedSpace } : {}),
     };
   }
 

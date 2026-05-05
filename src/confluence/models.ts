@@ -46,6 +46,7 @@ export const ConfluenceConfigSchema = z.object({
   subdomain: z.string().min(1),
   email: z.string().email(),
   apiToken: z.string().min(1),
+  confluenceSpace: z.string().min(1).optional(),
   timeoutMs: z.number().int().positive().optional().default(30_000),
 });
 
@@ -106,6 +107,16 @@ export const ListLabelsParamsSchema = z
 export const GetPagesByLabelParamsSchema = z
   .object({
     labelId: StringInput,
+    limit: OptionalPositiveInteger,
+    cursor: OptionalString,
+  })
+  .strict();
+
+export const ListSpacesParamsSchema = z
+  .object({
+    keys: OptionalString,
+    type: z.enum(["global", "collaboration", "knowledge_base", "personal"]).optional(),
+    status: z.enum(["current", "archived"]).optional(),
     limit: OptionalPositiveInteger,
     cursor: OptionalString,
   })

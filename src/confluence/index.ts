@@ -8,10 +8,11 @@ import {
   GetPagesByLabelParamsSchema,
   ListAttachmentsParamsSchema,
   ListLabelsParamsSchema,
+  ListSpacesParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
 } from "./models.js";
-import { defineToolExtension } from "../tool-extension.js";
+import { defineToolExtension, type ToolExtensionTool } from "../tool-extension.js";
 
 export default defineToolExtension({
   id: "confluence",
@@ -28,7 +29,10 @@ Tools:
 - confluence_download_and_extract_file: download a Confluence file URL and extract text from PDF or DOCX content
 - confluence_list_labels: list labels (paginated)
 - confluence_get_pages_by_label: list pages tagged with a given label id
+- confluence_list_spaces: list spaces (paginated, filterable by key/type/status). Unavailable when \`confluenceSpace\` is set.
 - confluence_validate: verify auth and API reachability
+
+If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file) are not enforced — agents must pass page ids that belong to the scoped space.
 
 CQL primer (used by confluence_search):
 - text ~ "needle"            full-text match
@@ -49,8 +53,9 @@ Return and consume JSON-serializable data only.`,
   createTools(config) {
     const resolved = ConfluenceConfigSchema.parse(config.merged);
     const client = new ConfluenceClient(resolved);
+    const isScoped = !!resolved.confluenceSpace;
 
-    return [
+    const tools: ToolExtensionTool[] = [
       {
         name: "search",
         description: "Search Confluence content with raw CQL.",
@@ -133,5 +138,19 @@ Return and consume JSON-serializable data only.`,
         },
       },
     ];
+
+    if (!isScoped) {
+      tools.splice(tools.length - 1, 0, {
+        name: "list_spaces",
+        description: "List spaces with optional filters.",
+        parameters: ListSpacesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListSpacesParamsSchema.parse(params);
+          return await client.listSpaces(parsed);
+        },
+      });
+    }
+
+    return tools;
   },
 });

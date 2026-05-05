@@ -48,11 +48,29 @@ describe("confluence extension", () => {
       "download_and_extract_file",
       "list_labels",
       "get_pages_by_label",
+      "list_spaces",
       "validate",
     ]);
 
     for (const tool of tools) {
       expect(tool.parameters).toBeInstanceOf(ZodObject);
     }
+  });
+
+  it("omits list_spaces when confluenceSpace is set", () => {
+    const tools = extension.createTools({
+      global: {},
+      agent: {},
+      merged: {
+        subdomain: "mycompany",
+        email: "user@example.com",
+        apiToken: "token",
+        timeoutMs: 30_000,
+        confluenceSpace: "ENG",
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).not.toContain("list_spaces");
+    expect(tools.map((tool) => tool.name)).toContain("validate");
   });
 });
