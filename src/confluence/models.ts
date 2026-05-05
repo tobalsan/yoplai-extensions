@@ -112,6 +112,29 @@ export const GetPagesByLabelParamsSchema = z
   })
   .strict();
 
+export const ListSpacePagesParamsSchema = z
+  .object({
+    spaceId: OptionalString,
+    depth: z.enum(["all", "root"]).optional(),
+    sort: z
+      .enum([
+        "id",
+        "-id",
+        "created-date",
+        "-created-date",
+        "modified-date",
+        "-modified-date",
+        "title",
+        "-title",
+      ])
+      .optional(),
+    status: z.array(z.enum(["current", "archived", "deleted", "trashed"])).optional(),
+    bodyFormat: BodyFormatSchema.optional(),
+    limit: OptionalPositiveInteger,
+    cursor: OptionalString,
+  })
+  .strict();
+
 export const ListSpacesParamsSchema = z
   .object({
     keys: OptionalString,

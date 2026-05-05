@@ -306,6 +306,55 @@ describe("ConfluenceClient", () => {
     expect(new URL(pagesCall ?? "").searchParams.get("space-id")).toBe("55");
   });
 
+  it("lists pages by explicit spaceId with repeated status query params", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ results: [{ id: "p1", _links: { webui: "/spaces/ENG/pages/p1/A" } }] }),
+    );
+
+    const client = new ConfluenceClient(baseConfig);
+    const result = await client.listSpacePages({
+      spaceId: "55",
+      depth: "root",
+      sort: "-modified-date",
+      status: ["current", "archived"],
+      bodyFormat: "storage",
+      limit: 10,
+    });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/wiki/api/v2/spaces/55/pages");
+    expect(url.searchParams.getAll("status")).toEqual(["current", "archived"]);
+    expect(url.searchParams.get("depth")).toBe("root");
+    expect(url.searchParams.get("sort")).toBe("-modified-date");
+    expect(url.searchParams.get("body-format")).toBe("storage");
+    const results = result.results as Array<Record<string, unknown>>;
+    expect(results[0]?.webUrl).toBe("https://mycompany.atlassian.net/wiki/spaces/ENG/pages/p1/A");
+  });
+
+  it("resolves spaceId from confluenceSpace for list_space_pages", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/api/v2/spaces")) {
+        return jsonResponse({ results: [{ id: "55", key: "ENG" }] });
+      }
+      if (url.pathname.endsWith("/api/v2/spaces/55/pages")) {
+        return jsonResponse({ results: [] });
+      }
+      throw new Error(`unexpected ${url.toString()}`);
+    });
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    await client.listSpacePages({});
+
+    const calls = fetchSpy.mock.calls.map((call) => String(call[0]));
+    expect(calls.some((url) => url.includes("/api/v2/spaces/55/pages"))).toBe(true);
+  });
+
+  it("throws when listSpacePages called with no spaceId and no scope", async () => {
+    const client = new ConfluenceClient(baseConfig);
+    await expect(client.listSpacePages({})).rejects.toBeInstanceOf(ConfluenceValidationError);
+  });
+
   it("returns scopedSpace metadata from validate when scoped", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ results: [{ id: "55", key: "ENG", name: "Engineering" }] }),

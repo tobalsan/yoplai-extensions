@@ -123,6 +123,47 @@ export class ConfluenceClient {
     return this.decorateSearchResults(response);
   }
 
+  async listSpacePages(input: {
+    spaceId?: string;
+    depth?: "all" | "root";
+    sort?:
+      | "id"
+      | "-id"
+      | "created-date"
+      | "-created-date"
+      | "modified-date"
+      | "-modified-date"
+      | "title"
+      | "-title";
+    status?: Array<"current" | "archived" | "deleted" | "trashed">;
+    bodyFormat?: ConfluenceBodyFormat;
+    limit?: number;
+    cursor?: string;
+  }): Promise<Record<string, unknown>> {
+    const spaceId =
+      input.spaceId ?? (this.space ? await this.getScopedSpaceId() : undefined);
+    if (!spaceId) {
+      throw new ConfluenceValidationError(
+        "spaceId is required when confluenceSpace is not configured",
+        { endpoint: "/api/v2/spaces/{id}/pages" },
+      );
+    }
+    const response = await this.requestJson(
+      "GET",
+      `/api/v2/spaces/${encodeURIComponent(spaceId)}/pages`,
+      undefined,
+      {
+        depth: input.depth,
+        sort: input.sort,
+        status: input.status,
+        "body-format": input.bodyFormat,
+        limit: input.limit,
+        cursor: input.cursor,
+      },
+    );
+    return this.decorateResultList(response);
+  }
+
   async listSpaces(input: {
     keys?: string;
     type?: "global" | "collaboration" | "knowledge_base" | "personal";
@@ -415,7 +456,13 @@ export class ConfluenceClient {
   ): Promise<Record<string, unknown>> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(compact(query ?? {}))) {
-      url.searchParams.set(key, String(value));
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+        }
+      } else {
+        url.searchParams.set(key, String(value));
+      }
     }
     const requestBody = body ? JSON.stringify(body) : undefined;
 

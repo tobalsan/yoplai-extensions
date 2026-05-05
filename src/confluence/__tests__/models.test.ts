@@ -9,6 +9,7 @@ import {
   GetPagesByLabelParamsSchema,
   ListAttachmentsParamsSchema,
   ListLabelsParamsSchema,
+  ListSpacePagesParamsSchema,
   ListSpacesParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
@@ -104,6 +105,25 @@ describe("confluence models", () => {
       limit: 5,
     });
     expect(() => ListSpacesParamsSchema.parse({ type: "wiki" })).toThrow();
+    expect(
+      ListSpacePagesParamsSchema.parse({
+        spaceId: "55",
+        depth: "root",
+        sort: "-modified-date",
+        status: ["current", "archived"],
+        bodyFormat: "storage",
+        limit: 25,
+      }),
+    ).toEqual({
+      spaceId: "55",
+      depth: "root",
+      sort: "-modified-date",
+      status: ["current", "archived"],
+      bodyFormat: "storage",
+      limit: 25,
+    });
+    expect(() => ListSpacePagesParamsSchema.parse({ depth: "deep" })).toThrow();
+    expect(() => ListSpacePagesParamsSchema.parse({ status: ["bogus"] })).toThrow();
     expect(GetPagesByLabelParamsSchema.parse({ labelId: "lbl-1" })).toEqual({ labelId: "lbl-1" });
     expect(ValidateParamsSchema.parse({})).toEqual({});
   });

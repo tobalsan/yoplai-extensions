@@ -48,6 +48,7 @@ describe("confluence extension", () => {
       "download_and_extract_file",
       "list_labels",
       "get_pages_by_label",
+      "list_space_pages",
       "list_spaces",
       "validate",
     ]);
@@ -71,6 +72,7 @@ describe("confluence extension", () => {
     });
 
     expect(tools.map((tool) => tool.name)).not.toContain("list_spaces");
+    expect(tools.map((tool) => tool.name)).toContain("list_space_pages");
     expect(tools.map((tool) => tool.name)).toContain("validate");
   });
 });

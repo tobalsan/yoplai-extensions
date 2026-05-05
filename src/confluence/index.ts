@@ -8,6 +8,7 @@ import {
   GetPagesByLabelParamsSchema,
   ListAttachmentsParamsSchema,
   ListLabelsParamsSchema,
+  ListSpacePagesParamsSchema,
   ListSpacesParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
@@ -29,6 +30,7 @@ Tools:
 - confluence_download_and_extract_file: download a Confluence file URL and extract text from PDF or DOCX content
 - confluence_list_labels: list labels (paginated)
 - confluence_get_pages_by_label: list pages tagged with a given label id
+- confluence_list_space_pages: list pages in a space (uses configured space when \`confluenceSpace\` is set, otherwise requires \`spaceId\`)
 - confluence_list_spaces: list spaces (paginated, filterable by key/type/status). Unavailable when \`confluenceSpace\` is set.
 - confluence_validate: verify auth and API reachability
 
@@ -126,6 +128,16 @@ Return and consume JSON-serializable data only.`,
         execute: async (params) => {
           const parsed = GetPagesByLabelParamsSchema.parse(params);
           return await client.getPagesByLabel(parsed);
+        },
+      },
+      {
+        name: "list_space_pages",
+        description:
+          "List pages in a space (uses confluenceSpace when configured, otherwise requires spaceId).",
+        parameters: ListSpacePagesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListSpacePagesParamsSchema.parse(params);
+          return await client.listSpacePages(parsed);
         },
       },
       {
