@@ -29,3 +29,5 @@ export class ConfluenceServerError extends ConfluenceError {}
 export class ConfluenceConnectionError extends ConfluenceError {}
 
 export class ConfluenceValidationError extends ConfluenceError {}
+
+export class ConfluenceConflictError extends ConfluenceError {}

@@ -2,6 +2,7 @@ import mammoth from "mammoth";
 
 import {
   ConfluenceAuthError,
+  ConfluenceConflictError,
   ConfluenceConnectionError,
   ConfluenceError,
   ConfluenceNotFoundError,
@@ -178,6 +179,64 @@ export class ConfluenceClient {
       limit: input.limit,
       cursor: input.cursor,
     });
+  }
+
+  async createPage(input: {
+    spaceId?: string;
+    parentId?: string;
+    title: string;
+    body: string;
+  }): Promise<Record<string, unknown>> {
+    const scopedSpaceId = this.space ? await this.getScopedSpaceId() : undefined;
+    const spaceId = input.spaceId ?? scopedSpaceId;
+    if (!spaceId) {
+      throw new ConfluenceValidationError(
+        "spaceId is required when confluenceSpace is not configured",
+        { endpoint: "/api/v2/pages" },
+      );
+    }
+    if (scopedSpaceId && input.spaceId && input.spaceId !== scopedSpaceId) {
+      throw new ConfluenceValidationError(
+        "spaceId does not match configured confluenceSpace",
+        { endpoint: "/api/v2/pages" },
+      );
+    }
+
+    const response = await this.requestJson("POST", "/api/v2/pages", {
+      spaceId,
+      parentId: input.parentId,
+      status: "current",
+      title: input.title,
+      body: { representation: "storage", value: input.body },
+    });
+    return this.decoratePage(response);
+  }
+
+  async replacePage(input: {
+    pageId: string;
+    title?: string;
+    body: string;
+  }): Promise<Record<string, unknown>> {
+    const path = `/api/v2/pages/${encodeURIComponent(input.pageId)}`;
+    const current = await this.requestJson("GET", path);
+    const currentTitle = typeof current.title === "string" ? current.title : undefined;
+    const version = isPlainObject(current.version) ? current.version : undefined;
+    const currentVersion = typeof version?.number === "number" ? version.number : undefined;
+    if (!currentTitle && !input.title) {
+      throw new ConfluenceValidationError("Current page title is missing", { endpoint: path });
+    }
+    if (currentVersion === undefined) {
+      throw new ConfluenceValidationError("Current page version is missing", { endpoint: path });
+    }
+
+    const response = await this.requestJson("PUT", path, {
+      id: input.pageId,
+      status: "current",
+      title: input.title ?? currentTitle,
+      body: { representation: "storage", value: input.body },
+      version: { number: currentVersion + 1 },
+    });
+    return this.decoratePage(response);
   }
 
   async getPage(input: {
@@ -513,15 +572,20 @@ export class ConfluenceClient {
           });
         }
 
-        if (response.status === 400 || response.status === 409 || response.status === 422) {
-          throw new ConfluenceValidationError(
-            await this.readErrorMessage(response),
-            {
-              endpoint: path,
-              status: response.status,
-              requestId,
-            },
-          );
+        if (response.status === 409) {
+          throw new ConfluenceConflictError(await this.readErrorMessage(response), {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
+        }
+
+        if (response.status === 400 || response.status === 422) {
+          throw new ConfluenceValidationError(await this.readErrorMessage(response), {
+            endpoint: path,
+            status: response.status,
+            requestId,
+          });
         }
 
         if (response.status >= 500) {

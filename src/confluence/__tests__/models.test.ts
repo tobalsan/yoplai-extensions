@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ConfluenceConfigSchema,
+  CreatePageParamsSchema,
   DownloadAndExtractFileParamsSchema,
   GetPageAncestorsParamsSchema,
   GetPageChildrenParamsSchema,
@@ -11,6 +12,7 @@ import {
   ListLabelsParamsSchema,
   ListSpacePagesParamsSchema,
   ListSpacesParamsSchema,
+  ReplacePageParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
 } from "../models.js";
@@ -126,6 +128,25 @@ describe("confluence models", () => {
     expect(() => ListSpacePagesParamsSchema.parse({ status: ["bogus"] })).toThrow();
     expect(GetPagesByLabelParamsSchema.parse({ labelId: "lbl-1" })).toEqual({ labelId: "lbl-1" });
     expect(ValidateParamsSchema.parse({})).toEqual({});
+    expect(
+      CreatePageParamsSchema.parse({
+        spaceId: "55",
+        parentId: "10",
+        title: "Runbook",
+        body: "<p>Hello</p>",
+      }),
+    ).toEqual({ spaceId: "55", parentId: "10", title: "Runbook", body: "<p>Hello</p>" });
+    expect(ReplacePageParamsSchema.parse({ pageId: "10", body: "<p>Updated</p>" })).toEqual({
+      pageId: "10",
+      body: "<p>Updated</p>",
+    });
+  });
+
+  it("validates write schemas", () => {
+    expect(() => CreatePageParamsSchema.parse({ spaceId: "55", title: "", body: "<p>x</p>" })).toThrow();
+    expect(() => CreatePageParamsSchema.parse({ spaceId: "55", title: "Title", body: "" })).toThrow();
+    expect(() => ReplacePageParamsSchema.parse({ pageId: "10", title: "", body: "<p>x</p>" })).not.toThrow();
+    expect(() => ReplacePageParamsSchema.parse({ pageId: "10", body: "" })).toThrow();
   });
 
   it("rejects unknown keys on strict schemas and bad enums", () => {

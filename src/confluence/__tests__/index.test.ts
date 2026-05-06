@@ -42,6 +42,8 @@ describe("confluence extension", () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       "search",
       "get_page",
+      "create_page",
+      "replace_page",
       "get_page_children",
       "get_page_ancestors",
       "list_attachments",
@@ -74,5 +76,14 @@ describe("confluence extension", () => {
     expect(tools.map((tool) => tool.name)).not.toContain("list_spaces");
     expect(tools.map((tool) => tool.name)).toContain("list_space_pages");
     expect(tools.map((tool) => tool.name)).toContain("validate");
+    expect(tools.map((tool) => tool.name)).toContain("create_page");
+    expect(tools.map((tool) => tool.name)).toContain("replace_page");
+  });
+
+  it("documents write tools and storage/scope rules in the system prompt", () => {
+    expect(extension.systemPrompt).toContain("confluence_create_page");
+    expect(extension.systemPrompt).toContain("confluence_replace_page");
+    expect(extension.systemPrompt).toContain("storage-format XHTML");
+    expect(extension.systemPrompt).toContain("rejects any mismatched");
   });
 });

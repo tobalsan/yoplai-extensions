@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfluenceClient } from "../client.js";
 import {
   ConfluenceAuthError,
+  ConfluenceConflictError,
   ConfluenceNotFoundError,
   ConfluenceRateLimitError,
   ConfluenceServerError,
@@ -353,6 +354,97 @@ describe("ConfluenceClient", () => {
   it("throws when listSpacePages called with no spaceId and no scope", async () => {
     const client = new ConfluenceClient(baseConfig);
     await expect(client.listSpacePages({})).rejects.toBeInstanceOf(ConfluenceValidationError);
+  });
+
+  it("creates a page with storage body and decorates the result", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ id: "900", title: "New", _links: { webui: "/spaces/ENG/pages/900/New" } }),
+    );
+
+    const client = new ConfluenceClient(baseConfig);
+    const result = await client.createPage({
+      spaceId: "55",
+      parentId: "10",
+      title: "New",
+      body: "<p>Hello</p>",
+    });
+
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://mycompany.atlassian.net/wiki/api/v2/pages");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({
+      spaceId: "55",
+      parentId: "10",
+      status: "current",
+      title: "New",
+      body: { representation: "storage", value: "<p>Hello</p>" },
+    });
+    expect(result.webUrl).toBe("https://mycompany.atlassian.net/wiki/spaces/ENG/pages/900/New");
+  });
+
+  it("defaults create_page to scoped space and rejects mismatched explicit spaceId", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/api/v2/spaces")) {
+        return jsonResponse({ results: [{ id: "55", key: "ENG" }] });
+      }
+      if (url.pathname.endsWith("/api/v2/pages")) {
+        return jsonResponse({ id: "901" });
+      }
+      throw new Error(`unexpected ${url.toString()}`);
+    });
+
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+    await client.createPage({ title: "Scoped", body: "<p>Hello</p>" });
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body)).spaceId).toBe("55");
+
+    await expect(
+      client.createPage({ spaceId: "99", title: "Other", body: "<p>Hello</p>" }),
+    ).rejects.toBeInstanceOf(ConfluenceValidationError);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires spaceId for create_page when unscoped", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const client = new ConfluenceClient(baseConfig);
+    await expect(client.createPage({ title: "No space", body: "<p>Hello</p>" })).rejects.toBeInstanceOf(
+      ConfluenceValidationError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("replaces a page by fetching version and preserving current title", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "GET") {
+        return jsonResponse({ id: "42", title: "Current", version: { number: 7 } });
+      }
+      return jsonResponse({ id: "42", title: "Current", version: { number: 8 } });
+    });
+
+    const client = new ConfluenceClient(baseConfig);
+    await client.replacePage({ pageId: "42", body: "<p>Updated</p>" });
+
+    expect(fetchSpy.mock.calls.map((call) => call[1]?.method)).toEqual(["GET", "PUT"]);
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toEqual({
+      id: "42",
+      status: "current",
+      title: "Current",
+      body: { representation: "storage", value: "<p>Updated</p>" },
+      version: { number: 8 },
+    });
+  });
+
+  it("uses supplied title on replace_page and maps 409 to conflict", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      if (init?.method === "GET") {
+        return jsonResponse({ id: "42", title: "Current", version: { number: 7 } });
+      }
+      return new Response(JSON.stringify({ message: "version conflict" }), { status: 409 });
+    });
+
+    const client = new ConfluenceClient(baseConfig);
+    await expect(
+      client.replacePage({ pageId: "42", title: "Renamed", body: "<p>Updated</p>" }),
+    ).rejects.toBeInstanceOf(ConfluenceConflictError);
   });
 
   it("returns scopedSpace metadata from validate when scoped", async () => {

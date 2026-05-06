@@ -145,6 +145,23 @@ export const ListSpacesParamsSchema = z
   })
   .strict();
 
+export const CreatePageParamsSchema = z
+  .object({
+    spaceId: OptionalString,
+    parentId: OptionalString,
+    title: StringInput,
+    body: StringInput,
+  })
+  .strict();
+
+export const ReplacePageParamsSchema = z
+  .object({
+    pageId: StringInput,
+    title: OptionalString,
+    body: StringInput,
+  })
+  .strict();
+
 export const ValidateParamsSchema = z.object({}).strict();
 
 export type ConfluenceConfig = z.infer<typeof ConfluenceConfigSchema>;

@@ -1,6 +1,7 @@
 import { ConfluenceClient } from "./client.js";
 import {
   ConfluenceConfigSchema,
+  CreatePageParamsSchema,
   DownloadAndExtractFileParamsSchema,
   GetPageAncestorsParamsSchema,
   GetPageChildrenParamsSchema,
@@ -10,6 +11,7 @@ import {
   ListLabelsParamsSchema,
   ListSpacePagesParamsSchema,
   ListSpacesParamsSchema,
+  ReplacePageParamsSchema,
   SearchParamsSchema,
   ValidateParamsSchema,
 } from "./models.js";
@@ -18,12 +20,14 @@ import { defineToolExtension, type ToolExtensionTool } from "../tool-extension.j
 export default defineToolExtension({
   id: "confluence",
   displayName: "Confluence",
-  description: "Read-only Confluence Cloud extension for search, pages, attachments, and labels.",
-  systemPrompt: `Use this extension for read-only access to Confluence Cloud.
+  description: "Confluence Cloud extension for search, pages, attachments, labels, and page writes.",
+  systemPrompt: `Use this extension for Confluence Cloud access, including page reads and controlled page writes.
 
 Tools:
 - confluence_search: search content with raw CQL (see primer below)
 - confluence_get_page: fetch a page by id, with body in storage/ADF/view format
+- confluence_create_page: create a current page with a title and storage-format XHTML body; optionally pass parentId
+- confluence_replace_page: replace an existing page body with storage-format XHTML and optionally rename it
 - confluence_get_page_children: fetch direct children of a page
 - confluence_get_page_ancestors: fetch the parent chain of a page
 - confluence_list_attachments: list attachments on a page
@@ -34,7 +38,9 @@ Tools:
 - confluence_list_spaces: list spaces (paginated, filterable by key/type/status). Unavailable when \`confluenceSpace\` is set.
 - confluence_validate: verify auth and API reachability
 
-If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file) are not enforced — agents must pass page ids that belong to the scoped space.
+If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. create_page defaults to the configured space and rejects any mismatched \`spaceId\`. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file, replace_page) are not space-enforced — agents must pass page ids that belong to the scoped space.
+
+For writes, \`body\` must be valid Confluence storage-format XHTML, not Markdown. To append content, first call get_page, compose the full new storage XHTML body locally, then call replace_page; each successful replace creates a recoverable Confluence page version. replace_page fetches the current version and sends the next version number; a concurrent edit returns a typed conflict error.
 
 CQL primer (used by confluence_search):
 - text ~ "needle"            full-text match
@@ -74,6 +80,26 @@ Return and consume JSON-serializable data only.`,
         execute: async (params) => {
           const parsed = GetPageParamsSchema.parse(params);
           return await client.getPage(parsed);
+        },
+      },
+      {
+        name: "create_page",
+        description:
+          "Create a Confluence page with storage-format XHTML body; uses confluenceSpace when configured.",
+        parameters: CreatePageParamsSchema,
+        execute: async (params) => {
+          const parsed = CreatePageParamsSchema.parse(params);
+          return await client.createPage(parsed);
+        },
+      },
+      {
+        name: "replace_page",
+        description:
+          "Replace an existing page body with storage-format XHTML and optionally update its title.",
+        parameters: ReplacePageParamsSchema,
+        execute: async (params) => {
+          const parsed = ReplacePageParamsSchema.parse(params);
+          return await client.replacePage(parsed);
         },
       },
       {
