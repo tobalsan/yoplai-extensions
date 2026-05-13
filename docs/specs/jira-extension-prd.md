@@ -7,7 +7,7 @@ Add a `jira` extension similar to Confluence extension patterns, with scoped Jir
 - `subdomain` (required)
 - `email` (required)
 - `apiToken` (required)
-- `jiraProjectKeys?: string[]` (optional allowlist; may be supplied directly as an array or via `$env:` as JSON array / comma-separated string)
+- `jiraProjectKeys?: string[]` (optional allowlist; may be supplied directly as an array or via `$env:` as a comma-separated string like `JIRA_PROJECT_KEYS=CFS,CFP`)
 - `readOnly?: boolean` (default `false`)
 - `timeoutMs?: number` (default `30000`)
 
