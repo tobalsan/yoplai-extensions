@@ -207,6 +207,22 @@ export class NotionClient {
     });
   }
 
+  async listPages(query?: string, pageSize?: number, startCursor?: string): Promise<Record<string, unknown>> {
+    return await this.requestJson("POST", "/search", {
+      query,
+      filter: {
+        property: "object",
+        value: "page",
+      },
+      page_size: pageSize,
+      start_cursor: startCursor,
+    });
+  }
+
+  async searchPages(query: string, pageSize?: number, startCursor?: string): Promise<Record<string, unknown>> {
+    return await this.listPages(query, pageSize, startCursor);
+  }
+
   async getDataSource(dataSourceId: string): Promise<Record<string, unknown>> {
     return await this.requestJson("GET", `/data_sources/${dataSourceId}`);
   }

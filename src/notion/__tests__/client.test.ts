@@ -83,6 +83,49 @@ describe("Notion extension request handling", () => {
     );
   });
 
+  it("lists and searches pages through Notion search", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: [],
+            next_cursor: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2026-03-11",
+      timeoutMs: 12_345,
+    });
+
+    await client.listPages(undefined, 50, "cursor-1");
+    await client.searchPages("roadmap", 10);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://api.notion.com/v1/search",
+      "https://api.notion.com/v1/search",
+    ]);
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        filter: { property: "object", value: "page" },
+        page_size: 50,
+        start_cursor: "cursor-1",
+      }),
+    );
+    expect(fetchSpy.mock.calls[1]?.[1]?.body).toBe(
+      JSON.stringify({
+        query: "roadmap",
+        filter: { property: "object", value: "page" },
+        page_size: 10,
+      }),
+    );
+  });
+
   it("patches data sources and pages with snake-cased bodies", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

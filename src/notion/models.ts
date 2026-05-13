@@ -122,13 +122,29 @@ const HeadingTypeArrayInput = z.union([
 
 export const NotionConfigSchema = z.object({
   apiKey: z.string(),
-  notionVersion: z.string().optional().default("2025-09-03"),
+  notionVersion: z.string().optional().default("2026-03-11"),
   timeoutMs: z.number().int().positive().optional().default(30_000),
 });
 
 export const ListDataSourcesParamsSchema = z
   .object({
     query: z.string().optional(),
+    pageSize: OptionalNumber,
+    startCursor: OptionalString,
+  })
+  .strict();
+
+export const ListPagesParamsSchema = z
+  .object({
+    query: z.string().optional(),
+    pageSize: OptionalNumber,
+    startCursor: OptionalString,
+  })
+  .strict();
+
+export const SearchPagesParamsSchema = z
+  .object({
+    query: z.string().min(1),
     pageSize: OptionalNumber,
     startCursor: OptionalString,
   })

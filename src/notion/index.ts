@@ -9,8 +9,10 @@ import {
   GetDataSourceParamsSchema,
   GetPageParamsSchema,
   ListDataSourcesParamsSchema,
+  ListPagesParamsSchema,
   NotionConfigSchema,
   QueryDataSourceParamsSchema,
+  SearchPagesParamsSchema,
   ReplaceChildBlocksParamsSchema,
   UpdateDataSourceParamsSchema,
   UpdatePagePropertiesParamsSchema,
@@ -26,6 +28,8 @@ export default defineToolExtension({
 
 Tools:
 - notion_list_data_sources: discover shared data sources by title
+- notion_list_pages: list shared pages, optionally filtered by title query
+- notion_search_pages: search shared pages by title
 - notion_get_data_source: inspect a data source schema and metadata
 - notion_update_data_source: patch a data source schema or metadata
 - notion_query_data_source: query rows from a data source
@@ -53,6 +57,24 @@ Return and consume JSON-serializable data only.`,
         execute: async (params) => {
           const parsed = ListDataSourcesParamsSchema.parse(params);
           return await client.listDataSources(parsed.query, parsed.pageSize, parsed.startCursor);
+        },
+      },
+      {
+        name: "list_pages",
+        description: "List shared pages, optionally filtered by title query.",
+        parameters: ListPagesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListPagesParamsSchema.parse(params);
+          return await client.listPages(parsed.query, parsed.pageSize, parsed.startCursor);
+        },
+      },
+      {
+        name: "search_pages",
+        description: "Search shared pages by title.",
+        parameters: SearchPagesParamsSchema,
+        execute: async (params) => {
+          const parsed = SearchPagesParamsSchema.parse(params);
+          return await client.searchPages(parsed.query, parsed.pageSize, parsed.startCursor);
         },
       },
       {

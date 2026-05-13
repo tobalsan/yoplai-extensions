@@ -19,7 +19,7 @@ describe("notion extension", () => {
       }),
     ).toEqual({
       apiKey: "secret",
-      notionVersion: "2025-09-03",
+      notionVersion: "2026-03-11",
       timeoutMs: 30_000,
     });
   });
@@ -33,9 +33,11 @@ describe("notion extension", () => {
       },
     });
 
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(14);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_data_sources",
+      "list_pages",
+      "search_pages",
       "get_data_source",
       "update_data_source",
       "query_data_source",

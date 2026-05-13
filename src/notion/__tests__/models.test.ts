@@ -7,8 +7,10 @@ import {
   GetDataSourceParamsSchema,
   GetPageParamsSchema,
   ListDataSourcesParamsSchema,
+  ListPagesParamsSchema,
   NotionConfigSchema,
   QueryDataSourceParamsSchema,
+  SearchPagesParamsSchema,
   ReplaceChildBlocksParamsSchema,
   UpdateDataSourceParamsSchema,
   UpdatePagePropertiesParamsSchema,
@@ -23,7 +25,7 @@ describe("notion models", () => {
       }),
     ).toEqual({
       apiKey: "secret",
-      notionVersion: "2025-09-03",
+      notionVersion: "2026-03-11",
       timeoutMs: 30_000,
     });
   });
@@ -39,6 +41,26 @@ describe("notion models", () => {
       query: "applications",
       pageSize: 25,
       startCursor: "cursor-1",
+    });
+    expect(
+      ListPagesParamsSchema.parse({
+        query: "release notes",
+        pageSize: "10",
+        startCursor: "cursor-1",
+      }),
+    ).toEqual({
+      query: "release notes",
+      pageSize: 10,
+      startCursor: "cursor-1",
+    });
+    expect(
+      SearchPagesParamsSchema.parse({
+        query: "roadmap",
+        pageSize: 10,
+      }),
+    ).toEqual({
+      query: "roadmap",
+      pageSize: 10,
     });
     expect(GetDataSourceParamsSchema.parse({ dataSourceId: "db-123" })).toEqual({
       dataSourceId: "db-123",
@@ -131,6 +153,8 @@ describe("notion models", () => {
   });
 
   it("rejects unknown keys on strict schemas", () => {
+    expect(() => ListPagesParamsSchema.parse({ extra: true })).toThrow();
+    expect(() => SearchPagesParamsSchema.parse({ query: "", extra: true })).toThrow();
     expect(() => GetPageParamsSchema.parse({ pageId: "page-123", extra: true })).toThrow();
     expect(() =>
       ValidateParamsSchema.parse({
