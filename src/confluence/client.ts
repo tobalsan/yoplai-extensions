@@ -593,11 +593,15 @@ export class ConfluenceClient {
             await sleep((attempt + 1) * 250);
             continue;
           }
-          throw new ConfluenceServerError(`Confluence server error with status ${response.status}`, {
-            endpoint: path,
-            status: response.status,
-            requestId,
-          });
+          const detail = await this.readErrorMessage(response);
+          throw new ConfluenceServerError(
+            `Confluence server error with status ${response.status}: ${detail}`,
+            {
+              endpoint: path,
+              status: response.status,
+              requestId,
+            },
+          );
         }
 
         if (!response.ok) {

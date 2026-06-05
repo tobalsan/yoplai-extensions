@@ -61,14 +61,18 @@ export const SearchParamsSchema = z
 
 export const GetPageParamsSchema = z
   .object({
-    pageId: StringInput,
+    pageId: StringInput.describe(
+      "Numeric id of a real Confluence wiki page. Do NOT pass a space id or the id of non-page content (whiteboard, database, folder, smart link) — those return an opaque 500. Find page ids via confluence_search or confluence_list_space_pages.",
+    ),
     bodyFormat: BodyFormatSchema.optional(),
   })
   .strict();
 
 export const GetPageChildrenParamsSchema = z
   .object({
-    pageId: StringInput,
+    pageId: StringInput.describe(
+      "Numeric id of a real Confluence wiki page (not a space id or non-page content, which return an opaque 500).",
+    ),
     limit: OptionalPositiveInteger,
     cursor: OptionalString,
   })
@@ -76,7 +80,9 @@ export const GetPageChildrenParamsSchema = z
 
 export const GetPageAncestorsParamsSchema = z
   .object({
-    pageId: StringInput,
+    pageId: StringInput.describe(
+      "Numeric id of a real Confluence wiki page (not a space id or non-page content, which return an opaque 500).",
+    ),
     limit: OptionalPositiveInteger,
   })
   .strict();
@@ -114,7 +120,9 @@ export const GetPagesByLabelParamsSchema = z
 
 export const ListSpacePagesParamsSchema = z
   .object({
-    spaceId: OptionalString,
+    spaceId: OptionalString.describe(
+      "Numeric space id (e.g. \"54362117\"), NOT the space key like \"CS\" — a key here causes an opaque 500. Resolve a key to its numeric id with confluence_list_spaces. Optional only when confluenceSpace is configured.",
+    ),
     depth: z.enum(["all", "root"]).optional(),
     sort: z
       .enum([

@@ -34,11 +34,11 @@ Tools:
 - confluence_download_and_extract_file: download a Confluence file URL and extract text from PDF or DOCX content
 - confluence_list_labels: list labels (paginated)
 - confluence_get_pages_by_label: list pages tagged with a given label id
-- confluence_list_space_pages: list pages in a space (uses configured space when \`confluenceSpace\` is set, otherwise requires \`spaceId\`)
+- confluence_list_space_pages: list pages in a space (uses configured space when \`confluenceSpace\` is set, otherwise requires the NUMERIC \`spaceId\` — not the space key; resolve keys via confluence_list_spaces)
 - confluence_list_spaces: list spaces (paginated, filterable by key/type/status). Unavailable when \`confluenceSpace\` is set.
 - confluence_validate: verify auth and API reachability
 
-If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. create_page defaults to the configured space and rejects any mismatched \`spaceId\`. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file, replace_page) are not space-enforced — agents must pass page ids that belong to the scoped space.
+If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. create_page defaults to the configured space and rejects any mismatched \`spaceId\`. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file, replace_page) are not space-enforced — agents must pass page ids that belong to the scoped space. Page-id tools require a real wiki page id; passing a space id or non-page content (whiteboard, database, folder, smart link) returns an opaque 500.
 
 For writes, \`body\` must be valid Confluence storage-format XHTML, not Markdown. To append content, first call get_page, compose the full new storage XHTML body locally, then call replace_page; each successful replace creates a recoverable Confluence page version. replace_page fetches the current version and sends the next version number; a concurrent edit returns a typed conflict error.
 
@@ -75,7 +75,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "get_page",
-        description: "Fetch a page by id with body in the given format.",
+        description:
+          "Fetch a page by id with body in the given format. pageId must be a real wiki page id, not a space id or non-page content (whiteboard/database/folder/smart link).",
         parameters: GetPageParamsSchema,
         execute: async (params) => {
           const parsed = GetPageParamsSchema.parse(params);
@@ -159,7 +160,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "list_space_pages",
         description:
-          "List pages in a space (uses confluenceSpace when configured, otherwise requires spaceId).",
+          "List pages in a space (uses confluenceSpace when configured, otherwise requires spaceId). spaceId must be the NUMERIC space id, not the space key (e.g. \"CS\"); resolve keys via confluence_list_spaces.",
         parameters: ListSpacePagesParamsSchema,
         execute: async (params) => {
           const parsed = ListSpacePagesParamsSchema.parse(params);
