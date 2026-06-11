@@ -124,7 +124,6 @@ export const NotionConfigSchema = z.object({
   apiKey: z.string(),
   notionVersion: z.string().optional().default("2026-03-11"),
   timeoutMs: z.number().int().positive().optional().default(30_000),
-  largeResultDir: z.string().optional(),
 });
 
 export const ListDataSourcesParamsSchema = z

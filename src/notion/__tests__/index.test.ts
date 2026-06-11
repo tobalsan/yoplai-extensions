@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodObject } from "zod";
 
@@ -65,26 +63,4 @@ describe("notion extension", () => {
     }
   });
 
-  it("saves oversized read tool responses to a file", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          results: [{ object: "page", content: "x".repeat(210_000) }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const tool = createTools().find((candidate) => candidate.name === "list_pages");
-    const result = (await tool?.execute({})) as Record<string, unknown>;
-
-    expect(result).toMatchObject({
-      object: "large_response_saved",
-      tool: "notion_list_pages",
-      bytes: expect.any(Number),
-    });
-    expect(typeof result.filePath).toBe("string");
-    const saved = JSON.parse(await readFile(result.filePath as string, "utf8")) as Record<string, unknown>;
-    expect(saved).toHaveProperty("results");
-  });
 });

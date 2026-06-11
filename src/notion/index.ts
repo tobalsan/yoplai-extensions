@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import { z } from "zod";
 
 import { NotionClient } from "./client.js";
@@ -24,27 +20,6 @@ import {
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
-const MAX_INLINE_RESPONSE_BYTES = 200_000;
-
-async function safeResponse(toolName: string, result: unknown, directory: string): Promise<unknown> {
-  const json = JSON.stringify(result, null, 2);
-  const bytes = Buffer.byteLength(json, "utf8");
-  if (bytes <= MAX_INLINE_RESPONSE_BYTES) {
-    return result;
-  }
-
-  await mkdir(directory, { recursive: true });
-  const filePath = path.join(directory, `${toolName}-${Date.now()}.json`);
-  await writeFile(filePath, json, "utf8");
-
-  return {
-    object: "large_response_saved",
-    tool: `notion_${toolName}`,
-    filePath,
-    bytes,
-    message: "Response was too large to return inline. Read filePath for the full JSON result.",
-  };
-}
 
 export default defineToolExtension({
   id: "notion",
@@ -68,16 +43,12 @@ Tools:
 - notion_download_and_extract_file: download a Notion file URL and extract text from PDF or DOCX
 - notion_validate: verify auth and API reachability
 
-Large read responses are saved to a local JSON file instead of returned inline; read the returned filePath for full results.
 Return and consume JSON-serializable data only.`,
   configSchema: NotionConfigSchema,
   requiredSecrets: ["apiKey"],
   createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
     const client = new NotionClient(resolved);
-    const largeResultDir =
-      resolved.largeResultDir ?? path.join(os.tmpdir(), "aihub-extension-results", "notion");
-    const save = (toolName: string, result: unknown) => safeResponse(toolName, result, largeResultDir);
 
     return [
       {
@@ -86,10 +57,7 @@ Return and consume JSON-serializable data only.`,
         parameters: ListDataSourcesParamsSchema,
         execute: async (params) => {
           const parsed = ListDataSourcesParamsSchema.parse(params);
-          return await save(
-            "list_data_sources",
-            await client.listDataSources(parsed.query, parsed.pageSize, parsed.startCursor),
-          );
+          return await client.listDataSources(parsed.query, parsed.pageSize, parsed.startCursor);
         },
       },
       {
@@ -98,7 +66,7 @@ Return and consume JSON-serializable data only.`,
         parameters: ListPagesParamsSchema,
         execute: async (params) => {
           const parsed = ListPagesParamsSchema.parse(params);
-          return await save("list_pages", await client.listPages(parsed.query, parsed.pageSize, parsed.startCursor));
+          return await client.listPages(parsed.query, parsed.pageSize, parsed.startCursor);
         },
       },
       {
@@ -107,7 +75,7 @@ Return and consume JSON-serializable data only.`,
         parameters: SearchPagesParamsSchema,
         execute: async (params) => {
           const parsed = SearchPagesParamsSchema.parse(params);
-          return await save("search_pages", await client.searchPages(parsed.query, parsed.pageSize, parsed.startCursor));
+          return await client.searchPages(parsed.query, parsed.pageSize, parsed.startCursor);
         },
       },
       {
@@ -116,7 +84,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = GetDataSourceParamsSchema.parse(params);
-          return await save("get_data_source", await client.getDataSource(parsed.dataSourceId));
+          return await client.getDataSource(parsed.dataSourceId);
         },
       },
       {
@@ -131,11 +99,11 @@ Return and consume JSON-serializable data only.`,
       {
         name: "query_data_source",
         description:
-          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Large results are saved to a file (see `largeResultDir` config); read the returned `filePath` for the full JSON. Do NOT pass a `filter` unless the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness. If a call fails, retry the SAME query or surface the error; never add a filter to force success.",
+          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Do NOT pass a `filter` unless the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness. If a call fails, retry the SAME query or surface the error; never add a filter to force success.",
         parameters: QueryDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = QueryDataSourceParamsSchema.parse(params);
-          return await save("query_data_source", await client.queryDataSource(parsed));
+          return await client.queryDataSource(parsed);
         },
       },
       {
@@ -144,7 +112,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetPageParamsSchema,
         execute: async (params) => {
           const parsed = GetPageParamsSchema.parse(params);
-          return await save("get_page", await client.getPage(parsed.pageId));
+          return await client.getPage(parsed.pageId);
         },
       },
       {
@@ -162,7 +130,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetBlocksParamsSchema,
         execute: async (params) => {
           const parsed = GetBlocksParamsSchema.parse(params);
-          return await save("get_blocks", await client.getBlocks(parsed));
+          return await client.getBlocks(parsed);
         },
       },
       {
@@ -199,7 +167,7 @@ Return and consume JSON-serializable data only.`,
         parameters: DownloadAndExtractFileParamsSchema,
         execute: async (params) => {
           const parsed = DownloadAndExtractFileParamsSchema.parse(params);
-          return await save("download_and_extract_file", await client.downloadAndExtractFile(parsed));
+          return await client.downloadAndExtractFile(parsed);
         },
       },
       {
