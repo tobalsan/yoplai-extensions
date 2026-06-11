@@ -434,6 +434,8 @@ describe("Notion extension request handling", () => {
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }))
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }))
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }))
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "0" } }));
 
     const rateLimitClient = new NotionClient({
@@ -443,10 +445,12 @@ describe("Notion extension request handling", () => {
     });
 
     await expect(rateLimitClient.getDataSource("db-429")).rejects.toBeInstanceOf(NotionRateLimitError);
-    expect(rateLimitFetch).toHaveBeenCalledTimes(4);
+    expect(rateLimitFetch).toHaveBeenCalledTimes(6);
 
     rateLimitFetch.mockReset();
     rateLimitFetch
+      .mockResolvedValueOnce(new Response("{}", { status: 500 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 500 }))
       .mockResolvedValueOnce(new Response("{}", { status: 500 }))
       .mockResolvedValueOnce(new Response("{}", { status: 500 }))
       .mockResolvedValueOnce(new Response("{}", { status: 500 }))
@@ -459,7 +463,7 @@ describe("Notion extension request handling", () => {
     });
 
     await expect(serverErrorClient.getDataSource("db-500")).rejects.toBeInstanceOf(NotionServerError);
-    expect(rateLimitFetch).toHaveBeenCalledTimes(4);
+    expect(rateLimitFetch).toHaveBeenCalledTimes(6);
     sleepSpy.mockRestore();
   });
 

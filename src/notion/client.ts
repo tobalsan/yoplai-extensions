@@ -485,7 +485,7 @@ export class NotionClient {
     }
     const requestBody = body ? JSON.stringify(body) : undefined;
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       try {
         const response = await fetch(url.toString(), {
           method,
@@ -502,7 +502,7 @@ export class NotionClient {
         const requestId = extractRequestId(response);
 
         if (response.status === 429) {
-          if (attempt < 3) {
+          if (attempt < 5) {
             const retryAfter = Number(response.headers.get("retry-after") ?? "1");
             await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000);
             continue;
@@ -539,8 +539,8 @@ export class NotionClient {
         }
 
         if (response.status >= 500) {
-          if (attempt < 3) {
-            await sleep((attempt + 1) * 250);
+          if (attempt < 5) {
+            await sleep(Math.min(250 * 2 ** attempt, 4000) + Math.floor(Math.random() * 250));
             continue;
           }
           throw new NotionServerError(`Notion server error with status ${response.status}`, {

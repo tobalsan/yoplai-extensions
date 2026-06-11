@@ -131,7 +131,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "query_data_source",
         description:
-          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Large results are saved to a file (see `largeResultDir` config); read the returned `filePath` for the full JSON.",
+          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Large results are saved to a file (see `largeResultDir` config); read the returned `filePath` for the full JSON. Do NOT pass a `filter` unless the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness. If a call fails, retry the SAME query or surface the error; never add a filter to force success.",
         parameters: QueryDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = QueryDataSourceParamsSchema.parse(params);

@@ -169,7 +169,9 @@ export const UpdateDataSourceParamsSchema = z
 export const QueryDataSourceParamsSchema = z
   .object({
     dataSourceId: StringInput,
-    filter: JsonObjectInput.optional(),
+    filter: JsonObjectInput.optional().describe(
+      "Optional Notion filter. Omit to return the ENTIRE data source. Only set this if the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness.",
+    ),
     sorts: JsonArrayInput.optional(),
     pageSize: OptionalNumber.describe(
       "Rows per network page (max 100) used for internal auto-pagination. Does NOT limit the dataset — all pages are fetched and merged regardless.",
