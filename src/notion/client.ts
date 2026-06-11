@@ -248,13 +248,32 @@ export class NotionClient {
     pageSize?: number;
     startCursor?: string;
   }): Promise<Record<string, unknown>> {
-    const body: Record<string, unknown> = compact({
+    const baseBody = compact({
       filter: input.filter ? mapKeysDeep(input.filter, toSnakeCase) : undefined,
       sorts: input.sorts ? mapKeysDeep(input.sorts, toSnakeCase) : undefined,
       page_size: input.pageSize,
-      start_cursor: input.startCursor,
     });
-    return await this.requestJson("POST", `/data_sources/${input.dataSourceId}/query`, body);
+
+    const results: unknown[] = [];
+    let startCursor = input.startCursor;
+    let last: Record<string, unknown> = {};
+    do {
+      const response = await this.requestJson(
+        "POST",
+        `/data_sources/${input.dataSourceId}/query`,
+        compact({ ...baseBody, start_cursor: startCursor }),
+      );
+      last = response;
+      if (Array.isArray(response.results)) {
+        results.push(...response.results);
+      }
+      startCursor =
+        response.has_more === true && typeof response.next_cursor === "string"
+          ? response.next_cursor
+          : undefined;
+    } while (startCursor);
+
+    return { ...last, results, has_more: false, next_cursor: null };
   }
 
   async getPage(pageId: string): Promise<Record<string, unknown>> {

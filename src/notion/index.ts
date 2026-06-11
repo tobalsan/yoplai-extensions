@@ -26,14 +26,13 @@ import { defineToolExtension } from "../tool-extension.js";
 
 const MAX_INLINE_RESPONSE_BYTES = 200_000;
 
-async function safeResponse(toolName: string, result: unknown): Promise<unknown> {
+async function safeResponse(toolName: string, result: unknown, directory: string): Promise<unknown> {
   const json = JSON.stringify(result, null, 2);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes <= MAX_INLINE_RESPONSE_BYTES) {
     return result;
   }
 
-  const directory = path.join(os.tmpdir(), "aihub-extension-results", "notion");
   await mkdir(directory, { recursive: true });
   const filePath = path.join(directory, `${toolName}-${Date.now()}.json`);
   await writeFile(filePath, json, "utf8");
@@ -76,6 +75,9 @@ Return and consume JSON-serializable data only.`,
   createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
     const client = new NotionClient(resolved);
+    const largeResultDir =
+      resolved.largeResultDir ?? path.join(os.tmpdir(), "aihub-extension-results", "notion");
+    const save = (toolName: string, result: unknown) => safeResponse(toolName, result, largeResultDir);
 
     return [
       {
@@ -84,7 +86,7 @@ Return and consume JSON-serializable data only.`,
         parameters: ListDataSourcesParamsSchema,
         execute: async (params) => {
           const parsed = ListDataSourcesParamsSchema.parse(params);
-          return await safeResponse(
+          return await save(
             "list_data_sources",
             await client.listDataSources(parsed.query, parsed.pageSize, parsed.startCursor),
           );
@@ -96,7 +98,7 @@ Return and consume JSON-serializable data only.`,
         parameters: ListPagesParamsSchema,
         execute: async (params) => {
           const parsed = ListPagesParamsSchema.parse(params);
-          return await safeResponse("list_pages", await client.listPages(parsed.query, parsed.pageSize, parsed.startCursor));
+          return await save("list_pages", await client.listPages(parsed.query, parsed.pageSize, parsed.startCursor));
         },
       },
       {
@@ -105,7 +107,7 @@ Return and consume JSON-serializable data only.`,
         parameters: SearchPagesParamsSchema,
         execute: async (params) => {
           const parsed = SearchPagesParamsSchema.parse(params);
-          return await safeResponse("search_pages", await client.searchPages(parsed.query, parsed.pageSize, parsed.startCursor));
+          return await save("search_pages", await client.searchPages(parsed.query, parsed.pageSize, parsed.startCursor));
         },
       },
       {
@@ -114,7 +116,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = GetDataSourceParamsSchema.parse(params);
-          return await safeResponse("get_data_source", await client.getDataSource(parsed.dataSourceId));
+          return await save("get_data_source", await client.getDataSource(parsed.dataSourceId));
         },
       },
       {
@@ -128,11 +130,12 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "query_data_source",
-        description: "Query rows from a data source.",
+        description:
+          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Large results are saved to a file (see `largeResultDir` config); read the returned `filePath` for the full JSON.",
         parameters: QueryDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = QueryDataSourceParamsSchema.parse(params);
-          return await safeResponse("query_data_source", await client.queryDataSource(parsed));
+          return await save("query_data_source", await client.queryDataSource(parsed));
         },
       },
       {
@@ -141,7 +144,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetPageParamsSchema,
         execute: async (params) => {
           const parsed = GetPageParamsSchema.parse(params);
-          return await safeResponse("get_page", await client.getPage(parsed.pageId));
+          return await save("get_page", await client.getPage(parsed.pageId));
         },
       },
       {
@@ -159,7 +162,7 @@ Return and consume JSON-serializable data only.`,
         parameters: GetBlocksParamsSchema,
         execute: async (params) => {
           const parsed = GetBlocksParamsSchema.parse(params);
-          return await safeResponse("get_blocks", await client.getBlocks(parsed));
+          return await save("get_blocks", await client.getBlocks(parsed));
         },
       },
       {
@@ -196,7 +199,7 @@ Return and consume JSON-serializable data only.`,
         parameters: DownloadAndExtractFileParamsSchema,
         execute: async (params) => {
           const parsed = DownloadAndExtractFileParamsSchema.parse(params);
-          return await safeResponse("download_and_extract_file", await client.downloadAndExtractFile(parsed));
+          return await save("download_and_extract_file", await client.downloadAndExtractFile(parsed));
         },
       },
       {

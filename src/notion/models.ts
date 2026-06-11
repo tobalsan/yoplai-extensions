@@ -124,6 +124,7 @@ export const NotionConfigSchema = z.object({
   apiKey: z.string(),
   notionVersion: z.string().optional().default("2026-03-11"),
   timeoutMs: z.number().int().positive().optional().default(30_000),
+  largeResultDir: z.string().optional(),
 });
 
 export const ListDataSourcesParamsSchema = z
@@ -170,8 +171,12 @@ export const QueryDataSourceParamsSchema = z
     dataSourceId: StringInput,
     filter: JsonObjectInput.optional(),
     sorts: JsonArrayInput.optional(),
-    pageSize: OptionalNumber,
-    startCursor: OptionalString,
+    pageSize: OptionalNumber.describe(
+      "Rows per network page (max 100) used for internal auto-pagination. Does NOT limit the dataset — all pages are fetched and merged regardless.",
+    ),
+    startCursor: OptionalString.describe(
+      "Optional Notion cursor to begin auto-pagination from. Usually omit; the tool fetches every page until exhausted.",
+    ),
   })
   .strict();
 
