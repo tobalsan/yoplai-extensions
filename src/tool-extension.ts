@@ -12,6 +12,7 @@ export interface ToolExtensionTool {
   name: string;
   description: string;
   parameters: z.AnyZodObject;
+  jsonSchemaParameters?: Record<string, unknown>;
   execute(params: unknown): Promise<unknown>;
 }
 
@@ -174,9 +175,11 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       return definition.createTools(resolved).map((tool) => ({
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
-        parameters: zodToJsonSchema(tool.parameters, {
-          $refStrategy: "none",
-        }),
+        parameters:
+          tool.jsonSchemaParameters ??
+          zodToJsonSchema(tool.parameters, {
+            $refStrategy: "none",
+          }),
         execute: (params: unknown) => tool.execute(params),
       }));
     },
