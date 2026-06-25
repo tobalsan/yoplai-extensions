@@ -195,7 +195,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const manager = await getManager(`${agent.id}:${configPath}`, loaded.servers);
     const tools = adaptMcpTools(await manager.listTools(), manager);
     return tools.map((tool) => ({
-      name: tool.name.startsWith("mcp_") ? tool.name : `mcp_${tool.name}`,
+      name: tool.name,
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       execute: (params: unknown) => tool.execute(params),

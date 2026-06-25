@@ -136,7 +136,7 @@ describe("mcp extension", () => {
     expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "node" });
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
-      name: "mcp_local__echo",
+      name: "mcp__local__echo",
       parameters: { type: "object", properties: { text: { type: "string" } } },
     });
     await expect(tools[0]?.execute({ text: "hi" })).resolves.toEqual({ text: "hi" });

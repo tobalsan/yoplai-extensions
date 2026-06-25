@@ -29,7 +29,7 @@ describe("MCP tool adapter", () => {
       },
     };
 
-    expect(getMcpExtensionToolName(tool)).toBe("github_main__search_issues");
+    expect(getMcpExtensionToolName(tool)).toBe("mcp__github_main__search_issues");
     const adapted = adaptMcpTools([tool], manager);
     expect(adapted[0]?.jsonSchemaParameters).toEqual(tool.inputSchema);
     expect(adapted[0]?.parameters.parse({ q: "bug", extra: true })).toEqual({
@@ -63,8 +63,8 @@ describe("MCP tool adapter", () => {
     );
 
     expect(adapted.map((tool) => tool.name)).toEqual([
-      "github_main__search_issues",
-      "github_main__search_issues__2",
+      "mcp__github_main__search_issues",
+      "mcp__github_main__search_issues__2",
     ]);
   });
 });

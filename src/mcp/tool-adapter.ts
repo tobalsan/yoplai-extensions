@@ -9,7 +9,7 @@ function sanitizeSegment(value: string): string {
 }
 
 export function getMcpExtensionToolName(tool: McpToolDefinition): string {
-  return `${sanitizeSegment(tool.server)}__${sanitizeSegment(tool.name)}`;
+  return `mcp__${sanitizeSegment(tool.server)}__${sanitizeSegment(tool.name)}`;
 }
 
 export function adaptMcpTools(
