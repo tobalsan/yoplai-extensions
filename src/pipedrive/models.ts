@@ -142,3 +142,128 @@ export const DownloadFileResultSchema = z.object({
   content_base64: z.string().describe("Raw file bytes, base64-encoded. Not parsed."),
 });
 export type DownloadFileResult = z.infer<typeof DownloadFileResultSchema>;
+
+/** Shared cursor-pagination params for the v2 list endpoints below. */
+export const CursorPageParamsSchema = z
+  .object({
+    cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
+    limit: PositiveIntFromInput.optional().describe("Max items per page, 1-500 (default 100)."),
+  })
+  .strict();
+
+// --- Pipelines ---------------------------------------------------------------
+
+export const ListPipelinesParamsSchema = CursorPageParamsSchema;
+export type ListPipelinesParams = z.infer<typeof ListPipelinesParamsSchema>;
+
+export const GetPipelineParamsSchema = z
+  .object({ pipeline_id: PositiveIntFromInput.describe("Pipeline ID to fetch.") })
+  .strict();
+export type GetPipelineParams = z.infer<typeof GetPipelineParamsSchema>;
+
+/** Lean pipeline projection (v2 /pipelines). */
+export const PipelineSchema = z.object({
+  id: z.number(),
+  name: z.string().nullable(),
+  order_nr: z.number().nullable(),
+  is_selected: z.boolean().nullable(),
+  is_deal_probability_enabled: z.boolean().nullable(),
+  active: z.boolean().nullable(),
+});
+export type Pipeline = z.infer<typeof PipelineSchema>;
+
+export const ListPipelinesResultSchema = z.object({
+  pipelines: z.array(PipelineSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListPipelinesResult = z.infer<typeof ListPipelinesResultSchema>;
+
+// --- Stages ------------------------------------------------------------------
+
+export const ListStagesParamsSchema = CursorPageParamsSchema.extend({
+  pipeline_id: PositiveIntFromInput.optional().describe("Filter stages by pipeline ID (server-side)."),
+}).strict();
+export type ListStagesParams = z.infer<typeof ListStagesParamsSchema>;
+
+export const GetStageParamsSchema = z
+  .object({ stage_id: PositiveIntFromInput.describe("Stage ID to fetch.") })
+  .strict();
+export type GetStageParams = z.infer<typeof GetStageParamsSchema>;
+
+/** Lean stage projection (v2 /stages). */
+export const StageSchema = z.object({
+  id: z.number(),
+  name: z.string().nullable(),
+  pipeline_id: z.number().nullable(),
+  order_nr: z.number().nullable(),
+  deal_probability: z.number().nullable(),
+  is_deal_rot_enabled: z.boolean().nullable(),
+});
+export type Stage = z.infer<typeof StageSchema>;
+
+export const ListStagesResultSchema = z.object({
+  stages: z.array(StageSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListStagesResult = z.infer<typeof ListStagesResultSchema>;
+
+// --- Deal products / line items ---------------------------------------------
+
+export const ListDealProductsParamsSchema = CursorPageParamsSchema.extend({
+  deal_id: PositiveIntFromInput.describe("Deal ID whose attached products (line items) to list."),
+}).strict();
+export type ListDealProductsParams = z.infer<typeof ListDealProductsParamsSchema>;
+
+/** Lean line-item projection (v2 /deals/{id}/products). */
+export const DealProductSchema = z.object({
+  id: z.number(),
+  product_id: z.number().nullable(),
+  name: z.string().nullable(),
+  quantity: z.number().nullable(),
+  item_price: z.number().nullable(),
+  sum: z.number().nullable(),
+  currency: z.string().nullable(),
+  billing_frequency: z.string().nullable(),
+  billing_frequency_cycles: z.number().nullable(),
+  tax: z.number().nullable(),
+  tax_method: z.string().nullable(),
+  discount: z.number().nullable(),
+  discount_type: z.string().nullable(),
+  product_variation_id: z.number().nullable(),
+  comments: z.string().nullable(),
+});
+export type DealProduct = z.infer<typeof DealProductSchema>;
+
+export const ListDealProductsResultSchema = z.object({
+  deal_id: z.number(),
+  products: z.array(DealProductSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListDealProductsResult = z.infer<typeof ListDealProductsResultSchema>;
+
+// --- Deal discounts ----------------------------------------------------------
+
+export const ListDealDiscountsParamsSchema = CursorPageParamsSchema.extend({
+  deal_id: PositiveIntFromInput.describe("Deal ID whose deal-level discounts to list."),
+}).strict();
+export type ListDealDiscountsParams = z.infer<typeof ListDealDiscountsParamsSchema>;
+
+/** Lean deal-level discount projection (v2 /deals/{id}/discounts). */
+export const DealDiscountSchema = z.object({
+  id: z.string(),
+  description: z.string().nullable(),
+  amount: z.number().nullable(),
+  type: z.string().nullable(),
+});
+export type DealDiscount = z.infer<typeof DealDiscountSchema>;
+
+export const ListDealDiscountsResultSchema = z.object({
+  deal_id: z.number(),
+  discounts: z.array(DealDiscountSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListDealDiscountsResult = z.infer<typeof ListDealDiscountsResultSchema>;

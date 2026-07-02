@@ -4,8 +4,13 @@ import {
   DownloadFileParamsSchema,
   DownloadFileResultSchema,
   FileSchema,
+  GetPipelineParamsSchema,
+  GetStageParamsSchema,
+  ListDealDiscountsParamsSchema,
   ListDealFilesParamsSchema,
+  ListDealProductsParamsSchema,
   ListDealsParamsSchema,
+  ListStagesParamsSchema,
   PipedriveConfigSchema,
 } from "../models.js";
 
@@ -106,5 +111,45 @@ describe("File entity + deal-file schemas", () => {
       encoding: "hex",
       content_base64: "AAAA",
     }).success).toBe(false);
+  });
+});
+
+describe("pipeline and stage param schemas", () => {
+  it("ListStagesParamsSchema accepts an optional coerced pipeline_id filter", () => {
+    expect(ListStagesParamsSchema.parse({})).toEqual({});
+    expect(ListStagesParamsSchema.parse({ pipeline_id: "3" }).pipeline_id).toBe(3);
+  });
+
+  it("ListStagesParamsSchema rejects unknown keys", () => {
+    expect(ListStagesParamsSchema.safeParse({ nope: 1 }).success).toBe(false);
+  });
+
+  it("GetPipelineParamsSchema requires a pipeline_id", () => {
+    expect(GetPipelineParamsSchema.safeParse({}).success).toBe(false);
+    expect(GetPipelineParamsSchema.parse({ pipeline_id: "7" }).pipeline_id).toBe(7);
+  });
+
+  it("GetStageParamsSchema requires a stage_id", () => {
+    expect(GetStageParamsSchema.safeParse({}).success).toBe(false);
+    expect(GetStageParamsSchema.parse({ stage_id: 9 }).stage_id).toBe(9);
+  });
+});
+
+describe("deal product and discount param schemas", () => {
+  it("ListDealProductsParamsSchema requires deal_id and coerces it", () => {
+    expect(ListDealProductsParamsSchema.safeParse({}).success).toBe(false);
+    const parsed = ListDealProductsParamsSchema.parse({ deal_id: "3782", limit: "25" });
+    expect(parsed.deal_id).toBe(3782);
+    expect(parsed.limit).toBe(25);
+  });
+
+  it("ListDealDiscountsParamsSchema requires deal_id", () => {
+    expect(ListDealDiscountsParamsSchema.safeParse({}).success).toBe(false);
+    expect(ListDealDiscountsParamsSchema.parse({ deal_id: 3782 }).deal_id).toBe(3782);
+  });
+
+  it("deal product/discount schemas reject unknown keys", () => {
+    expect(ListDealProductsParamsSchema.safeParse({ deal_id: 1, nope: 1 }).success).toBe(false);
+    expect(ListDealDiscountsParamsSchema.safeParse({ deal_id: 1, nope: 1 }).success).toBe(false);
   });
 });

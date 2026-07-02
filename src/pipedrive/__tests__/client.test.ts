@@ -357,6 +357,167 @@ describe("PipedriveClient retry and error mapping", () => {
   });
 });
 
+describe("PipedriveClient pipelines and stages", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists pipelines from v2 with a lean projection and cursor", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [
+          { id: 1, name: "Sales", order_nr: 0, is_selected: true, is_deleted: false },
+          { id: 2, name: "Renewals", order_nr: 1, is_selected: false, is_deleted: true },
+        ],
+        additional_data: { next_cursor: "pipe-2" },
+      }),
+    );
+
+    const result = await createClient().listPipelines({ cursor: "pipe-1", limit: 50 });
+
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v2/pipelines");
+    expect(u.searchParams.get("cursor")).toBe("pipe-1");
+    expect(u.searchParams.get("limit")).toBe("50");
+    expect(result.next_cursor).toBe("pipe-2");
+    expect(result.count).toBe(2);
+    expect(result.pipelines[0]).toEqual({
+      id: 1,
+      name: "Sales",
+      order_nr: 0,
+      is_selected: true,
+      is_deal_probability_enabled: null,
+      active: true,
+    });
+    // is_deleted:true maps to active:false.
+    expect(result.pipelines[1].active).toBe(false);
+  });
+
+  it("fetches a single pipeline by id", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: { id: 7, name: "Sales", order_nr: 3 } }));
+
+    const result = await createClient().getPipeline(7);
+
+    expect(url(spy).pathname).toBe("/api/v2/pipelines/7");
+    expect(result).toMatchObject({ id: 7, name: "Sales", order_nr: 3 });
+  });
+
+  it("lists stages with an optional pipeline_id filter", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [{ id: 5, name: "Won", pipeline_id: 1, order_nr: 4, deal_probability: 100 }],
+        additional_data: { next_cursor: null },
+      }),
+    );
+
+    const result = await createClient().listStages({ pipeline_id: 1 });
+
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v2/stages");
+    expect(u.searchParams.get("pipeline_id")).toBe("1");
+    expect(result.stages[0]).toMatchObject({
+      id: 5,
+      name: "Won",
+      pipeline_id: 1,
+      order_nr: 4,
+      deal_probability: 100,
+    });
+    expect(result.next_cursor).toBeNull();
+  });
+
+  it("omits pipeline_id from the stages query when not provided", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: [], additional_data: {} }));
+
+    await createClient().listStages({});
+
+    expect(url(spy).searchParams.get("pipeline_id")).toBeNull();
+  });
+
+  it("fetches a single stage by id", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: { id: 9, name: "Final negotiation", pipeline_id: 1 } }));
+
+    const result = await createClient().getStage(9);
+
+    expect(url(spy).pathname).toBe("/api/v2/stages/9");
+    expect(result).toMatchObject({ id: 9, name: "Final negotiation", pipeline_id: 1 });
+  });
+});
+
+describe("PipedriveClient deal products and discounts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists a deal's products (line items) with qty, unit price and billing frequency", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            id: 100,
+            product_id: 55,
+            name: "Acme License",
+            quantity: 3,
+            item_price: 120,
+            sum: 360,
+            currency: "EUR",
+            billing_frequency: "monthly",
+            billing_frequency_cycles: 12,
+            tax: 20,
+            tax_method: "exclusive",
+            product_variation_id: 7,
+          },
+        ],
+        additional_data: { next_cursor: "prod-2" },
+      }),
+    );
+
+    const result = await createClient().listDealProducts({ deal_id: 3782, limit: 100 });
+
+    expect(url(spy).pathname).toBe("/api/v2/deals/3782/products");
+    expect(result.deal_id).toBe(3782);
+    expect(result.next_cursor).toBe("prod-2");
+    expect(result.count).toBe(1);
+    expect(result.products[0]).toMatchObject({
+      id: 100,
+      product_id: 55,
+      name: "Acme License",
+      quantity: 3,
+      item_price: 120,
+      billing_frequency: "monthly",
+      billing_frequency_cycles: 12,
+      tax: 20,
+      product_variation_id: 7,
+    });
+  });
+
+  it("lists a deal's deal-level discounts", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [{ id: "abc-123", description: "Early bird", amount: 10, type: "percentage" }],
+        additional_data: { next_cursor: null },
+      }),
+    );
+
+    const result = await createClient().listDealDiscounts({ deal_id: 3782 });
+
+    expect(url(spy).pathname).toBe("/api/v2/deals/3782/discounts");
+    expect(result.deal_id).toBe(3782);
+    expect(result.discounts[0]).toEqual({
+      id: "abc-123",
+      description: "Early bird",
+      amount: 10,
+      type: "percentage",
+    });
+    expect(result.next_cursor).toBeNull();
+  });
+});
+
 describe("inCloseDateRange", () => {
   it("excludes deals without an expected close date when a bound is set", () => {
     expect(inCloseDateRange(null, "2025-07-01", null)).toBe(false);

@@ -8,15 +8,27 @@ import {
   PipedriveValidationError,
 } from "./errors.js";
 import {
+  type DealDiscount,
+  type DealProduct,
   type DealSummary,
   type DownloadFileParams,
   type DownloadFileResult,
   type File,
+  type ListDealDiscountsParams,
+  type ListDealDiscountsResult,
   type ListDealFilesParams,
   type ListDealFilesResult,
+  type ListDealProductsParams,
+  type ListDealProductsResult,
   type ListDealsParams,
   type ListDealsResult,
+  type ListPipelinesParams,
+  type ListPipelinesResult,
+  type ListStagesParams,
+  type ListStagesResult,
+  type Pipeline,
   type PipedriveConfig,
+  type Stage,
 } from "./models.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -44,6 +56,14 @@ function fileExtension(name: string): string | null {
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return null;
   return name.slice(dot + 1).toLowerCase();
+}
+
+function toBooleanOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 export interface PipedriveClientOptions extends PipedriveConfig {
@@ -408,6 +428,154 @@ export class PipedriveClient {
       }
     }
     return Math.min(250 * 2 ** attempt, 4000) + Math.floor(Math.random() * 250);
+  }
+
+  /**
+   * List pipelines (v2 /pipelines). One native cursor page per call; pass the
+   * returned next_cursor back as cursor to page through all pipelines.
+   */
+  async listPipelines(params: ListPipelinesParams): Promise<ListPipelinesResult> {
+    const { rows, nextCursor } = await this.fetchListPage("pipelines", params.limit, params.cursor);
+    return {
+      pipelines: rows.map((row) => this.toPipeline(row)),
+      next_cursor: nextCursor,
+      count: rows.length,
+    };
+  }
+
+  /** Fetch a single pipeline by id (v2 /pipelines/{id}). */
+  async getPipeline(pipelineId: number): Promise<Pipeline> {
+    const data = await this.requestJson("GET", "v2", `pipelines/${pipelineId}`);
+    return this.toPipeline(asRecord(data.data));
+  }
+
+  /**
+   * List stages (v2 /stages) with an optional server-side pipeline_id filter.
+   * One native cursor page per call.
+   */
+  async listStages(params: ListStagesParams): Promise<ListStagesResult> {
+    const extra: Record<string, string | number> = {};
+    if (params.pipeline_id !== undefined) extra.pipeline_id = params.pipeline_id;
+    const { rows, nextCursor } = await this.fetchListPage("stages", params.limit, params.cursor, extra);
+    return {
+      stages: rows.map((row) => this.toStage(row)),
+      next_cursor: nextCursor,
+      count: rows.length,
+    };
+  }
+
+  /** Fetch a single stage by id (v2 /stages/{id}). */
+  async getStage(stageId: number): Promise<Stage> {
+    const data = await this.requestJson("GET", "v2", `stages/${stageId}`);
+    return this.toStage(asRecord(data.data));
+  }
+
+  /**
+   * List a deal's attached products / line items (v2 /deals/{id}/products) —
+   * the source for devis amounts and recurring (MRR/ARR) products. One native
+   * cursor page per call.
+   */
+  async listDealProducts(params: ListDealProductsParams): Promise<ListDealProductsResult> {
+    const { rows, nextCursor } = await this.fetchListPage(
+      `deals/${params.deal_id}/products`,
+      params.limit,
+      params.cursor,
+    );
+    return {
+      deal_id: params.deal_id,
+      products: rows.map((row) => this.toDealProduct(row)),
+      next_cursor: nextCursor,
+      count: rows.length,
+    };
+  }
+
+  /** List a deal's deal-level discounts (v2 /deals/{id}/discounts). */
+  async listDealDiscounts(params: ListDealDiscountsParams): Promise<ListDealDiscountsResult> {
+    const { rows, nextCursor } = await this.fetchListPage(
+      `deals/${params.deal_id}/discounts`,
+      params.limit,
+      params.cursor,
+    );
+    return {
+      deal_id: params.deal_id,
+      discounts: rows.map((row) => this.toDealDiscount(row)),
+      next_cursor: nextCursor,
+      count: rows.length,
+    };
+  }
+
+  /**
+   * Fetch one native v2 cursor page for a list endpoint, returning the raw rows
+   * and the next_cursor from additional_data. Shared by the pipeline/stage/
+   * product/discount list ops for consistent cursor pagination.
+   */
+  private async fetchListPage(
+    endpoint: string,
+    limit: number | undefined,
+    cursor: string | undefined,
+    extra: Record<string, string | number> = {},
+  ): Promise<{ rows: Record<string, unknown>[]; nextCursor: string | null }> {
+    const query: Record<string, string | number> = {
+      limit: Math.min(limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
+      ...extra,
+    };
+    if (cursor !== undefined) query.cursor = cursor;
+
+    const data = await this.requestJson("GET", "v2", endpoint, query);
+    const rows = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+    const additional = data.additional_data as Record<string, unknown> | undefined;
+    return { rows, nextCursor: toStringOrNull(additional?.next_cursor) };
+  }
+
+  private toPipeline(raw: Record<string, unknown>): Pipeline {
+    return {
+      id: Number(raw.id),
+      name: toStringOrNull(raw.name),
+      order_nr: toNumberOrNull(raw.order_nr),
+      is_selected: toBooleanOrNull(raw.is_selected),
+      is_deal_probability_enabled: toBooleanOrNull(raw.is_deal_probability_enabled),
+      active: toBooleanOrNull(raw.is_deleted === undefined ? undefined : !raw.is_deleted),
+    };
+  }
+
+  private toStage(raw: Record<string, unknown>): Stage {
+    return {
+      id: Number(raw.id),
+      name: toStringOrNull(raw.name),
+      pipeline_id: toNumberOrNull(raw.pipeline_id),
+      order_nr: toNumberOrNull(raw.order_nr),
+      deal_probability: toNumberOrNull(raw.deal_probability),
+      is_deal_rot_enabled: toBooleanOrNull(raw.is_deal_rot_enabled),
+    };
+  }
+
+  private toDealProduct(raw: Record<string, unknown>): DealProduct {
+    return {
+      id: Number(raw.id),
+      product_id: toNumberOrNull(raw.product_id),
+      name: toStringOrNull(raw.name),
+      quantity: toNumberOrNull(raw.quantity),
+      item_price: toNumberOrNull(raw.item_price),
+      sum: toNumberOrNull(raw.sum),
+      currency: toStringOrNull(raw.currency),
+      billing_frequency: toStringOrNull(raw.billing_frequency),
+      billing_frequency_cycles: toNumberOrNull(raw.billing_frequency_cycles),
+      tax: toNumberOrNull(raw.tax),
+      tax_method: toStringOrNull(raw.tax_method),
+      discount: toNumberOrNull(raw.discount),
+      discount_type: toStringOrNull(raw.discount_type),
+      product_variation_id: toNumberOrNull(raw.product_variation_id),
+      comments: toStringOrNull(raw.comments),
+    };
+  }
+
+  private toDealDiscount(raw: Record<string, unknown>): DealDiscount {
+    return {
+      id: String(raw.id),
+      description: toStringOrNull(raw.description),
+      amount: toNumberOrNull(raw.amount),
+      type: toStringOrNull(raw.type),
+    };
   }
 
   private async readErrorMessage(response: Response): Promise<string> {
