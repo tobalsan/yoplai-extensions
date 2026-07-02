@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PennylaneClient } from "../client.js";
 import {
   PennylaneAuthError,
+  PennylaneGuardRefusedError,
   PennylaneNotFoundError,
   PennylaneRateLimitError,
 } from "../errors.js";
@@ -503,5 +504,81 @@ describe("PennylaneClient", () => {
     expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
       "https://app.pennylane.com/api/external/v2/me",
     );
+  });
+
+  describe("create_invoice_draft", () => {
+    it("POSTs with draft: true and passes external_reference through (snake-cased)", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 77, draft: true, status: "draft" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      const result = await client.createInvoiceDraft({
+        customerId: 123,
+        date: "2026-06-15",
+        deadline: "2026-07-15",
+        externalReference: "pipedrive-deal-4567",
+        invoiceLines: [
+          { label: "Consulting", quantity: 2, unit: "hour", rawCurrencyUnitPrice: "100.00", vatRate: "FR_200" },
+        ],
+      });
+
+      expect(result.invoice.id).toBe("77");
+      expect(result.invoice.draft).toBe(true);
+
+      const call = fetchSpy.mock.calls[0];
+      expect(call?.[1]?.method).toBe("POST");
+      expect(String(call?.[0])).toBe(
+        "https://app.pennylane.com/api/external/v2/customer_invoices",
+      );
+      const body = JSON.parse(String(call?.[1]?.body));
+      expect(body.draft).toBe(true);
+      expect(body.customer_id).toBe(123);
+      expect(body.external_reference).toBe("pipedrive-deal-4567");
+      expect(body.invoice_lines[0]).toMatchObject({
+        label: "Consulting",
+        raw_currency_unit_price: "100.00",
+        vat_rate: "FR_200",
+      });
+    });
+  });
+
+  describe("update_invoice_draft", () => {
+    it("re-reads the target, confirms it is a draft, then PUTs the update", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse({ id: 5, draft: true, status: "draft" }))
+        .mockResolvedValueOnce(jsonResponse({ id: 5, draft: true, label: "Updated" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      const result = await client.updateInvoiceDraft({ id: 5, label: "Updated" });
+
+      expect(result.invoice.label).toBe("Updated");
+      // First call reads the target, second call writes.
+      expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+        "https://app.pennylane.com/api/external/v2/customer_invoices/5",
+      );
+      const putCall = fetchSpy.mock.calls[1];
+      expect(putCall?.[1]?.method).toBe("PUT");
+      const body = JSON.parse(String(putCall?.[1]?.body));
+      expect(body.draft).toBe(true);
+      expect(body.label).toBe("Updated");
+    });
+
+    it("refuses to touch a finalized invoice and never issues the PUT", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 9, draft: false, status: "upcoming" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.updateInvoiceDraft({ id: 9, label: "nope" })).rejects.toBeInstanceOf(
+        PennylaneGuardRefusedError,
+      );
+
+      // Only the read happened; no PUT was issued.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    });
   });
 });

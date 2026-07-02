@@ -349,3 +349,79 @@ export type GetProductParams = z.infer<typeof GetProductParamsSchema>;
 /** Params for `list_vat_rates`: no inputs — returns the static VAT enum reference. */
 export const ListVatRatesParamsSchema = z.object({}).strict();
 export type ListVatRatesParams = z.infer<typeof ListVatRatesParamsSchema>;
+
+/** An int64 id accepted as string or number for write payloads. */
+const IdInput = z.union([z.string(), z.number()]);
+
+/**
+ * A single invoice line on a draft write (§2.3). Two shapes (`oneOf`):
+ * product-based (`productId` + `quantity`, auto-filling label/price/vat) or
+ * free-form (`label` + `quantity` + `rawCurrencyUnitPrice` + `unit` + `vatRate`).
+ * We validate the union loosely and let Pennylane enforce the exact `oneOf` — a
+ * `422` surfaces mismatches. Money is a decimal string; `quantity` may be a
+ * number or decimal string.
+ */
+export const InvoiceLineInputSchema = z
+  .object({
+    productId: IdInput.optional(),
+    label: z.string().optional(),
+    description: z.string().optional(),
+    quantity: z.union([z.string(), z.number()]),
+    rawCurrencyUnitPrice: z.union([z.string(), z.number()]).optional(),
+    unit: z.string().optional(),
+    vatRate: z.string().optional(),
+    ledgerAccountId: IdInput.optional(),
+    sectionRank: z.number().optional(),
+  })
+  .strict();
+export type InvoiceLineInput = z.infer<typeof InvoiceLineInputSchema>;
+
+/**
+ * Params for `create_invoice_draft` (§2.3). Always creates with `draft: true`
+ * (never exposed to the caller — this tool cannot finalize). `externalReference`
+ * is the Pipedrive deal-id hook used for client-side dedup/correlation.
+ */
+export const CreateInvoiceDraftParamsSchema = z
+  .object({
+    customerId: IdInput,
+    date: IsoDate,
+    deadline: IsoDate,
+    invoiceLines: z.array(InvoiceLineInputSchema).min(1),
+    label: z.string().max(2000).optional(),
+    externalReference: z.string().optional(),
+    currency: z.string().optional(),
+    language: z.string().optional(),
+    customerInvoiceTemplateId: IdInput.optional(),
+    pdfInvoiceSubject: z.string().optional(),
+    pdfInvoiceFreeText: z.string().optional(),
+    pdfDescription: z.string().optional(),
+    specialMention: z.string().max(20000).optional(),
+  })
+  .strict();
+export type CreateInvoiceDraftParams = z.infer<typeof CreateInvoiceDraftParamsSchema>;
+
+/**
+ * Params for `update_invoice_draft` (§2.4). `id` selects the target, which the
+ * client re-reads and routes through `DraftGuard` before any write — a finalized
+ * invoice is refused. `PUT` is a full replace, so all editable fields are
+ * accepted; `draft` stays `true` (this tool cannot finalize).
+ */
+export const UpdateInvoiceDraftParamsSchema = z
+  .object({
+    id: IdInput,
+    customerId: IdInput.optional(),
+    date: IsoDate.optional(),
+    deadline: IsoDate.optional(),
+    invoiceLines: z.array(InvoiceLineInputSchema).min(1).optional(),
+    label: z.string().max(2000).optional(),
+    externalReference: z.string().optional(),
+    currency: z.string().optional(),
+    language: z.string().optional(),
+    customerInvoiceTemplateId: IdInput.optional(),
+    pdfInvoiceSubject: z.string().optional(),
+    pdfInvoiceFreeText: z.string().optional(),
+    pdfDescription: z.string().optional(),
+    specialMention: z.string().max(20000).optional(),
+  })
+  .strict();
+export type UpdateInvoiceDraftParams = z.infer<typeof UpdateInvoiceDraftParamsSchema>;

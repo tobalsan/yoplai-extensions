@@ -52,3 +52,15 @@ export class PennylaneConnectionError extends PennylaneError {
     this.name = "PennylaneConnectionError";
   }
 }
+
+/**
+ * Raised when DraftGuard refuses a mutation because the target is not editable
+ * (a finalized invoice, or a non-`pending` quote). Signals a safe refusal — the
+ * write never reached Pennylane.
+ */
+export class PennylaneGuardRefusedError extends PennylaneError {
+  constructor(message: string, options: PennylaneErrorOptions = {}) {
+    super(message, options);
+    this.name = "PennylaneGuardRefusedError";
+  }
+}

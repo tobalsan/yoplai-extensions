@@ -1,4 +1,5 @@
 import {
+  CreateInvoiceDraftParamsSchema,
   CustomerInvoiceSchema,
   CustomerSchema,
   GetCustomerParamsSchema,
@@ -14,6 +15,7 @@ import {
   SearchInvoicesParamsSchema,
   SearchProductsParamsSchema,
   SearchQuotesParamsSchema,
+  UpdateInvoiceDraftParamsSchema,
   VAT_RATES,
   VatRateReferenceSchema,
   type Customer,
@@ -24,10 +26,12 @@ import {
 } from "./models.js";
 import type { ZodType, output } from "zod";
 import { FilterBuilder, type FilterClause } from "./filter-builder.js";
+import { DraftGuard } from "./draft-guard.js";
 import {
   PennylaneAuthError,
   PennylaneConnectionError,
   PennylaneError,
+  PennylaneGuardRefusedError,
   PennylaneNotFoundError,
   PennylaneRateLimitError,
   PennylaneValidationError,
@@ -96,6 +100,9 @@ export class PennylaneClient {
   readonly apiToken: string;
   readonly timeoutMs: number;
   readonly baseUrl: string;
+
+  /** Pure gate: only `draft: true` invoices / `pending` quotes may be mutated. */
+  private readonly draftGuard = new DraftGuard();
 
   /** Timestamps (ms) of recent requests, used for the sliding-window throttle. */
   private requestTimes: number[] = [];
@@ -351,6 +358,45 @@ export class PennylaneClient {
   async getInvoice(input: unknown): Promise<{ invoice: CustomerInvoice }> {
     const params = GetInvoiceParamsSchema.parse(input);
     const raw = await this.request("GET", `customer_invoices/${params.id}`);
+    return { invoice: CustomerInvoiceSchema.parse(raw) };
+  }
+
+  /**
+   * Create a customer invoice as an editable **draft** (§2.3). Always sends
+   * `draft: true` — this tool cannot finalize. `externalReference` (the
+   * Pipedrive deal id) is passed through for correlation/dedup; since Pennylane
+   * has no idempotency keys, callers dedupe by looking it up first (§4.5).
+   */
+  async createInvoiceDraft(input: unknown): Promise<{ invoice: CustomerInvoice }> {
+    const params = CreateInvoiceDraftParamsSchema.parse(input);
+    const body = { ...compact(params), draft: true };
+    const raw = await this.request("POST", "customer_invoices", undefined, body);
+    return { invoice: CustomerInvoiceSchema.parse(raw) };
+  }
+
+  /**
+   * Update an existing invoice **draft** (§2.4, `PUT` full-replace). Before any
+   * write, the target is re-read and routed through `DraftGuard`: a finalized
+   * invoice is refused with `PennylaneGuardRefusedError` and the write never
+   * reaches Pennylane. `draft` stays `true` — this tool cannot finalize.
+   */
+  async updateInvoiceDraft(input: unknown): Promise<{ invoice: CustomerInvoice }> {
+    const params = UpdateInvoiceDraftParamsSchema.parse(input);
+    const { id, ...updates } = params;
+
+    const current = await this.request("GET", `customer_invoices/${id}`);
+    const target = CustomerInvoiceSchema.parse(current);
+
+    const decision = this.draftGuard.evaluate({ draft: target.draft });
+    if (!decision.allowed) {
+      throw new PennylaneGuardRefusedError(
+        `Refusing to update customer invoice ${id}: ${decision.reason}`,
+        { endpoint: `customer_invoices/${id}` },
+      );
+    }
+
+    const body = { ...compact(updates), draft: true };
+    const raw = await this.request("PUT", `customer_invoices/${id}`, undefined, body);
     return { invoice: CustomerInvoiceSchema.parse(raw) };
   }
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { PennylaneClient } from "./client.js";
 import {
+  CreateInvoiceDraftParamsSchema,
   GetCustomerParamsSchema,
   GetInvoiceParamsSchema,
   GetProductParamsSchema,
@@ -12,6 +13,7 @@ import {
   SearchInvoicesParamsSchema,
   SearchProductsParamsSchema,
   SearchQuotesParamsSchema,
+  UpdateInvoiceDraftParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
@@ -23,7 +25,7 @@ export const PennylaneConfigSchema = z.object({
 export default defineToolExtension({
   id: "pennylane",
   displayName: "Pennylane",
-  description: "Read and search Pennylane customer invoices, quotes, customers, and products (draft-safe).",
+  description: "Read, search, and draft-write Pennylane customer invoices, plus read quotes, customers, and products (draft-safe: never finalizes or sends).",
   systemPrompt: `Use this extension for Pennylane (Company API v2) accounting operations.
 
 Available tools:
@@ -34,6 +36,8 @@ Available tools:
 - pennylane_list_customers / pennylane_search_customers / pennylane_get_customer: read customers
 - pennylane_list_products / pennylane_search_products / pennylane_get_product: read products
 - pennylane_list_vat_rates: discover valid vat_rate codes (e.g. FR_200 = 20%)
+- pennylane_create_invoice_draft: create a customer invoice as an editable DRAFT (draft: true); pass external_reference (Pipedrive deal id) for dedup
+- pennylane_update_invoice_draft: edit an existing invoice draft; refuses if the target is already finalized (DraftGuard)
 
 Key concepts:
 - money values are decimal strings (e.g. "230.32"), never floats or cents
@@ -41,6 +45,8 @@ Key concepts:
 - cursor pagination is walked transparently: omit "cursor" to get everything, or pass a "cursor" to fetch a single page
 - prefer search_invoices when you know the customer, external_reference (Pipedrive deal id), status, or date range; filters are AND-combined server-side
 - external_reference is the Pipedrive deal/org id hook (invoices support only eq on it)
+- writes are draft-only and safety-gated: create_invoice_draft always sets draft: true, and update_invoice_draft routes the target through DraftGuard, refusing to touch a finalized invoice. There is deliberately NO finalize or send tool
+- Pennylane has no idempotency keys: before creating, look up by external_reference (search_invoices) to avoid duplicate drafts
 - quotes are NOT server-side filterable on external_reference: search_quotes filters by customer_id (and status) server-side, then matches external_reference client-side
 - customers can be fetched by internal id OR external_reference via get_customer
 - vat_rate is a fixed enum (no list endpoint); use list_vat_rates to discover valid codes like FR_200 (20%), FR_100 (10%), FR_55 (5.5%), exempt (0%)
@@ -135,6 +141,20 @@ Key concepts:
           "List the discoverable Pennylane vat_rate codes (e.g. FR_200 = 20%). Static reference; no network call.",
         parameters: ListVatRatesParamsSchema,
         execute: (params) => client.listVatRates(params),
+      },
+      {
+        name: "create_invoice_draft",
+        description:
+          "Create a customer invoice as an editable DRAFT (always draft: true — never finalizes). Accepts external_reference (Pipedrive deal id) for correlation/dedup. Requires customer_id, date, deadline, and at least one invoice line.",
+        parameters: CreateInvoiceDraftParamsSchema,
+        execute: (params) => client.createInvoiceDraft(params),
+      },
+      {
+        name: "update_invoice_draft",
+        description:
+          "Edit an existing invoice draft (full replace, stays draft: true). Routes the target through DraftGuard first and refuses to touch a finalized invoice. Cannot finalize or send.",
+        parameters: UpdateInvoiceDraftParamsSchema,
+        execute: (params) => client.updateInvoiceDraft(params),
       },
     ];
   },
