@@ -15,6 +15,11 @@ import {
   OrganizationSchema,
   PersonSchema,
   PipedriveConfigSchema,
+  ActivitySchema,
+  ListDealActivitiesParamsSchema,
+  ListDealNotesParamsSchema,
+  NoteSchema,
+  SearchDealsParamsSchema,
 } from "../models.js";
 
 describe("PipedriveConfigSchema", () => {
@@ -199,5 +204,84 @@ describe("PersonSchema", () => {
       person_url: "https://acme.pipedrive.com/person/1609",
     });
     expect(parsed.primary_email).toBe("k@x.com");
+  });
+});
+
+describe("SearchDealsParamsSchema", () => {
+  it("accepts a term with optional filters and coerces ids", () => {
+    const parsed = SearchDealsParamsSchema.parse({
+      term: "try & buy",
+      status: "open",
+      org_id: "8949",
+    });
+    expect(parsed.term).toBe("try & buy");
+    expect(parsed.org_id).toBe(8949);
+  });
+
+  it("rejects a term shorter than 2 characters", () => {
+    expect(SearchDealsParamsSchema.safeParse({ term: "t" }).success).toBe(false);
+  });
+
+  it("requires a term", () => {
+    expect(SearchDealsParamsSchema.safeParse({ status: "open" }).success).toBe(false);
+  });
+
+  it("rejects unknown keys (strict)", () => {
+    expect(SearchDealsParamsSchema.safeParse({ term: "try", nope: 1 }).success).toBe(false);
+  });
+});
+
+describe("ListDealNotesParamsSchema", () => {
+  it("requires a deal_id and coerces it", () => {
+    expect(ListDealNotesParamsSchema.parse({ deal_id: "3776" }).deal_id).toBe(3776);
+    expect(ListDealNotesParamsSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("ListDealActivitiesParamsSchema", () => {
+  it("accepts a deal_id and optional done flag", () => {
+    const parsed = ListDealActivitiesParamsSchema.parse({ deal_id: 3776, done: true });
+    expect(parsed.done).toBe(true);
+  });
+
+  it("rejects a non-boolean done", () => {
+    expect(ListDealActivitiesParamsSchema.safeParse({ deal_id: 3776, done: "yes" }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("NoteSchema / ActivitySchema", () => {
+  it("parse projected entity shapes", () => {
+    expect(
+      NoteSchema.parse({
+        id: 1,
+        deal_id: 3776,
+        content: "PO ok",
+        user_id: 15,
+        user_name: "Eric",
+        person_id: null,
+        org_id: null,
+        add_time: "2026-01-26 13:42:18",
+        update_time: "2026-01-26 13:42:18",
+      }).user_name,
+    ).toBe("Eric");
+
+    expect(
+      ActivitySchema.parse({
+        id: 2,
+        deal_id: 3776,
+        type: "task",
+        subject: "Follow up",
+        note: null,
+        done: false,
+        due_date: "2021-12-09",
+        due_time: null,
+        marked_as_done_time: null,
+        user_id: 12,
+        add_time: null,
+        update_time: null,
+      }).type,
+    ).toBe("task");
   });
 });

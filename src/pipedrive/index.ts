@@ -8,14 +8,17 @@ import {
   GetDealParamsSchema,
   GetPipelineParamsSchema,
   GetStageParamsSchema,
+  ListDealActivitiesParamsSchema,
   ListDealDiscountsParamsSchema,
   ListDealFieldsParamsSchema,
   ListDealFilesParamsSchema,
+  ListDealNotesParamsSchema,
   ListDealProductsParamsSchema,
   ListDealsParamsSchema,
   ListPipelinesParamsSchema,
   ListStagesParamsSchema,
   PipedriveConfigSchema,
+  SearchDealsParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
@@ -27,6 +30,8 @@ export default defineToolExtension({
   description:
     "Read-only Pipedrive data access for the sales pipeline: token-bounded deal retrieval with server-side filters and an expected-close-date range narrowing.",
   systemPrompt: `Use this extension to read the Pipedrive sales pipeline (read-only). pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
+
+pipedrive_search_deals does free-text title search (e.g. term "try & buy" to flag Try-and-Buy deals for invoicing exclusion) with optional status/person_id/org_id filters. pipedrive_list_deal_notes and pipedrive_list_deal_activities read a single deal's notes (with author/timestamp) and activity history. These use the same next_cursor pagination — page until next_cursor is null.
 
 To resolve a deal's linked entities for an invoice customer: pass the deal's org_id to pipedrive_get_organization (name, address, VAT/SIREN when stored) and its person_id to pipedrive_get_person (contact name + emails/phones). Guard against a deal with no linked org/person: when org_id or person_id is null, do not call these ops — there is nothing to resolve. A missing entity id surfaces as a typed not-found error.
 
@@ -187,6 +192,36 @@ pipedrive_get_deal reads one deal in full detail: all standard fields plus custo
         execute: async (params) => {
           const parsed = EntityByIdParamsSchema.parse(params);
           return await client.getPerson(parsed.id);
+        },
+      },
+      {
+        name: "search_deals",
+        description:
+          'Free-text search on deal titles. Pass a term (e.g. "try & buy" to flag Try-and-Buy deals for invoicing exclusion) plus optional server-side filters (status, person_id, org_id, exact_match). Returns { deals, next_cursor, count } with a lean per-match projection; pass next_cursor back as cursor to page the full match set so no matching deal is missed.',
+        parameters: SearchDealsParamsSchema,
+        execute: async (params) => {
+          const parsed = SearchDealsParamsSchema.parse(params);
+          return await client.searchDeals(parsed);
+        },
+      },
+      {
+        name: "list_deal_notes",
+        description:
+          "Read a deal's notes (content, author, add/update timestamps) for a given deal_id — e.g. to confirm a PO exists. Returns { notes, next_cursor, count }; pass next_cursor back as cursor to page through all notes.",
+        parameters: ListDealNotesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListDealNotesParamsSchema.parse(params);
+          return await client.listDealNotes(parsed);
+        },
+      },
+      {
+        name: "list_deal_activities",
+        description:
+          "Read a deal's activity history (type, subject, done, due/completion timestamps, owner) for a given deal_id — e.g. to understand why a deal stalled. Optional done filter. Returns { activities, next_cursor, count }; pass next_cursor back as cursor to page through the full history.",
+        parameters: ListDealActivitiesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListDealActivitiesParamsSchema.parse(params);
+          return await client.listDealActivities(parsed);
         },
       },
     ];

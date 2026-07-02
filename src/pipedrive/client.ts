@@ -46,6 +46,15 @@ import {
   type PipedriveConfig,
   type RefreshFieldRegistryResult,
   type Stage,
+  type Activity,
+  type DealSearchMatch,
+  type ListDealActivitiesParams,
+  type ListDealActivitiesResult,
+  type ListDealNotesParams,
+  type ListDealNotesResult,
+  type Note,
+  type SearchDealsParams,
+  type SearchDealsResult,
 } from "./models.js";
 import { normalizeCustomFields } from "./normalizer.js";
 
@@ -154,6 +163,36 @@ interface RawContactDetail {
 /** Substring patterns (lowercased field name) that identify a VAT or SIREN custom field. */
 const VAT_NAME_PATTERNS = ["vat", "tva"];
 const SIREN_NAME_PATTERNS = ["siren", "siret"];
+
+interface RawNote {
+  id: number;
+  deal_id?: unknown;
+  content?: unknown;
+  user_id?: unknown;
+  person_id?: unknown;
+  org_id?: unknown;
+  add_time?: unknown;
+  update_time?: unknown;
+  user?: { name?: unknown } | null;
+  [key: string]: unknown;
+}
+
+interface RawActivity {
+  id: number;
+  deal_id?: unknown;
+  type?: unknown;
+  subject?: unknown;
+  note?: unknown;
+  done?: unknown;
+  due_date?: unknown;
+  due_time?: unknown;
+  marked_as_done_time?: unknown;
+  user_id?: unknown;
+  add_time?: unknown;
+  update_time?: unknown;
+  [key: string]: unknown;
+}
+
 
 export class PipedriveClient {
   readonly apiToken: string;
@@ -889,6 +928,103 @@ export class PipedriveClient {
       return fallback;
     }
   }
+  /**
+   * Free-text search over deal titles via the v2 /deals/search endpoint, with
+   * optional server-side status/person/org filters. Unlike the legacy port
+   * (single page, limit <= 500, no cursor), cursor pagination is wired here:
+   * next_cursor resumes from the last item, so the caller pages the full match
+   * set with no single-page cap and reliably surfaces every matching deal —
+   * e.g. all "Try and Buy" titled deals so none is missed for invoicing.
+   */
+  async searchDeals(params: SearchDealsParams): Promise<SearchDealsResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+
+    const query: Record<string, string | number> = {
+      term: params.term,
+      fields: "title",
+      limit,
+    };
+    if (params.exact_match) query.exact_match = "true";
+    if (params.status !== undefined) query.status = params.status;
+    if (params.person_id !== undefined) query.person_id = params.person_id;
+    if (params.org_id !== undefined) query.organization_id = params.org_id;
+    if (params.cursor !== undefined) query.cursor = params.cursor;
+
+    const data = await this.requestJson("GET", "v2", "deals/search", query);
+    const container = (data.data ?? {}) as Record<string, unknown>;
+    const items = Array.isArray(container.items) ? (container.items as Record<string, unknown>[]) : [];
+    const additional = data.additional_data as Record<string, unknown> | undefined;
+
+    const deals = items.map((entry) => this.toSearchMatch(entry));
+    return {
+      deals,
+      next_cursor: toStringOrNull(additional?.next_cursor),
+      count: deals.length,
+    };
+  }
+
+  /** Read a deal's notes (author + timestamps) via the v1 /notes endpoint. */
+  async listDealNotes(params: ListDealNotesParams): Promise<ListDealNotesResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      deal_id: params.deal_id,
+      limit,
+      start: decodeStartCursor(params.cursor),
+      sort: "add_time DESC",
+    };
+
+    const data = await this.requestJson("GET", "v1", "notes", query);
+    const rows = Array.isArray(data.data) ? (data.data as RawNote[]) : [];
+    const notes = rows.map((raw) => toNote(raw));
+    return {
+      notes,
+      next_cursor: nextStartCursor(data.additional_data),
+      count: notes.length,
+    };
+  }
+
+  /** Read a deal's activity history via the v1 /activities endpoint. */
+  async listDealActivities(params: ListDealActivitiesParams): Promise<ListDealActivitiesResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      deal_id: params.deal_id,
+      limit,
+      start: decodeStartCursor(params.cursor),
+    };
+    if (params.done !== undefined) query.done = params.done ? 1 : 0;
+
+    const data = await this.requestJson("GET", "v1", "activities", query);
+    const rows = Array.isArray(data.data) ? (data.data as RawActivity[]) : [];
+    const activities = rows.map((raw) => toActivity(raw));
+    return {
+      activities,
+      next_cursor: nextStartCursor(data.additional_data),
+      count: activities.length,
+    };
+  }
+
+  private toSearchMatch(entry: Record<string, unknown>): DealSearchMatch {
+    const item = (entry.item ?? entry) as Record<string, unknown>;
+    const stage = item.stage as Record<string, unknown> | undefined;
+    const pipeline = item.pipeline as Record<string, unknown> | undefined;
+    const person = item.person as Record<string, unknown> | undefined;
+    const org = item.organization as Record<string, unknown> | undefined;
+    const id = toNumberOrNull(item.id) ?? 0;
+    return {
+      id,
+      title: typeof item.title === "string" ? item.title : "",
+      status: toStringOrNull(item.status),
+      value: toNumberOrNull(item.value),
+      currency: toStringOrNull(item.currency),
+      stage_id: toNumberOrNull(stage?.id),
+      pipeline_id: toNumberOrNull(pipeline?.id),
+      person_id: toNumberOrNull(person?.id),
+      org_id: toNumberOrNull(org?.id),
+      result_score: toNumberOrNull(entry.result_score),
+      deal_url: `https://${this.domain}.pipedrive.com/deal/${id}`,
+    };
+  }
+
 }
 
 /** Deal-standard keys that are never treated as custom fields. */
@@ -993,4 +1129,54 @@ export function primaryValue(details: ContactDetail[]): string | null {
   if (details.length === 0) return null;
   const primary = details.find((detail) => detail.primary);
   return (primary ?? details[0]).value;
+}
+
+function toNote(raw: RawNote): Note {
+  return {
+    id: raw.id,
+    deal_id: toNumberOrNull(raw.deal_id),
+    content: toStringOrNull(raw.content),
+    user_id: toNumberOrNull(raw.user_id),
+    user_name: toStringOrNull(raw.user?.name),
+    person_id: toNumberOrNull(raw.person_id),
+    org_id: toNumberOrNull(raw.org_id),
+    add_time: toStringOrNull(raw.add_time),
+    update_time: toStringOrNull(raw.update_time),
+  };
+}
+
+function toActivity(raw: RawActivity): Activity {
+  return {
+    id: raw.id,
+    deal_id: toNumberOrNull(raw.deal_id),
+    type: toStringOrNull(raw.type),
+    subject: toStringOrNull(raw.subject),
+    note: toStringOrNull(raw.note),
+    done: toBooleanOrNull(raw.done),
+    due_date: toStringOrNull(raw.due_date),
+    due_time: toStringOrNull(raw.due_time),
+    marked_as_done_time: toStringOrNull(raw.marked_as_done_time),
+    user_id: toNumberOrNull(raw.user_id),
+    add_time: toStringOrNull(raw.add_time),
+    update_time: toStringOrNull(raw.update_time),
+  };
+}
+
+/**
+ * The v1 /notes and /activities endpoints paginate with a numeric `start`
+ * offset rather than an opaque cursor. We expose the same opaque-cursor
+ * interface as the other tools by encoding `start` as the cursor string.
+ */
+function decodeStartCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  const parsed = Number(cursor);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function nextStartCursor(additionalData: unknown): string | null {
+  const additional = additionalData as Record<string, unknown> | undefined;
+  const pagination = additional?.pagination as Record<string, unknown> | undefined;
+  if (pagination?.more_items_in_collection !== true) return null;
+  const nextStart = toNumberOrNull(pagination.next_start);
+  return nextStart === null ? null : String(nextStart);
 }

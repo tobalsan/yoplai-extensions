@@ -531,3 +531,218 @@ describe("inCloseDateRange", () => {
     expect(inCloseDateRange("2025-08-01", "2025-07-01", "2025-07-31")).toBe(false);
   });
 });
+
+function searchItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    result_score: 0.9,
+    item: {
+      id: 3776,
+      type: "deal",
+      title: "Tunnel - nemolink - try & buy",
+      value: 8448.19,
+      currency: "EUR",
+      status: "won",
+      stage: { id: 4, name: "Final negotiation" },
+      pipeline: { id: 1 },
+      person: { id: 33864, name: "Scott Maybury" },
+      organization: { id: 8949, name: "NemoLink" },
+      ...overrides,
+    },
+  };
+}
+
+describe("PipedriveClient.searchDeals", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("targets v2 /deals/search with the term, title field, and auth param", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: { items: [] }, additional_data: { next_cursor: null } }));
+
+    await createClient().searchDeals({ term: "try & buy" });
+
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v2/deals/search");
+    expect(u.searchParams.get("term")).toBe("try & buy");
+    expect(u.searchParams.get("fields")).toBe("title");
+    expect(u.searchParams.get("api_token")).toBe("secret-token");
+  });
+
+  it("passes server-side status/person/org/exact_match filters and maps org_id to organization_id", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: { items: [] }, additional_data: {} }));
+
+    await createClient().searchDeals({
+      term: "try",
+      status: "open",
+      person_id: 33864,
+      org_id: 8949,
+      exact_match: true,
+    });
+
+    const q = url(spy).searchParams;
+    expect(q.get("status")).toBe("open");
+    expect(q.get("person_id")).toBe("33864");
+    expect(q.get("organization_id")).toBe("8949");
+    expect(q.has("org_id")).toBe(false);
+    expect(q.get("exact_match")).toBe("true");
+  });
+
+  it("returns a lean projection with a constructed deal_url and passes cursor through", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: { items: [searchItem()] },
+        additional_data: { next_cursor: "eyJzdGFydCI6NX0" },
+      }),
+    );
+
+    const result = await createClient().searchDeals({ term: "try & buy", cursor: "cur-0" });
+
+    expect(url(spy).searchParams.get("cursor")).toBe("cur-0");
+    expect(result.count).toBe(1);
+    expect(result.next_cursor).toBe("eyJzdGFydCI6NX0");
+    expect(result.deals[0]).toEqual({
+      id: 3776,
+      title: "Tunnel - nemolink - try & buy",
+      status: "won",
+      value: 8448.19,
+      currency: "EUR",
+      stage_id: 4,
+      pipeline_id: 1,
+      person_id: 33864,
+      org_id: 8949,
+      result_score: 0.9,
+      deal_url: "https://acme.pipedrive.com/deal/3776",
+    });
+    expect(Object.keys(result.deals[0])).toHaveLength(11);
+  });
+});
+
+describe("PipedriveClient.listDealNotes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("targets v1 /notes for the deal and flattens author + timestamps", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            id: 22585,
+            deal_id: 3776,
+            content: "PO to validate by Floriane",
+            user_id: 15057258,
+            person_id: 33864,
+            org_id: null,
+            add_time: "2026-01-26 13:42:18",
+            update_time: "2026-01-26 13:42:18",
+            user: { name: "Eric" },
+          },
+        ],
+        additional_data: { pagination: { more_items_in_collection: false } },
+      }),
+    );
+
+    const result = await createClient().listDealNotes({ deal_id: 3776 });
+
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v1/notes");
+    expect(u.searchParams.get("deal_id")).toBe("3776");
+    expect(result.count).toBe(1);
+    expect(result.next_cursor).toBeNull();
+    expect(result.notes[0]).toEqual({
+      id: 22585,
+      deal_id: 3776,
+      content: "PO to validate by Floriane",
+      user_id: 15057258,
+      user_name: "Eric",
+      person_id: 33864,
+      org_id: null,
+      add_time: "2026-01-26 13:42:18",
+      update_time: "2026-01-26 13:42:18",
+    });
+  });
+
+  it("translates v1 start-based pagination into an opaque cursor round-trip", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          data: [{ id: 1, user: { name: "Eric" } }],
+          additional_data: {
+            pagination: { more_items_in_collection: true, next_start: 2 },
+          },
+        }),
+      ),
+    );
+
+    const first = await createClient().listDealNotes({ deal_id: 3776, limit: 1 });
+    expect(first.next_cursor).toBe("2");
+
+    await createClient().listDealNotes({ deal_id: 3776, cursor: first.next_cursor!, limit: 1 });
+    expect(url(spy, 1).searchParams.get("start")).toBe("2");
+  });
+});
+
+describe("PipedriveClient.listDealActivities", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("targets v1 /activities and projects the activity fields", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            id: 10834,
+            deal_id: 3776,
+            type: "task",
+            subject: "Suivre envoi de la datasheet",
+            note: null,
+            done: false,
+            due_date: "2021-12-09",
+            due_time: "",
+            marked_as_done_time: "",
+            user_id: 12884450,
+            add_time: "2021-12-02 21:48:45",
+            update_time: "2021-12-06 09:46:09",
+          },
+        ],
+        additional_data: { pagination: { more_items_in_collection: false } },
+      }),
+    );
+
+    const result = await createClient().listDealActivities({ deal_id: 3776 });
+
+    expect(url(spy).pathname).toBe("/api/v1/activities");
+    expect(result.count).toBe(1);
+    expect(result.activities[0]).toEqual({
+      id: 10834,
+      deal_id: 3776,
+      type: "task",
+      subject: "Suivre envoi de la datasheet",
+      note: null,
+      done: false,
+      due_date: "2021-12-09",
+      due_time: null,
+      marked_as_done_time: null,
+      user_id: 12884450,
+      add_time: "2021-12-02 21:48:45",
+      update_time: "2021-12-06 09:46:09",
+    });
+  });
+
+  it("maps the done filter to the v1 0/1 query param", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(jsonResponse({ data: [], additional_data: {} })));
+
+    await createClient().listDealActivities({ deal_id: 3776, done: true });
+    expect(url(spy).searchParams.get("done")).toBe("1");
+
+    await createClient().listDealActivities({ deal_id: 3776, done: false });
+    expect(url(spy, 1).searchParams.get("done")).toBe("0");
+  });
+});

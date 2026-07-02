@@ -84,6 +84,119 @@ export const ListDealsResultSchema = z.object({
 });
 export type ListDealsResult = z.infer<typeof ListDealsResultSchema>;
 
+/** A deal note with author and timestamps. */
+export const NoteSchema = z.object({
+  id: z.number(),
+  deal_id: z.number().nullable(),
+  content: z.string().nullable(),
+  user_id: z.number().nullable(),
+  user_name: z.string().nullable(),
+  person_id: z.number().nullable(),
+  org_id: z.number().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
+});
+export type Note = z.infer<typeof NoteSchema>;
+
+/** A deal activity (task/call/meeting/email/…) with scheduling and completion. */
+export const ActivitySchema = z.object({
+  id: z.number(),
+  deal_id: z.number().nullable(),
+  type: z.string().nullable(),
+  subject: z.string().nullable(),
+  note: z.string().nullable(),
+  done: z.boolean().nullable(),
+  due_date: z.string().nullable(),
+  due_time: z.string().nullable(),
+  marked_as_done_time: z.string().nullable(),
+  user_id: z.number().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
+});
+export type Activity = z.infer<typeof ActivitySchema>;
+
+const CursorPaginationParams = {
+  cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
+  limit: PositiveIntFromInput.optional().describe("Max items per page, 1-500 (default 100)."),
+};
+
+export const ListDealNotesParamsSchema = z
+  .object({
+    deal_id: PositiveIntFromInput.describe("ID of the deal whose notes to read."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type ListDealNotesParams = z.infer<typeof ListDealNotesParamsSchema>;
+
+export const ListDealNotesResultSchema = z.object({
+  notes: z.array(NoteSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListDealNotesResult = z.infer<typeof ListDealNotesResultSchema>;
+
+export const ListDealActivitiesParamsSchema = z
+  .object({
+    deal_id: PositiveIntFromInput.describe("ID of the deal whose activity history to read."),
+    done: z
+      .boolean()
+      .optional()
+      .describe("Filter by completion: true = done only, false = planned only (server-side)."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type ListDealActivitiesParams = z.infer<typeof ListDealActivitiesParamsSchema>;
+
+export const ListDealActivitiesResultSchema = z.object({
+  activities: z.array(ActivitySchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListDealActivitiesResult = z.infer<typeof ListDealActivitiesResultSchema>;
+
+export const SearchDealsParamsSchema = z
+  .object({
+    term: z
+      .string()
+      .min(2, "Search term must be at least 2 characters")
+      .describe("Free-text term matched against the deal title (min 2 chars)."),
+    status: DealStatusSchema.optional().describe("Filter matches by deal status (server-side)."),
+    person_id: PositiveIntFromInput.optional().describe("Filter by linked person ID (server-side)."),
+    org_id: PositiveIntFromInput.optional().describe(
+      "Filter by linked organization ID (server-side).",
+    ),
+    exact_match: z
+      .boolean()
+      .optional()
+      .describe("When true, only exact title matches are returned (server-side)."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type SearchDealsParams = z.infer<typeof SearchDealsParamsSchema>;
+
+/** Lean per-match projection returned by search_deals. */
+export const DealSearchMatchSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  status: z.string().nullable(),
+  value: z.number().nullable(),
+  currency: z.string().nullable(),
+  stage_id: z.number().nullable(),
+  pipeline_id: z.number().nullable(),
+  person_id: z.number().nullable(),
+  org_id: z.number().nullable(),
+  result_score: z.number().nullable(),
+  deal_url: z.string().nullable(),
+});
+export type DealSearchMatch = z.infer<typeof DealSearchMatchSchema>;
+
+export const SearchDealsResultSchema = z.object({
+  deals: z.array(DealSearchMatchSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type SearchDealsResult = z.infer<typeof SearchDealsResultSchema>;
+
 /**
  * A file/attachment linked to a deal. Lean projection over Pipedrive's file
  * record: enough metadata (name, type, size) for Sally to pick the right one,
