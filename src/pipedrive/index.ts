@@ -3,6 +3,7 @@ import { z } from "zod";
 import { PipedriveClient } from "./client.js";
 import {
   DownloadFileParamsSchema,
+  EntityByIdParamsSchema,
   GetDealFieldParamsSchema,
   GetDealParamsSchema,
   GetPipelineParamsSchema,
@@ -26,6 +27,8 @@ export default defineToolExtension({
   description:
     "Read-only Pipedrive data access for the sales pipeline: token-bounded deal retrieval with server-side filters and an expected-close-date range narrowing.",
   systemPrompt: `Use this extension to read the Pipedrive sales pipeline (read-only). pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
+
+To resolve a deal's linked entities for an invoice customer: pass the deal's org_id to pipedrive_get_organization (name, address, VAT/SIREN when stored) and its person_id to pipedrive_get_person (contact name + emails/phones). Guard against a deal with no linked org/person: when org_id or person_id is null, do not call these ops — there is nothing to resolve. A missing entity id surfaces as a typed not-found error.
 
 Pipeline & stage metadata: pipedrive_list_pipelines / pipedrive_get_pipeline and pipedrive_list_stages / pipedrive_get_stage (optional pipeline_id filter) resolve stage/pipeline names — use them to detect stages like "Final negotiation" / "Won". Deal line items: pipedrive_list_deal_products returns each product's quantity, unit price (item_price) and billing_frequency (the source for devis amounts and recurring MRR/ARR products). pipedrive_list_deal_discounts returns deal-level discounts. All list ops use the same cursor pagination — page with next_cursor until it is null.
 
@@ -164,6 +167,26 @@ pipedrive_get_deal reads one deal in full detail: all standard fields plus custo
         parameters: RefreshFieldRegistryParamsSchema,
         execute: async () => {
           return await client.refreshFieldRegistry();
+        },
+      },
+      {
+        name: "get_organization",
+        description:
+          "Resolve a deal's org_id to the organization entity for an invoice customer: { id, name, address, vat, siren, org_url }. address is structured (formatted_address + parts) or null; vat/siren are null unless stored on the org. Throws a typed not-found error when the organization does not exist.",
+        parameters: EntityByIdParamsSchema,
+        execute: async (params) => {
+          const parsed = EntityByIdParamsSchema.parse(params);
+          return await client.getOrganization(parsed.id);
+        },
+      },
+      {
+        name: "get_person",
+        description:
+          "Resolve a deal's person_id to the primary contact entity: { id, name, first_name, last_name, job_title, org_id, emails, phones, primary_email, primary_phone, person_url }. emails/phones are labelled with a primary flag. Throws a typed not-found error when the person does not exist.",
+        parameters: EntityByIdParamsSchema,
+        execute: async (params) => {
+          const parsed = EntityByIdParamsSchema.parse(params);
+          return await client.getPerson(parsed.id);
         },
       },
     ];

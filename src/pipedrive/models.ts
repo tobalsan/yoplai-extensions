@@ -413,3 +413,71 @@ export const RefreshFieldRegistryResultSchema = z.object({
   built_at: z.string().optional(),
 });
 export type RefreshFieldRegistryResult = z.infer<typeof RefreshFieldRegistryResultSchema>;
+
+/** Params for the single-entity resolution ops (get_organization / get_person). */
+export const EntityByIdParamsSchema = z
+  .object({
+    id: PositiveIntFromInput.describe(
+      "The entity ID to resolve (a deal's org_id for get_organization, or person_id for get_person).",
+    ),
+  })
+  .strict();
+export type EntityByIdParams = z.infer<typeof EntityByIdParamsSchema>;
+
+/**
+ * Structured postal address as Pipedrive v2 returns it on an organization.
+ * All parts are optional; formatted_address is the display-ready line.
+ */
+export const AddressSchema = z.object({
+  formatted_address: z.string().nullable(),
+  street_number: z.string().nullable(),
+  route: z.string().nullable(),
+  locality: z.string().nullable(),
+  sublocality: z.string().nullable(),
+  admin_area_level_1: z.string().nullable(),
+  admin_area_level_2: z.string().nullable(),
+  postal_code: z.string().nullable(),
+  country: z.string().nullable(),
+});
+export type Address = z.infer<typeof AddressSchema>;
+
+/**
+ * Organization entity projection for populating a Pennylane invoice customer:
+ * name, address, and VAT/SIREN when they are stored on the org.
+ */
+export const OrganizationSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  address: AddressSchema.nullable(),
+  vat: z.string().nullable(),
+  siren: z.string().nullable(),
+  org_url: z.string(),
+});
+export type Organization = z.infer<typeof OrganizationSchema>;
+
+/** A labelled contact detail (email or phone) as Pipedrive stores it. */
+export const ContactDetailSchema = z.object({
+  label: z.string().nullable(),
+  value: z.string(),
+  primary: z.boolean(),
+});
+export type ContactDetail = z.infer<typeof ContactDetailSchema>;
+
+/**
+ * Person entity projection: primary contact name plus contact details
+ * (emails and phones, primary flagged) needed for the invoice customer.
+ */
+export const PersonSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  first_name: z.string().nullable(),
+  last_name: z.string().nullable(),
+  job_title: z.string().nullable(),
+  org_id: z.number().nullable(),
+  emails: z.array(ContactDetailSchema),
+  phones: z.array(ContactDetailSchema),
+  primary_email: z.string().nullable(),
+  primary_phone: z.string().nullable(),
+  person_url: z.string(),
+});
+export type Person = z.infer<typeof PersonSchema>;

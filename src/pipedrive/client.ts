@@ -12,6 +12,8 @@ import {
   type FieldRegistryStoreOptions,
 } from "./field-registry.js";
 import {
+  type Address,
+  type ContactDetail,
   type DealDetail,
   DealFieldSchema,
   type DealField,
@@ -37,7 +39,9 @@ import {
   type ListPipelinesResult,
   type ListStagesParams,
   type ListStagesResult,
+  type Organization,
   type PaginationInfo,
+  type Person,
   type Pipeline,
   type PipedriveConfig,
   type RefreshFieldRegistryResult,
@@ -128,6 +132,29 @@ interface RawFile {
   [key: string]: unknown;
 }
 
+interface RawAddress {
+  formatted_address?: unknown;
+  street_number?: unknown;
+  route?: unknown;
+  locality?: unknown;
+  sublocality?: unknown;
+  admin_area_level_1?: unknown;
+  admin_area_level_2?: unknown;
+  postal_code?: unknown;
+  country?: unknown;
+  [key: string]: unknown;
+}
+
+interface RawContactDetail {
+  label?: unknown;
+  value?: unknown;
+  primary?: unknown;
+}
+
+/** Substring patterns (lowercased field name) that identify a VAT or SIREN custom field. */
+const VAT_NAME_PATTERNS = ["vat", "tva"];
+const SIREN_NAME_PATTERNS = ["siren", "siret"];
+
 export class PipedriveClient {
   readonly apiToken: string;
   readonly domain: string;
@@ -135,6 +162,8 @@ export class PipedriveClient {
   readonly baseUrlV2: string;
   readonly registry: FieldRegistryStore;
   private readonly timeoutMs: number;
+  /** Lazily-resolved custom-field keys for VAT / SIREN (undefined until first lookup). */
+  private orgFieldKeys: { vat: string | null; siren: string | null } | undefined;
 
   constructor(options: PipedriveClientOptions) {
     this.apiToken = options.apiToken;
@@ -146,6 +175,90 @@ export class PipedriveClient {
       () => this.fetchAllDealFields(),
       options.registryOptions,
     );
+  }
+
+  /**
+   * Resolve a deal's org_id to the organization entity: name, structured
+   * address, and VAT/SIREN when stored as custom fields. Throws
+   * PipedriveNotFoundError when the org does not exist (e.g. a deal with no
+   * linked organization passes org_id=null and should be guarded by the caller).
+   */
+  async getOrganization(id: number): Promise<Organization> {
+    const data = await this.requestJson("GET", "v2", `organizations/${id}`);
+    const raw = data.data as Record<string, unknown> | null | undefined;
+    if (!raw || typeof raw.id !== "number") {
+      throw new PipedriveNotFoundError(`Organization ${id} not found`, {
+        endpoint: `organizations/${id}`,
+        status: 404,
+      });
+    }
+    const customFields = (raw.custom_fields as Record<string, unknown> | undefined) ?? {};
+    const keys = await this.resolveOrgFieldKeys();
+    return {
+      id: raw.id,
+      name: typeof raw.name === "string" ? raw.name : "",
+      address: parseAddress(raw.address),
+      vat: keys.vat ? toStringOrNull(customFields[keys.vat]) : null,
+      siren: keys.siren ? toStringOrNull(customFields[keys.siren]) : null,
+      org_url: `https://${this.domain}.pipedrive.com/organization/${raw.id}`,
+    };
+  }
+
+  /**
+   * Resolve a deal's person_id to the person entity: primary contact name and
+   * contact details (emails/phones with primary flagged). Throws
+   * PipedriveNotFoundError when the person does not exist.
+   */
+  async getPerson(id: number): Promise<Person> {
+    const data = await this.requestJson("GET", "v2", `persons/${id}`);
+    const raw = data.data as Record<string, unknown> | null | undefined;
+    if (!raw || typeof raw.id !== "number") {
+      throw new PipedriveNotFoundError(`Person ${id} not found`, {
+        endpoint: `persons/${id}`,
+        status: 404,
+      });
+    }
+    const emails = parseContactDetails(raw.emails);
+    const phones = parseContactDetails(raw.phones);
+    return {
+      id: raw.id,
+      name: typeof raw.name === "string" ? raw.name : "",
+      first_name: toStringOrNull(raw.first_name),
+      last_name: toStringOrNull(raw.last_name),
+      job_title: toStringOrNull(raw.job_title),
+      org_id: toNumberOrNull(raw.org_id),
+      emails,
+      phones,
+      primary_email: primaryValue(emails),
+      primary_phone: primaryValue(phones),
+      person_url: `https://${this.domain}.pipedrive.com/person/${raw.id}`,
+    };
+  }
+
+  /**
+   * Look up (and cache) the VAT/SIREN custom-field keys by name-matching the
+   * organizationFields definitions. Returns nulls when the Pipedrive account
+   * has no such fields, so VAT/SIREN resolve to null ("when present").
+   */
+  private async resolveOrgFieldKeys(): Promise<{ vat: string | null; siren: string | null }> {
+    if (this.orgFieldKeys !== undefined) return this.orgFieldKeys;
+    let vat: string | null = null;
+    let siren: string | null = null;
+    try {
+      const data = await this.requestJson("GET", "v1", "organizationFields");
+      const fields = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+      for (const field of fields) {
+        const name = typeof field.name === "string" ? field.name.toLowerCase() : "";
+        const key = typeof field.key === "string" ? field.key : null;
+        if (key === null) continue;
+        if (vat === null && VAT_NAME_PATTERNS.some((p) => name.includes(p))) vat = key;
+        if (siren === null && SIREN_NAME_PATTERNS.some((p) => name.includes(p))) siren = key;
+      }
+    } catch {
+      // Custom-field discovery is best-effort; without it VAT/SIREN stay null.
+    }
+    this.orgFieldKeys = { vat, siren };
+    return this.orgFieldKeys;
   }
 
   /**
@@ -837,4 +950,47 @@ export function inCloseDateRange(
   if (from !== null && date < from) return false;
   if (to !== null && date > to) return false;
   return true;
+}
+
+/** Normalize Pipedrive's structured address into the lean Address projection, or null when absent. */
+export function parseAddress(value: unknown): Address | null {
+  if (value === null || typeof value !== "object") return null;
+  const raw = value as RawAddress;
+  const address: Address = {
+    formatted_address: toStringOrNull(raw.formatted_address),
+    street_number: toStringOrNull(raw.street_number),
+    route: toStringOrNull(raw.route),
+    locality: toStringOrNull(raw.locality),
+    sublocality: toStringOrNull(raw.sublocality),
+    admin_area_level_1: toStringOrNull(raw.admin_area_level_1),
+    admin_area_level_2: toStringOrNull(raw.admin_area_level_2),
+    postal_code: toStringOrNull(raw.postal_code),
+    country: toStringOrNull(raw.country),
+  };
+  // An address object with no usable parts is equivalent to no address.
+  const hasAny = Object.values(address).some((part) => part !== null);
+  return hasAny ? address : null;
+}
+
+/** Extract labelled email/phone entries, dropping entries without a value. */
+export function parseContactDetails(value: unknown): ContactDetail[] {
+  if (!Array.isArray(value)) return [];
+  const details: ContactDetail[] = [];
+  for (const entry of value as RawContactDetail[]) {
+    const contactValue = toStringOrNull(entry?.value);
+    if (contactValue === null) continue;
+    details.push({
+      label: toStringOrNull(entry?.label),
+      value: contactValue,
+      primary: entry?.primary === true,
+    });
+  }
+  return details;
+}
+
+/** The primary contact value, falling back to the first entry, or null when empty. */
+export function primaryValue(details: ContactDetail[]): string | null {
+  if (details.length === 0) return null;
+  const primary = details.find((detail) => detail.primary);
+  return (primary ?? details[0]).value;
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DownloadFileParamsSchema,
   DownloadFileResultSchema,
+  EntityByIdParamsSchema,
   FileSchema,
   GetPipelineParamsSchema,
   GetStageParamsSchema,
@@ -11,6 +12,8 @@ import {
   ListDealProductsParamsSchema,
   ListDealsParamsSchema,
   ListStagesParamsSchema,
+  OrganizationSchema,
+  PersonSchema,
   PipedriveConfigSchema,
 } from "../models.js";
 
@@ -151,5 +154,50 @@ describe("deal product and discount param schemas", () => {
   it("deal product/discount schemas reject unknown keys", () => {
     expect(ListDealProductsParamsSchema.safeParse({ deal_id: 1, nope: 1 }).success).toBe(false);
     expect(ListDealDiscountsParamsSchema.safeParse({ deal_id: 1, nope: 1 }).success).toBe(false);
+  });
+});
+
+describe("EntityByIdParamsSchema", () => {
+  it("coerces a stringified id to a number", () => {
+    expect(EntityByIdParamsSchema.parse({ id: "679" })).toEqual({ id: 679 });
+  });
+
+  it("rejects a missing or non-positive id", () => {
+    expect(EntityByIdParamsSchema.safeParse({}).success).toBe(false);
+    expect(EntityByIdParamsSchema.safeParse({ id: 0 }).success).toBe(false);
+    expect(EntityByIdParamsSchema.safeParse({ id: "abc" }).success).toBe(false);
+  });
+});
+
+describe("OrganizationSchema", () => {
+  it("accepts a resolved organization with a null address and null VAT/SIREN", () => {
+    const parsed = OrganizationSchema.parse({
+      id: 679,
+      name: "ATLAS COPCO",
+      address: null,
+      vat: null,
+      siren: null,
+      org_url: "https://acme.pipedrive.com/organization/679",
+    });
+    expect(parsed.name).toBe("ATLAS COPCO");
+  });
+});
+
+describe("PersonSchema", () => {
+  it("accepts a resolved person with contact details", () => {
+    const parsed = PersonSchema.parse({
+      id: 1609,
+      name: "Kristof Heselmans",
+      first_name: "Kristof",
+      last_name: "Heselmans",
+      job_title: null,
+      org_id: 10282,
+      emails: [{ label: "work", value: "k@x.com", primary: true }],
+      phones: [],
+      primary_email: "k@x.com",
+      primary_phone: null,
+      person_url: "https://acme.pipedrive.com/person/1609",
+    });
+    expect(parsed.primary_email).toBe("k@x.com");
   });
 });
