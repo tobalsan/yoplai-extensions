@@ -270,6 +270,228 @@ describe("PennylaneClient", () => {
     expect(secondUrl.searchParams.get("cursor")).toBe("C2");
   });
 
+  it("getInvoice fetches a single invoice by id", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 88, amount: "12.00", external_reference: "deal-1" }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.getInvoice({ id: 88 });
+
+    expect(result.invoice.id).toBe("88");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/customer_invoices/88",
+    );
+  });
+
+  it("listQuotes walks the cursor and validates against the quote schema", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ id: 1, status: "pending", amount: "100.00" }],
+          has_more: true,
+          next_cursor: "Q2",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ id: 2, status: "accepted", amount: "200.00" }],
+          has_more: false,
+          next_cursor: null,
+        }),
+      );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.listQuotes({});
+
+    expect(result.quotes.map((q) => q.id)).toEqual(["1", "2"]);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/quotes?limit=20",
+    );
+  });
+
+  it("searchQuotes filters by customer_id server-side then matches external_reference client-side", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        items: [
+          { id: 1, external_reference: "deal-7", amount: "1.00" },
+          { id: 2, external_reference: "deal-8", amount: "2.00" },
+          { id: 3, external_reference: "deal-7", amount: "3.00" },
+        ],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.searchQuotes({ customerId: 42, externalReference: "deal-7" });
+
+    // Only customer_id is sent server-side; external_reference is NOT in the filter.
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "customer_id", operator: "eq", value: 42 },
+    ]);
+    // Client-side match narrows to the two deal-7 quotes.
+    expect(result.quotes.map((q) => q.id)).toEqual(["1", "3"]);
+  });
+
+  it("searchQuotes maps a status list to a status in clause", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ items: [], has_more: false, next_cursor: null }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.searchQuotes({ status: ["pending", "accepted"] });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "status", operator: "in", value: ["pending", "accepted"] },
+    ]);
+  });
+
+  it("getQuote fetches a single quote by id", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 9, status: "pending" }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.getQuote({ id: 9 });
+
+    expect(result.quote.id).toBe("9");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/quotes/9",
+    );
+  });
+
+  it("getCustomer fetches by internal id", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 123, name: "ACME", customer_type: "company" }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.getCustomer({ id: 123 });
+
+    expect(result.customer.id).toBe("123");
+    expect(result.customer.name).toBe("ACME");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/customers/123",
+    );
+  });
+
+  it("getCustomer resolves by external_reference via an eq filter", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        items: [{ id: 55, name: "ACME", external_reference: "pipedrive-org-88" }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.getCustomer({ externalReference: "pipedrive-org-88" });
+
+    expect(result.customer.id).toBe("55");
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/api/external/v2/customers");
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "external_reference", operator: "eq", value: "pipedrive-org-88" },
+    ]);
+  });
+
+  it("getCustomer throws PennylaneNotFoundError when no external_reference match", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [], has_more: false, next_cursor: null }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await expect(client.getCustomer({ externalReference: "missing" })).rejects.toBeInstanceOf(
+      PennylaneNotFoundError,
+    );
+  });
+
+  it("getCustomer rejects when neither id nor external_reference is given", async () => {
+    const client = new PennylaneClient({ apiToken: "t" });
+    await expect(client.getCustomer({})).rejects.toThrow(/exactly one/);
+  });
+
+  it("getCustomer rejects when both id and external_reference are given", async () => {
+    const client = new PennylaneClient({ apiToken: "t" });
+    await expect(
+      client.getCustomer({ id: 1, externalReference: "x" }),
+    ).rejects.toThrow(/exactly one/);
+  });
+
+  it("searchCustomers AND-combines external_reference, name, and customer_type", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ items: [], has_more: false, next_cursor: null }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.searchCustomers({
+      externalReference: "org-1",
+      name: "ACME",
+      customerType: "company",
+    });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "external_reference", operator: "eq", value: "org-1" },
+      { field: "name", operator: "eq", value: "ACME" },
+      { field: "customer_type", operator: "eq", value: "company" },
+    ]);
+  });
+
+  it("searchProducts filters by external_reference and validates products", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        items: [{ id: 7, label: "Widget", price_before_tax: "10.00", vat_rate: "FR_200" }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.searchProducts({ externalReference: "prod-1" });
+
+    expect(result.products[0]?.id).toBe("7");
+    expect(result.products[0]?.priceBeforeTax).toBe("10.00");
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/api/external/v2/products");
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "external_reference", operator: "eq", value: "prod-1" },
+    ]);
+  });
+
+  it("getProduct fetches a single product by id", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 4, label: "Service", vat_rate: "FR_200" }));
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.getProduct({ id: 4 });
+
+    expect(result.product.id).toBe("4");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/products/4",
+    );
+  });
+
+  it("listVatRates returns the static VAT enum reference without a network call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.listVatRates({});
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.vatRates).toContainEqual({
+      code: "FR_200",
+      label: "France — standard rate",
+      percentage: 20,
+    });
+    expect(result.vatRates.map((r) => r.code)).toContain("exempt");
+  });
+
   it("verifies a token via GET /me", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

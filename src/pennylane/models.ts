@@ -113,3 +113,239 @@ export const SearchInvoicesParamsSchema = z
   })
   .strict();
 export type SearchInvoicesParams = z.infer<typeof SearchInvoicesParamsSchema>;
+
+/** Params for `get_invoice`: a single customer invoice by its int64 id. */
+export const GetInvoiceParamsSchema = z
+  .object({ id: z.union([z.string(), z.number()]) })
+  .strict();
+export type GetInvoiceParams = z.infer<typeof GetInvoiceParamsSchema>;
+
+/**
+ * Pennylane `vat_rate` is a fixed enum, not a listable endpoint. The full set is
+ * ~180 country codes in the form `{ISO2}_{rate×10}` plus special codes. We ship
+ * the common French rates + the cross-border/special codes Sally needs so the
+ * agent can discover valid codes without a network call. Ref: §4.3.
+ *
+ * `.passthrough()` is not applicable to an enum, so we keep this permissive: the
+ * schema validates the known codes, and `VatRateReferenceSchema` documents them
+ * with human-readable percentages for `list_vat_rates`.
+ */
+export const VAT_RATES = [
+  { code: "FR_200", label: "France — standard rate", percentage: 20 },
+  { code: "FR_100", label: "France — intermediate rate", percentage: 10 },
+  { code: "FR_55", label: "France — reduced rate", percentage: 5.5 },
+  { code: "FR_21", label: "France — super-reduced rate", percentage: 2.1 },
+  { code: "exempt", label: "Exempt / 0%", percentage: 0 },
+  { code: "any", label: "Not applicable (shows N/A in UI)", percentage: null },
+] as const;
+
+/**
+ * A single VAT rate reference entry, as returned by `list_vat_rates`. `percentage`
+ * is `null` for the `any` code ("N/A"), otherwise the numeric rate (e.g. 20).
+ */
+export const VatRateReferenceSchema = z.object({
+  code: z.string(),
+  label: z.string(),
+  percentage: z.number().nullable(),
+});
+export type VatRateReference = z.infer<typeof VatRateReferenceSchema>;
+
+/**
+ * Quote / invoice line item. Pennylane returns lines with a `vat_rate` enum code
+ * (e.g. `FR_200`), a decimal-string unit price excluding tax, and optional
+ * product link. Shared shape between quotes and invoices (§2.2, §3.2).
+ */
+export const LineItemSchema = z
+  .object({
+    id: Int64Id.nullable().optional(),
+    label: NullableString,
+    description: NullableString,
+    unit: NullableString,
+    quantity: MoneyString,
+    rawCurrencyUnitPrice: MoneyString,
+    vatRate: NullableString,
+    amount: MoneyString,
+    currencyAmount: MoneyString,
+    tax: MoneyString,
+    currencyTax: MoneyString,
+    productId: Int64Id.nullable().optional(),
+    sectionRank: z.number().nullable().optional(),
+  })
+  .passthrough();
+export type LineItem = z.infer<typeof LineItemSchema>;
+
+/**
+ * Quote (devis) as returned by API v2. `status` is one of
+ * `pending | accepted | denied | invoiced | expired` (no "draft" state — §3.0).
+ * Additional fields preserved via `.passthrough()`.
+ */
+export const QuoteSchema = z
+  .object({
+    id: Int64Id,
+    quoteNumber: NullableString,
+    externalReference: NullableString,
+    status: NullableString,
+    label: NullableString,
+    currency: NullableString,
+    date: DateString,
+    deadline: DateString,
+    customerId: Int64Id.nullable().optional(),
+    amount: MoneyString,
+    currencyAmount: MoneyString,
+    currencyAmountBeforeTax: MoneyString,
+    tax: MoneyString,
+    currencyTax: MoneyString,
+    lineItems: z.array(LineItemSchema).nullable().optional(),
+    createdAt: NullableString,
+    updatedAt: NullableString,
+  })
+  .passthrough();
+export type Quote = z.infer<typeof QuoteSchema>;
+
+/** Postal address as used on customer billing/delivery. */
+export const AddressSchema = z
+  .object({
+    address: NullableString,
+    postalCode: NullableString,
+    city: NullableString,
+    countryAlpha2: NullableString,
+  })
+  .passthrough();
+export type Address = z.infer<typeof AddressSchema>;
+
+/**
+ * Customer as returned by the unified `GET /customers` endpoint. Covers both
+ * `company` and `individual` types (§4.1); individual customers carry
+ * `firstName`/`lastName` instead of `name`. Extra fields preserved.
+ */
+export const CustomerSchema = z
+  .object({
+    id: Int64Id,
+    customerType: NullableString,
+    name: NullableString,
+    firstName: NullableString,
+    lastName: NullableString,
+    externalReference: NullableString,
+    vatNumber: NullableString,
+    regNo: NullableString,
+    emails: z.array(z.string()).nullable().optional(),
+    phone: NullableString,
+    reference: NullableString,
+    notes: NullableString,
+    paymentConditions: NullableString,
+    billingLanguage: NullableString,
+    billingAddress: AddressSchema.nullable().optional(),
+    deliveryAddress: AddressSchema.nullable().optional(),
+    createdAt: NullableString,
+    updatedAt: NullableString,
+  })
+  .passthrough();
+export type Customer = z.infer<typeof CustomerSchema>;
+
+/**
+ * Product as returned by API v2 (§4.2). Money fields are decimal strings and
+ * `vatRate` is an enum code. Extra fields preserved.
+ */
+export const ProductSchema = z
+  .object({
+    id: Int64Id,
+    label: NullableString,
+    description: NullableString,
+    externalReference: NullableString,
+    reference: NullableString,
+    priceBeforeTax: MoneyString,
+    price: MoneyString,
+    vatRate: NullableString,
+    unit: NullableString,
+    currency: NullableString,
+    createdAt: NullableString,
+    updatedAt: NullableString,
+    archivedAt: NullableString,
+  })
+  .passthrough();
+export type Product = z.infer<typeof ProductSchema>;
+
+/**
+ * Params for `list_quotes` / `list_customers` / `list_products`. Cursor is walked
+ * transparently when omitted; provide one to fetch a single page.
+ */
+export const ListParamsSchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional().default(20),
+});
+export type ListParams = z.infer<typeof ListParamsSchema>;
+
+/**
+ * Params for `search_quotes`. Quotes are filterable server-side only on
+ * `customer_id` and `status` (§3.1); `external_reference` is NOT server-side
+ * filterable, so it is matched client-side on the returned objects (§4.5).
+ */
+export const SearchQuotesParamsSchema = z
+  .object({
+    customerId: z.union([z.string(), z.number()]).optional(),
+    externalReference: z.string().optional(),
+    status: z.union([z.string(), z.array(z.string()).nonempty()]).optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional().default(20),
+  })
+  .strict();
+export type SearchQuotesParams = z.infer<typeof SearchQuotesParamsSchema>;
+
+/** Params for `get_quote`: a single quote by its int64 id. */
+export const GetQuoteParamsSchema = z
+  .object({ id: z.union([z.string(), z.number()]) })
+  .strict();
+export type GetQuoteParams = z.infer<typeof GetQuoteParamsSchema>;
+
+/**
+ * Params for `search_customers`. Customers ARE server-side filterable on
+ * `external_reference` (`eq`, `start_with`), `name` (`start_with`, `eq`), and
+ * `customer_type` (§4.1).
+ */
+export const SearchCustomersParamsSchema = z
+  .object({
+    externalReference: z.string().optional(),
+    name: z.string().optional(),
+    customerType: z.enum(["company", "individual"]).optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional().default(20),
+  })
+  .strict();
+export type SearchCustomersParams = z.infer<typeof SearchCustomersParamsSchema>;
+
+/**
+ * Params for `get_customer`: fetch by internal `id` OR by `externalReference`
+ * (the Pipedrive org/person id hook). Exactly one must be provided.
+ */
+export const GetCustomerParamsSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).optional(),
+    externalReference: z.string().optional(),
+  })
+  .strict();
+export type GetCustomerParams = z.infer<typeof GetCustomerParamsSchema>;
+
+/**
+ * Params for `search_products`. Products are server-side filterable on
+ * `external_reference`, `label`, and `reference` (§4.2).
+ */
+export const SearchProductsParamsSchema = z
+  .object({
+    externalReference: z.string().optional(),
+    label: z.string().optional(),
+    reference: z.string().optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional().default(20),
+  })
+  .strict();
+export type SearchProductsParams = z.infer<typeof SearchProductsParamsSchema>;
+
+/** Params for `get_product`: a single product by its int64 id. */
+export const GetProductParamsSchema = z
+  .object({ id: z.union([z.string(), z.number()]) })
+  .strict();
+export type GetProductParams = z.infer<typeof GetProductParamsSchema>;
+
+/** Params for `list_vat_rates`: no inputs — returns the static VAT enum reference. */
+export const ListVatRatesParamsSchema = z.object({}).strict();
+export type ListVatRatesParams = z.infer<typeof ListVatRatesParamsSchema>;
