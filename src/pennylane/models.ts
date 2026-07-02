@@ -425,3 +425,73 @@ export const UpdateInvoiceDraftParamsSchema = z
   })
   .strict();
 export type UpdateInvoiceDraftParams = z.infer<typeof UpdateInvoiceDraftParamsSchema>;
+
+/**
+ * Params for `create_quote` (§3.3). Pennylane quotes have **no** draft/status
+ * field on create — a created quote is always `pending`, which the write path
+ * treats as the draft-equivalent. `externalReference` is the Pipedrive deal-id
+ * hook for correlation/dedup (returned on the quote but not server-side
+ * filterable, so callers match it client-side via `search_quotes`). Line items
+ * share the same product-based / free-form shapes as invoice drafts (§2.3).
+ */
+export const CreateQuoteParamsSchema = z
+  .object({
+    customerId: IdInput,
+    date: IsoDate,
+    deadline: IsoDate,
+    invoiceLines: z.array(InvoiceLineInputSchema).min(1),
+    label: z.string().max(2000).optional(),
+    externalReference: z.string().optional(),
+    currency: z.string().optional(),
+    language: z.string().optional(),
+    quoteTemplateId: IdInput.optional(),
+    pdfInvoiceSubject: z.string().optional(),
+    pdfInvoiceFreeText: z.string().optional(),
+    pdfDescription: z.string().optional(),
+    specialMention: z.string().max(20000).optional(),
+  })
+  .strict();
+export type CreateQuoteParams = z.infer<typeof CreateQuoteParamsSchema>;
+
+/**
+ * `invoice_lines` diff for a quote update (§3.4): `PUT /quotes/{id}` takes a diff
+ * object `{ create, update, delete }`, NOT a flat array. `create` adds new
+ * free-form/product lines, `update` edits existing lines (each needs its `id`),
+ * and `delete` removes lines by id. All three are optional; supply only what
+ * changes.
+ */
+export const QuoteLinesDiffSchema = z
+  .object({
+    create: z.array(InvoiceLineInputSchema).optional(),
+    update: z.array(InvoiceLineInputSchema.extend({ id: IdInput })).optional(),
+    delete: z.array(IdInput).optional(),
+  })
+  .strict();
+export type QuoteLinesDiff = z.infer<typeof QuoteLinesDiffSchema>;
+
+/**
+ * Params for `update_quote` (§3.4). `id` selects the target, which the client
+ * re-reads and routes through `DraftGuard` before any write — a non-`pending`
+ * quote (accepted/denied/invoiced/expired/sent) is refused and the `PUT` never
+ * issues. Status is not editable here (there is deliberately no accept/send
+ * tool). `invoiceLines` uses the `{ create, update, delete }` diff object.
+ */
+export const UpdateQuoteParamsSchema = z
+  .object({
+    id: IdInput,
+    customerId: IdInput.optional(),
+    date: IsoDate.optional(),
+    deadline: IsoDate.optional(),
+    invoiceLines: QuoteLinesDiffSchema.optional(),
+    label: z.string().max(2000).optional(),
+    externalReference: z.string().optional(),
+    currency: z.string().optional(),
+    language: z.string().optional(),
+    quoteTemplateId: IdInput.optional(),
+    pdfInvoiceSubject: z.string().optional(),
+    pdfInvoiceFreeText: z.string().optional(),
+    pdfDescription: z.string().optional(),
+    specialMention: z.string().max(20000).optional(),
+  })
+  .strict();
+export type UpdateQuoteParams = z.infer<typeof UpdateQuoteParamsSchema>;

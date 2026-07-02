@@ -1,5 +1,6 @@
 import {
   CreateInvoiceDraftParamsSchema,
+  CreateQuoteParamsSchema,
   CustomerInvoiceSchema,
   CustomerSchema,
   GetCustomerParamsSchema,
@@ -16,6 +17,7 @@ import {
   SearchProductsParamsSchema,
   SearchQuotesParamsSchema,
   UpdateInvoiceDraftParamsSchema,
+  UpdateQuoteParamsSchema,
   VAT_RATES,
   VatRateReferenceSchema,
   type Customer,
@@ -452,6 +454,49 @@ export class PennylaneClient {
   async getQuote(input: unknown): Promise<{ quote: Quote }> {
     const params = GetQuoteParamsSchema.parse(input);
     const raw = await this.request("GET", `quotes/${params.id}`);
+    return { quote: QuoteSchema.parse(raw) };
+  }
+
+  /**
+   * Create a quote (§3.3). Pennylane quotes have no draft/status field on create
+   * — the created quote is always `pending`, which the write path treats as the
+   * draft-equivalent. `externalReference` (the Pipedrive deal id) is passed
+   * through for correlation/dedup; since quotes are not server-side filterable on
+   * it, callers dedupe by looking it up client-side first (§4.5). This tool
+   * cannot accept or send a quote — there is deliberately no such tool.
+   */
+  async createQuote(input: unknown): Promise<{ quote: Quote }> {
+    const params = CreateQuoteParamsSchema.parse(input);
+    const body = compact(params);
+    const raw = await this.request("POST", "quotes", undefined, body);
+    return { quote: QuoteSchema.parse(raw) };
+  }
+
+  /**
+   * Update a quote (§3.4, `PUT /quotes/{id}`). Before any write, the target is
+   * re-read and routed through `DraftGuard`: a non-`pending` quote
+   * (accepted/denied/invoiced/expired/sent) is refused with
+   * `PennylaneGuardRefusedError` and the write never reaches Pennylane. Status is
+   * not editable here, and `invoiceLines` uses the `{ create, update, delete }`
+   * diff object rather than a flat array.
+   */
+  async updateQuote(input: unknown): Promise<{ quote: Quote }> {
+    const params = UpdateQuoteParamsSchema.parse(input);
+    const { id, ...updates } = params;
+
+    const current = await this.request("GET", `quotes/${id}`);
+    const target = QuoteSchema.parse(current);
+
+    const decision = this.draftGuard.evaluate({ status: target.status });
+    if (!decision.allowed) {
+      throw new PennylaneGuardRefusedError(
+        `Refusing to update quote ${id}: ${decision.reason}`,
+        { endpoint: `quotes/${id}` },
+      );
+    }
+
+    const body = compact(updates);
+    const raw = await this.request("PUT", `quotes/${id}`, undefined, body);
     return { quote: QuoteSchema.parse(raw) };
   }
 

@@ -581,4 +581,99 @@ describe("PennylaneClient", () => {
       expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
     });
   });
+
+  describe("create_quote", () => {
+    it("POSTs a quote (no draft/status field) and passes external_reference through (snake-cased)", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 88, status: "pending" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      const result = await client.createQuote({
+        customerId: 42,
+        date: "2026-07-02",
+        deadline: "2026-08-02",
+        externalReference: "pipedrive-deal-4567",
+        pdfInvoiceSubject: "Consulting proposal",
+        invoiceLines: [
+          { label: "Consulting fees", quantity: 2, unit: "day", rawCurrencyUnitPrice: "500.00", vatRate: "FR_200" },
+        ],
+      });
+
+      expect(result.quote.id).toBe("88");
+      expect(result.quote.status).toBe("pending");
+
+      const call = fetchSpy.mock.calls[0];
+      expect(call?.[1]?.method).toBe("POST");
+      expect(String(call?.[0])).toBe("https://app.pennylane.com/api/external/v2/quotes");
+      const body = JSON.parse(String(call?.[1]?.body));
+      // Quotes have no draft/status field on create — it must NOT be sent.
+      expect(body.draft).toBeUndefined();
+      expect(body.status).toBeUndefined();
+      expect(body.customer_id).toBe(42);
+      expect(body.external_reference).toBe("pipedrive-deal-4567");
+      expect(body.pdf_invoice_subject).toBe("Consulting proposal");
+      expect(body.invoice_lines[0]).toMatchObject({
+        label: "Consulting fees",
+        raw_currency_unit_price: "500.00",
+        vat_rate: "FR_200",
+      });
+    });
+  });
+
+  describe("update_quote", () => {
+    it("re-reads the target, confirms it is pending, then PUTs the update with a lines diff", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse({ id: 7, status: "pending" }))
+        .mockResolvedValueOnce(jsonResponse({ id: 7, status: "pending", label: "Updated" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      const result = await client.updateQuote({
+        id: 7,
+        label: "Updated",
+        invoiceLines: {
+          create: [{ label: "New line", quantity: 1, rawCurrencyUnitPrice: "10.00", vatRate: "FR_200" }],
+          update: [{ id: 3, quantity: 5 }],
+          delete: [4],
+        },
+      });
+
+      expect(result.quote.label).toBe("Updated");
+      // First call reads the target, second call writes.
+      expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+        "https://app.pennylane.com/api/external/v2/quotes/7",
+      );
+      const putCall = fetchSpy.mock.calls[1];
+      expect(putCall?.[1]?.method).toBe("PUT");
+      const body = JSON.parse(String(putCall?.[1]?.body));
+      expect(body.label).toBe("Updated");
+      // invoice_lines is a diff object, snake-cased, not a flat array.
+      expect(body.invoice_lines.create[0]).toMatchObject({ raw_currency_unit_price: "10.00" });
+      expect(body.invoice_lines.update[0]).toMatchObject({ id: 3, quantity: 5 });
+      expect(body.invoice_lines.delete).toEqual([4]);
+    });
+
+    it.each([
+      ["accepted"],
+      ["denied"],
+      ["invoiced"],
+      ["expired"],
+      ["sent"],
+    ])("refuses to touch a %s quote and never issues the PUT", async (status) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 9, status }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.updateQuote({ id: 9, label: "nope" })).rejects.toBeInstanceOf(
+        PennylaneGuardRefusedError,
+      );
+
+      // Only the read happened; no PUT was issued.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    });
+  });
 });

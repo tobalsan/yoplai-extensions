@@ -2,6 +2,7 @@ import { z } from "zod";
 import { PennylaneClient } from "./client.js";
 import {
   CreateInvoiceDraftParamsSchema,
+  CreateQuoteParamsSchema,
   GetCustomerParamsSchema,
   GetInvoiceParamsSchema,
   GetProductParamsSchema,
@@ -14,6 +15,7 @@ import {
   SearchProductsParamsSchema,
   SearchQuotesParamsSchema,
   UpdateInvoiceDraftParamsSchema,
+  UpdateQuoteParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
@@ -25,7 +27,7 @@ export const PennylaneConfigSchema = z.object({
 export default defineToolExtension({
   id: "pennylane",
   displayName: "Pennylane",
-  description: "Read, search, and draft-write Pennylane customer invoices, plus read quotes, customers, and products (draft-safe: never finalizes or sends).",
+  description: "Read, search, and draft-write Pennylane customer invoices and quotes, plus read customers and products (draft-safe: never finalizes, accepts, or sends).",
   systemPrompt: `Use this extension for Pennylane (Company API v2) accounting operations.
 
 Available tools:
@@ -38,6 +40,8 @@ Available tools:
 - pennylane_list_vat_rates: discover valid vat_rate codes (e.g. FR_200 = 20%)
 - pennylane_create_invoice_draft: create a customer invoice as an editable DRAFT (draft: true); pass external_reference (Pipedrive deal id) for dedup
 - pennylane_update_invoice_draft: edit an existing invoice draft; refuses if the target is already finalized (DraftGuard)
+- pennylane_create_quote: create a quote (devis); it is always created 'pending' (quotes have no draft state); pass external_reference (Pipedrive deal id) for dedup
+- pennylane_update_quote: edit an existing quote; refuses via DraftGuard unless the target is still 'pending'; invoice_lines uses a { create, update, delete } diff
 
 Key concepts:
 - money values are decimal strings (e.g. "230.32"), never floats or cents
@@ -46,8 +50,10 @@ Key concepts:
 - prefer search_invoices when you know the customer, external_reference (Pipedrive deal id), status, or date range; filters are AND-combined server-side
 - external_reference is the Pipedrive deal/org id hook (invoices support only eq on it)
 - writes are draft-only and safety-gated: create_invoice_draft always sets draft: true, and update_invoice_draft routes the target through DraftGuard, refusing to touch a finalized invoice. There is deliberately NO finalize or send tool
-- Pennylane has no idempotency keys: before creating, look up by external_reference (search_invoices) to avoid duplicate drafts
+- quotes have no draft state: create_quote always yields a 'pending' quote (the draft-equivalent), and update_quote routes the target through DraftGuard, refusing to touch any non-'pending' quote (accepted/denied/invoiced/expired/sent). There is deliberately NO quote accept/status/send tool
+- Pennylane has no idempotency keys: before creating, look up by external_reference (search_invoices / search_quotes) to avoid duplicate drafts
 - quotes are NOT server-side filterable on external_reference: search_quotes filters by customer_id (and status) server-side, then matches external_reference client-side
+- update_quote's invoice_lines is a diff object { create, update, delete } (not a flat array like invoice drafts); each updated/deleted line is addressed by its id
 - customers can be fetched by internal id OR external_reference via get_customer
 - vat_rate is a fixed enum (no list endpoint); use list_vat_rates to discover valid codes like FR_200 (20%), FR_100 (10%), FR_55 (5.5%), exempt (0%)
 - the client self-throttles to Pennylane's rate limit (25 requests / 5 s per token) and retries on 429`,
@@ -155,6 +161,20 @@ Key concepts:
           "Edit an existing invoice draft (full replace, stays draft: true). Routes the target through DraftGuard first and refuses to touch a finalized invoice. Cannot finalize or send.",
         parameters: UpdateInvoiceDraftParamsSchema,
         execute: (params) => client.updateInvoiceDraft(params),
+      },
+      {
+        name: "create_quote",
+        description:
+          "Create a quote (devis). Pennylane quotes have no draft state — the created quote is always 'pending' (the draft-equivalent). Accepts external_reference (Pipedrive deal id) for correlation/dedup. Requires customer_id, date, deadline, and at least one line. Does NOT accept or send the quote.",
+        parameters: CreateQuoteParamsSchema,
+        execute: (params) => client.createQuote(params),
+      },
+      {
+        name: "update_quote",
+        description:
+          "Edit an existing quote. Routes the target through DraftGuard first and refuses to touch any non-'pending' quote (accepted/denied/invoiced/expired/sent). invoice_lines uses a { create, update, delete } diff object. Cannot change status, accept, or send.",
+        parameters: UpdateQuoteParamsSchema,
+        execute: (params) => client.updateQuote(params),
       },
     ];
   },
