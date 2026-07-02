@@ -182,6 +182,104 @@ describe("PipedriveClient.listDeals", () => {
   });
 });
 
+function rawFile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 100,
+    name: "sale-info.xlsx",
+    file_type: "xlsx",
+    file_size: 20480,
+    deal_id: 42,
+    add_time: "2025-07-01 10:00:00",
+    url: "https://acme.pipedrive.com/file/100",
+    ...overrides,
+  };
+}
+
+describe("PipedriveClient.listDealFiles", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("targets the v1 deal files endpoint and projects lean metadata", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: [rawFile()], additional_data: {} }));
+
+    const result = await createClient().listDealFiles({ deal_id: 42 });
+
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v1/deals/42/files");
+    expect(u.searchParams.get("api_token")).toBe("secret-token");
+    expect(result.count).toBe(1);
+    expect(result.files[0]).toEqual({
+      id: 100,
+      name: "sale-info.xlsx",
+      type: "xlsx",
+      size: 20480,
+      deal_id: 42,
+      add_time: "2025-07-01 10:00:00",
+      url: "https://acme.pipedrive.com/file/100",
+    });
+  });
+
+  it("falls back to file_name and derives type from the extension", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [rawFile({ name: null, file_name: "contract.PDF", file_type: null, file_size: null })],
+        additional_data: {},
+      }),
+    );
+
+    const result = await createClient().listDealFiles({ deal_id: 42 });
+    expect(result.files[0]?.name).toBe("contract.PDF");
+    expect(result.files[0]?.type).toBe("pdf");
+    expect(result.files[0]?.size).toBeNull();
+  });
+
+  it("returns an empty list when a deal has no files", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ data: [], additional_data: {} }));
+    const result = await createClient().listDealFiles({ deal_id: 42 });
+    expect(result).toEqual({ files: [], count: 0 });
+  });
+});
+
+describe("PipedriveClient.downloadFile", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns raw bytes as base64 without parsing, preserving byte integrity", async () => {
+    // Bytes that are NOT valid UTF-8 — round-tripping via base64 must be lossless.
+    const original = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0xfe, 0x80]);
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(original, {
+        status: 200,
+        headers: {
+          "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      }),
+    );
+
+    const result = await createClient().downloadFile({ file_id: 100 });
+
+    expect(url(spy).pathname).toBe("/api/v1/files/100/download");
+    expect(result.encoding).toBe("base64");
+    expect(result.size).toBe(original.length);
+    expect(result.mime_type).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    // Decode and confirm the bytes are byte-for-byte identical.
+    expect(Buffer.from(result.content_base64, "base64").equals(original)).toBe(true);
+  });
+
+  it("maps a 404 on a missing file to a typed not-found error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: "not found" }, 404));
+    await expect(createClient().downloadFile({ file_id: 999 })).rejects.toBeInstanceOf(
+      PipedriveNotFoundError,
+    );
+  });
+});
+
 describe("PipedriveClient retry and error mapping", () => {
   afterEach(() => {
     vi.restoreAllMocks();

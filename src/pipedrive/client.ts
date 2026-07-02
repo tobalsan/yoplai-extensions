@@ -9,6 +9,11 @@ import {
 } from "./errors.js";
 import {
   type DealSummary,
+  type DownloadFileParams,
+  type DownloadFileResult,
+  type File,
+  type ListDealFilesParams,
+  type ListDealFilesResult,
   type ListDealsParams,
   type ListDealsResult,
   type PipedriveConfig,
@@ -34,6 +39,13 @@ function toStringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** Best-effort file extension from a name, lowercased, without the dot. */
+function fileExtension(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return null;
+  return name.slice(dot + 1).toLowerCase();
+}
+
 export interface PipedriveClientOptions extends PipedriveConfig {
   timeoutMs?: number;
 }
@@ -57,6 +69,18 @@ interface RawDeal {
 interface DealsPage {
   data: RawDeal[];
   nextCursor: string | null;
+}
+
+interface RawFile {
+  id: number;
+  name?: unknown;
+  file_name?: unknown;
+  file_type?: unknown;
+  file_size?: unknown;
+  deal_id?: unknown;
+  add_time?: unknown;
+  url?: unknown;
+  [key: string]: unknown;
 }
 
 export class PipedriveClient {
@@ -136,6 +160,54 @@ export class PipedriveClient {
       deals: matches,
       next_cursor: cursor,
       count: matches.length,
+    };
+  }
+
+  /**
+   * List files/attachments linked to a deal with a lean metadata projection
+   * (name, type, size + the id needed to download). Read-only; nothing parsed.
+   */
+  async listDealFiles(params: ListDealFilesParams): Promise<ListDealFilesResult> {
+    // Deal files live on the v1 API: GET /deals/{id}/files.
+    const data = await this.requestJson("GET", "v1", `deals/${params.deal_id}/files`, {
+      limit: 500,
+    });
+    const rows = Array.isArray(data.data) ? (data.data as RawFile[]) : [];
+    const files = rows.map((raw) => this.toFile(raw));
+    return { files, count: files.length };
+  }
+
+  /**
+   * Download a file's raw bytes, unparsed and untransformed. Returns the
+   * content base64-encoded so binary formats (e.g. .xlsx) round-trip through
+   * JSON with byte integrity intact. Parsing happens downstream, not here.
+   */
+  async downloadFile(params: DownloadFileParams): Promise<DownloadFileResult> {
+    // v1 raw download endpoint returns the file body, not JSON.
+    const { bytes, contentType } = await this.requestBinary(
+      "v1",
+      `files/${params.file_id}/download`,
+    );
+    return {
+      file_id: params.file_id,
+      name: null,
+      mime_type: contentType,
+      size: bytes.length,
+      encoding: "base64",
+      content_base64: bytes.toString("base64"),
+    };
+  }
+
+  private toFile(raw: RawFile): File {
+    const name = toStringOrNull(raw.name) ?? toStringOrNull(raw.file_name) ?? "";
+    return {
+      id: raw.id,
+      name,
+      type: toStringOrNull(raw.file_type) ?? fileExtension(name),
+      size: toNumberOrNull(raw.file_size),
+      deal_id: toNumberOrNull(raw.deal_id),
+      add_time: toStringOrNull(raw.add_time),
+      url: toStringOrNull(raw.url),
     };
   }
 
@@ -233,6 +305,81 @@ export class PipedriveClient {
 
         const text = await response.text();
         return text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      } catch (error) {
+        if (error instanceof PipedriveError) {
+          throw error;
+        }
+        if (error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError)) {
+          throw new PipedriveConnectionError(error.message, { endpoint });
+        }
+        throw error;
+      }
+    }
+
+    throw new PipedriveRateLimitError("Pipedrive rate limit exceeded", { endpoint, status: 429 });
+  }
+
+  /**
+   * Like requestJson but returns the raw response body as bytes (no JSON
+   * parsing). Used for the file download endpoint. Shares the same retry and
+   * typed-error mapping so binary downloads behave consistently.
+   */
+  private async requestBinary(
+    version: "v1" | "v2",
+    endpoint: string,
+    query: Record<string, string | number> = {},
+  ): Promise<{ bytes: Buffer; contentType: string | null }> {
+    const url = this.buildUrl(version, endpoint, query);
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+
+        if (response.status === 429) {
+          if (attempt < MAX_ATTEMPTS - 1) {
+            await sleep(this.retryDelayMs(response, attempt));
+            continue;
+          }
+          throw new PipedriveRateLimitError("Pipedrive rate limit exceeded", {
+            endpoint,
+            status: 429,
+          });
+        }
+
+        if (response.status >= 500) {
+          if (attempt < MAX_ATTEMPTS - 1) {
+            await sleep(this.retryDelayMs(response, attempt));
+            continue;
+          }
+          throw new PipedriveServerError(`Pipedrive server error with status ${response.status}`, {
+            endpoint,
+            status: response.status,
+          });
+        }
+
+        if (!response.ok) {
+          const message = await this.readErrorMessage(response);
+          const options = { endpoint, status: response.status };
+          if (response.status === 401 || response.status === 403) {
+            throw new PipedriveAuthError(message, options);
+          }
+          if (response.status === 404) {
+            throw new PipedriveNotFoundError(message, options);
+          }
+          if (response.status === 400 || response.status === 409 || response.status === 422) {
+            throw new PipedriveValidationError(message, options);
+          }
+          throw new PipedriveError(message, options);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        return {
+          bytes: Buffer.from(arrayBuffer),
+          contentType: response.headers.get("content-type"),
+        };
       } catch (error) {
         if (error instanceof PipedriveError) {
           throw error;
