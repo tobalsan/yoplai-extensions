@@ -1,8 +1,10 @@
 import {
   CustomerInvoiceSchema,
   ListInvoicesParamsSchema,
+  SearchInvoicesParamsSchema,
   type CustomerInvoice,
 } from "./models.js";
+import { FilterBuilder, type FilterClause } from "./filter-builder.js";
 import {
   PennylaneAuthError,
   PennylaneConnectionError,
@@ -229,14 +231,72 @@ export class PennylaneClient {
    */
   async listInvoices(input: unknown = {}): Promise<{ invoices: CustomerInvoice[] }> {
     const params = ListInvoicesParamsSchema.parse(input);
+    return this.fetchInvoices({ cursor: params.cursor, limit: params.limit });
+  }
+
+  /**
+   * Search customer invoices by customer, `external_reference`, status, and
+   * date. Each provided filter is translated into a Pennylane filter clause via
+   * `FilterBuilder` and AND-combined into a single `filter` param. Results are
+   * cursor-walked exactly like `listInvoices` (the `filter` is re-sent on every
+   * page, as the cursor encodes position only — not the filter/sort).
+   */
+  async searchInvoices(input: unknown = {}): Promise<{ invoices: CustomerInvoice[] }> {
+    const params = SearchInvoicesParamsSchema.parse(input);
+
+    const clauses: FilterClause[] = [];
+    if (params.customerId !== undefined) {
+      clauses.push({ field: "customer_id", operator: "eq", value: params.customerId });
+    }
+    if (params.externalReference !== undefined) {
+      clauses.push({
+        field: "external_reference",
+        operator: "eq",
+        value: params.externalReference,
+      });
+    }
+    if (params.status !== undefined) {
+      clauses.push(
+        Array.isArray(params.status)
+          ? { field: "status", operator: "in", value: params.status }
+          : { field: "status", operator: "eq", value: params.status },
+      );
+    }
+    if (params.dateFrom !== undefined) {
+      clauses.push({ field: "date", operator: "gteq", value: params.dateFrom });
+    }
+    if (params.dateTo !== undefined) {
+      clauses.push({ field: "date", operator: "lteq", value: params.dateTo });
+    }
+
+    const filter = FilterBuilder.from(clauses).toJSON();
+
+    return this.fetchInvoices({
+      cursor: params.cursor,
+      limit: params.limit,
+      filter: clauses.length > 0 ? filter : undefined,
+    });
+  }
+
+  /**
+   * Shared invoice fetch + cursor walk. When `cursor` is provided a single page
+   * is returned; otherwise every page is fetched and concatenated. The `filter`
+   * (already a JSON array string) is passed through on every request.
+   */
+  private async fetchInvoices(input: {
+    cursor?: string;
+    limit: number;
+    filter?: string;
+  }): Promise<{ invoices: CustomerInvoice[] }> {
     const invoices: CustomerInvoice[] = [];
-    let cursor = params.cursor;
-    const singlePage = params.cursor !== undefined;
+    let cursor = input.cursor;
+    const singlePage = input.cursor !== undefined;
 
     for (;;) {
       const page = (await this.request("GET", "customer_invoices", {
         cursor,
-        limit: params.limit,
+        limit: input.limit,
+        filter: input.filter,
       })) as CursorPage;
 
       for (const item of page.items ?? []) {

@@ -81,3 +81,35 @@ export const ListInvoicesParamsSchema = z.object({
   limit: z.number().int().min(1).max(100).optional().default(20),
 });
 export type ListInvoicesParams = z.infer<typeof ListInvoicesParamsSchema>;
+
+/** ISO calendar date, `YYYY-MM-DD`, as used by the Pennylane date filters. */
+const IsoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");
+
+/**
+ * Params for `search_invoices`. Every filter below is translated into a
+ * Pennylane filter clause by `FilterBuilder` and AND-combined into one `filter`
+ * query param. All are optional; omitting all of them lists every invoice.
+ *
+ * - `customerId` → `customer_id eq` (invoices are filterable by customer id)
+ * - `externalReference` → `external_reference eq` (our Pipedrive deal-id hook;
+ *   invoices support only `eq` on this field)
+ * - `status` → `status eq` (single) or `status in` (list). Note: `status`
+ *   filtering is documented in Pennylane's prose guides but is unconfirmed in
+ *   the OpenAPI schema (§2.1); prefer `draft eq` when you only need drafts vs.
+ *   finalized. Kept here because the tool contract filters by status.
+ * - `dateFrom` / `dateTo` → `date gteq` / `date lteq` (inclusive range)
+ */
+export const SearchInvoicesParamsSchema = z
+  .object({
+    customerId: z.union([z.string(), z.number()]).optional(),
+    externalReference: z.string().optional(),
+    status: z.union([z.string(), z.array(z.string()).nonempty()]).optional(),
+    dateFrom: IsoDate.optional(),
+    dateTo: IsoDate.optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional().default(20),
+  })
+  .strict();
+export type SearchInvoicesParams = z.infer<typeof SearchInvoicesParamsSchema>;

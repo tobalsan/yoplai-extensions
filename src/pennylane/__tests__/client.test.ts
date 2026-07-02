@@ -183,6 +183,93 @@ describe("PennylaneClient", () => {
     }
   });
 
+  it("searchInvoices AND-combines filters into one filter param", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [{ id: 5, amount: "9.00" }], has_more: false, next_cursor: null }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.searchInvoices({
+      customerId: 111,
+      externalReference: "deal-7",
+      status: ["paid", "sent"],
+      dateFrom: "2025-06-01",
+      dateTo: "2025-06-30",
+    });
+
+    expect(result.invoices).toHaveLength(1);
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.pathname).toBe("/api/external/v2/customer_invoices");
+    const filter = JSON.parse(url.searchParams.get("filter") ?? "null");
+    expect(filter).toEqual([
+      { field: "customer_id", operator: "eq", value: 111 },
+      { field: "external_reference", operator: "eq", value: "deal-7" },
+      { field: "status", operator: "in", value: ["paid", "sent"] },
+      { field: "date", operator: "gteq", value: "2025-06-01" },
+      { field: "date", operator: "lteq", value: "2025-06-30" },
+    ]);
+  });
+
+  it("searchInvoices URL-encodes the filter exactly once", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [], has_more: false, next_cursor: null }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.searchInvoices({ externalReference: "deal-7" });
+
+    const raw = String(fetchSpy.mock.calls[0]?.[0]);
+    // Single-encoded: the JSON array's "[{" is "%5B%7B", never double-encoded "%255B".
+    expect(raw).toContain("filter=%5B%7B");
+    expect(raw).not.toContain("%255B");
+  });
+
+  it("searchInvoices uses status eq for a single status", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [], has_more: false, next_cursor: null }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.searchInvoices({ status: "paid" });
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(JSON.parse(url.searchParams.get("filter") ?? "null")).toEqual([
+      { field: "status", operator: "eq", value: "paid" },
+    ]);
+  });
+
+  it("searchInvoices omits the filter param when no filters are given", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [], has_more: false, next_cursor: null }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.searchInvoices({});
+
+    const url = new URL(String(fetchSpy.mock.calls[0]?.[0]));
+    expect(url.searchParams.has("filter")).toBe(false);
+  });
+
+  it("searchInvoices re-sends the same filter on every page while walking the cursor", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [{ id: 1, amount: "1.00" }], has_more: true, next_cursor: "C2" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [{ id: 2, amount: "2.00" }], has_more: false, next_cursor: null }),
+      );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    const result = await client.searchInvoices({ externalReference: "deal-9" });
+
+    expect(result.invoices.map((i) => i.id)).toEqual(["1", "2"]);
+    const firstFilter = new URL(String(fetchSpy.mock.calls[0]?.[0])).searchParams.get("filter");
+    const secondUrl = new URL(String(fetchSpy.mock.calls[1]?.[0]));
+    expect(secondUrl.searchParams.get("filter")).toBe(firstFilter);
+    expect(secondUrl.searchParams.get("cursor")).toBe("C2");
+  });
+
   it("verifies a token via GET /me", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
