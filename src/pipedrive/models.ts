@@ -267,3 +267,149 @@ export const ListDealDiscountsResultSchema = z.object({
   count: z.number(),
 });
 export type ListDealDiscountsResult = z.infer<typeof ListDealDiscountsResultSchema>;
+
+// ---------------------------------------------------------------------------
+// Deal-field schema (custom-field metadata) — Pipedrive API v1 (dealFields)
+// ---------------------------------------------------------------------------
+
+/** A selectable option on an enum/set custom field. */
+export const DealFieldOptionSchema = z
+  .object({
+    // Pipedrive option ids are usually numeric but can be strings or even
+    // booleans (e.g. yes/no style fields); accept all and stringify downstream.
+    id: z.union([z.number(), z.string(), z.boolean()]),
+    label: z.coerce.string(),
+  })
+  .passthrough();
+export type DealFieldOption = z.infer<typeof DealFieldOptionSchema>;
+
+/**
+ * A Pipedrive dealField definition. `key` is the (often hash-like) column key
+ * used on the deal payload; `field_type` drives normalization. Unknown extra
+ * properties from the API are captured under `extra_fields`.
+ */
+export const DealFieldSchema = z.object({
+  id: z.number().nullable(),
+  key: z.string(),
+  name: z.string(),
+  field_type: z.string(),
+  options: z.array(DealFieldOptionSchema).nullable().optional(),
+  edit_flag: z.boolean().optional(),
+  add_visible_flag: z.boolean().optional(),
+  mandatory_flag: z.boolean().optional(),
+  extra_fields: z.record(z.unknown()).optional(),
+});
+export type DealField = z.infer<typeof DealFieldSchema>;
+
+/** v1 offset-pagination metadata block. */
+export const PaginationInfoSchema = z.object({
+  start: z.number(),
+  limit: z.number(),
+  more_items_in_collection: z.boolean(),
+  next_start: z.number().nullable().optional(),
+});
+export type PaginationInfo = z.infer<typeof PaginationInfoSchema>;
+
+export const ListDealFieldsParamsSchema = z
+  .object({
+    start: z.number().int().nonnegative().optional().describe("Offset for v1 pagination (default 0)."),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(500)
+      .optional()
+      .describe("Page size, 1-500 (default 100)."),
+  })
+  .strict();
+export type ListDealFieldsParams = z.infer<typeof ListDealFieldsParamsSchema>;
+
+export const ListDealFieldsResultSchema = z.object({
+  fields: z.array(DealFieldSchema),
+  pagination: PaginationInfoSchema.nullable(),
+});
+export type ListDealFieldsResult = z.infer<typeof ListDealFieldsResultSchema>;
+
+export const GetDealFieldParamsSchema = z
+  .object({
+    field_id: PositiveIntFromInput.describe("Numeric ID of the deal field to retrieve."),
+  })
+  .strict();
+export type GetDealFieldParams = z.infer<typeof GetDealFieldParamsSchema>;
+
+// ---------------------------------------------------------------------------
+// FieldRegistry — cached key→field-meta map
+// ---------------------------------------------------------------------------
+
+/** Normalization-facing metadata for one custom field. */
+export const FieldMetaSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  /** enum/set option map: string option id → label. Null for non-option types. */
+  options: z.record(z.string()).nullable(),
+  is_multiple: z.boolean(),
+});
+export type FieldMeta = z.infer<typeof FieldMetaSchema>;
+
+/** The cached registry: key → FieldMeta, plus provenance for TTL/versioning. */
+export const FieldRegistrySchema = z.object({
+  version: z.string(),
+  built_at: z.string(),
+  entity: z.string(),
+  by_key: z.record(FieldMetaSchema),
+});
+export type FieldRegistry = z.infer<typeof FieldRegistrySchema>;
+
+// ---------------------------------------------------------------------------
+// get_deal params / result
+// ---------------------------------------------------------------------------
+
+export const DealOutputModeSchema = z.enum(["full", "lean"]);
+export type DealOutputMode = z.infer<typeof DealOutputModeSchema>;
+
+export const GetDealParamsSchema = z
+  .object({
+    deal_id: PositiveIntFromInput.describe("Numeric ID of the deal to retrieve."),
+    output_type: DealOutputModeSchema.optional().describe(
+      'Output mode: "full" (default) returns normalized custom fields + metadata; "lean" strips them.',
+    ),
+  })
+  .strict();
+export type GetDealParams = z.infer<typeof GetDealParamsSchema>;
+
+/** Metadata describing one normalized custom field. */
+export const NormalizedFieldMetadataSchema = z.object({
+  key: z.string(),
+  type: z.string(),
+});
+export type NormalizedFieldMetadata = z.infer<typeof NormalizedFieldMetadataSchema>;
+
+export const DealDetailSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  value: z.number().nullable(),
+  currency: z.string().nullable(),
+  status: z.string().nullable(),
+  stage_id: z.number().nullable(),
+  pipeline_id: z.number().nullable(),
+  person_id: z.number().nullable(),
+  org_id: z.number().nullable(),
+  user_id: z.number().nullable(),
+  expected_close_date: z.string().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
+  won_time: z.string().nullable(),
+  deal_url: z.string(),
+  normalized_extra_fields: z.record(z.unknown()).optional(),
+  normalized_field_metadata: z.record(NormalizedFieldMetadataSchema).optional(),
+});
+export type DealDetail = z.infer<typeof DealDetailSchema>;
+
+export const RefreshFieldRegistryResultSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  field_count: z.number().optional(),
+  version: z.string().optional(),
+  built_at: z.string().optional(),
+});
+export type RefreshFieldRegistryResult = z.infer<typeof RefreshFieldRegistryResultSchema>;

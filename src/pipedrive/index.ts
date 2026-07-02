@@ -1,9 +1,14 @@
+import { z } from "zod";
+
 import { PipedriveClient } from "./client.js";
 import {
   DownloadFileParamsSchema,
+  GetDealFieldParamsSchema,
+  GetDealParamsSchema,
   GetPipelineParamsSchema,
   GetStageParamsSchema,
   ListDealDiscountsParamsSchema,
+  ListDealFieldsParamsSchema,
   ListDealFilesParamsSchema,
   ListDealProductsParamsSchema,
   ListDealsParamsSchema,
@@ -12,6 +17,8 @@ import {
   PipedriveConfigSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
+
+const RefreshFieldRegistryParamsSchema = z.object({}).strict();
 
 export default defineToolExtension({
   id: "pipedrive",
@@ -22,7 +29,9 @@ export default defineToolExtension({
 
 Pipeline & stage metadata: pipedrive_list_pipelines / pipedrive_get_pipeline and pipedrive_list_stages / pipedrive_get_stage (optional pipeline_id filter) resolve stage/pipeline names — use them to detect stages like "Final negotiation" / "Won". Deal line items: pipedrive_list_deal_products returns each product's quantity, unit price (item_price) and billing_frequency (the source for devis amounts and recurring MRR/ARR products). pipedrive_list_deal_discounts returns deal-level discounts. All list ops use the same cursor pagination — page with next_cursor until it is null.
 
-To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds the sale info): call pipedrive_list_deal_files with a deal_id to see each file's name, type, and size, pick the right file, then call pipedrive_download_file with its file_id. download_file returns the RAW bytes base64-encoded (content_base64) — the extension never parses or transforms the file. Decode and parse it downstream in your workflow.`,
+To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds the sale info): call pipedrive_list_deal_files with a deal_id to see each file's name, type, and size, pick the right file, then call pipedrive_download_file with its file_id. download_file returns the RAW bytes base64-encoded (content_base64) — the extension never parses or transforms the file. Decode and parse it downstream in your workflow.
+
+pipedrive_get_deal reads one deal in full detail: all standard fields plus custom fields resolved to human-readable labels and typed values (never raw hash keys). output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata; "lean" strips them. Custom-field schema is available via pipedrive_list_deal_fields / pipedrive_get_deal_field (key → label/options/type, v1 offset pagination via start/limit) — use these for invoice mapping and required-field logic. Field metadata is cached locally; pipedrive_refresh_field_registry forces a rebuild if the schema changed.`,
   configSchema: PipedriveConfigSchema,
   requiredSecrets: ["apiToken", "domain"],
   createTools(config) {
@@ -116,6 +125,45 @@ To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds 
         execute: async (params) => {
           const parsed = ListDealDiscountsParamsSchema.parse(params);
           return await client.listDealDiscounts(parsed);
+        },
+      },
+      {
+        name: "get_deal",
+        description:
+          "Read a single deal in full detail by deal_id. Returns all standard fields (title, value, currency, status, stage/pipeline, person/org/owner, expected close date, created/updated/won times) plus a deal URL. Custom fields resolve to human-readable labels and typed values (enum→label, set→[labels], monetary→{amount,currency}, date-range→{from,until}) — never raw hash keys. output_type 'full' (default) includes normalized_extra_fields + normalized_field_metadata; 'lean' strips them.",
+        parameters: GetDealParamsSchema,
+        execute: async (params) => {
+          const parsed = GetDealParamsSchema.parse(params);
+          return await client.getDeal(parsed);
+        },
+      },
+      {
+        name: "list_deal_fields",
+        description:
+          "List Pipedrive custom-field (dealField) definitions — the schema needed for invoice mapping and required-field logic. Each field carries key → name/field_type/options (enum/set) plus flags. Uses v1 offset pagination: pass start/limit and follow pagination.next_start while pagination.more_items_in_collection is true.",
+        parameters: ListDealFieldsParamsSchema,
+        execute: async (params) => {
+          const parsed = ListDealFieldsParamsSchema.parse(params);
+          return await client.listDealFields(parsed);
+        },
+      },
+      {
+        name: "get_deal_field",
+        description:
+          "Get a single custom-field (dealField) definition by numeric field_id, including its key, name, field_type, and options.",
+        parameters: GetDealFieldParamsSchema,
+        execute: async (params) => {
+          const parsed = GetDealFieldParamsSchema.parse(params);
+          return await client.getDealField(parsed);
+        },
+      },
+      {
+        name: "refresh_field_registry",
+        description:
+          "Force a rebuild of the locally-cached custom-field registry from the Pipedrive API. Use after the deal-field schema changes so subsequent get_deal calls resolve the latest labels/options.",
+        parameters: RefreshFieldRegistryParamsSchema,
+        execute: async () => {
+          return await client.refreshFieldRegistry();
         },
       },
     ];

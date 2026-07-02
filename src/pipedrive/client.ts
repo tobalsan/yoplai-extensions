@@ -8,14 +8,25 @@ import {
   PipedriveValidationError,
 } from "./errors.js";
 import {
+  FieldRegistryStore,
+  type FieldRegistryStoreOptions,
+} from "./field-registry.js";
+import {
+  type DealDetail,
+  DealFieldSchema,
+  type DealField,
   type DealDiscount,
   type DealProduct,
   type DealSummary,
   type DownloadFileParams,
   type DownloadFileResult,
   type File,
+  type GetDealFieldParams,
+  type GetDealParams,
   type ListDealDiscountsParams,
   type ListDealDiscountsResult,
+  type ListDealFieldsParams,
+  type ListDealFieldsResult,
   type ListDealFilesParams,
   type ListDealFilesResult,
   type ListDealProductsParams,
@@ -26,15 +37,23 @@ import {
   type ListPipelinesResult,
   type ListStagesParams,
   type ListStagesResult,
+  type PaginationInfo,
   type Pipeline,
   type PipedriveConfig,
+  type RefreshFieldRegistryResult,
   type Stage,
 } from "./models.js";
+import { normalizeCustomFields } from "./normalizer.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_ATTEMPTS = 6;
 const DEFAULT_PAGE_LIMIT = 100;
 const MAX_PAGE_LIMIT = 500;
+
+/** v1 dealFields page size when the registry builder paginates. */
+const FIELD_PAGE_LIMIT = 500;
+/** Safety bound on dealField pagination pages. */
+const MAX_FIELD_PAGES = 20;
 
 /** Number of internal pages fetched per list_deals call when a close-date range narrows results. */
 const MAX_INTERNAL_PAGES = 20;
@@ -68,6 +87,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export interface PipedriveClientOptions extends PipedriveConfig {
   timeoutMs?: number;
+  /** Overrides for the file-backed field-registry cache (path/TTL/grace/clock). */
+  registryOptions?: FieldRegistryStoreOptions;
 }
 
 interface RawDeal {
@@ -83,6 +104,10 @@ interface RawDeal {
   owner_id?: unknown;
   user_id?: unknown;
   expected_close_date?: unknown;
+  add_time?: unknown;
+  update_time?: unknown;
+  won_time?: unknown;
+  custom_fields?: unknown;
   [key: string]: unknown;
 }
 
@@ -108,6 +133,7 @@ export class PipedriveClient {
   readonly domain: string;
   readonly baseUrlV1: string;
   readonly baseUrlV2: string;
+  readonly registry: FieldRegistryStore;
   private readonly timeoutMs: number;
 
   constructor(options: PipedriveClientOptions) {
@@ -116,6 +142,10 @@ export class PipedriveClient {
     this.baseUrlV1 = `https://${this.domain}.pipedrive.com/api/v1`;
     this.baseUrlV2 = `https://${this.domain}.pipedrive.com/api/v2`;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.registry = new FieldRegistryStore(
+      () => this.fetchAllDealFields(),
+      options.registryOptions,
+    );
   }
 
   /**
@@ -228,6 +258,162 @@ export class PipedriveClient {
       deal_id: toNumberOrNull(raw.deal_id),
       add_time: toStringOrNull(raw.add_time),
       url: toStringOrNull(raw.url),
+    };
+  }
+
+  /**
+   * List custom-field (dealField) definitions for one v1 offset page.
+   * Returns the raw field list + pagination block so callers can page through.
+   */
+  async listDealFields(params: ListDealFieldsParams = {}): Promise<ListDealFieldsResult> {
+    const query: Record<string, string | number> = {
+      start: params.start ?? 0,
+      limit: params.limit ?? DEFAULT_PAGE_LIMIT,
+    };
+    const data = await this.requestJson("GET", "v1", "dealFields", query);
+    const rows = Array.isArray(data.data) ? data.data : [];
+    const fields = rows.map((row) => this.toDealField(row));
+
+    const additional = data.additional_data as Record<string, unknown> | undefined;
+    const pagination = this.toPagination(additional?.pagination);
+    return { fields, pagination };
+  }
+
+  /** Get a single custom-field (dealField) definition by numeric ID (v1). */
+  async getDealField(params: GetDealFieldParams): Promise<DealField> {
+    const data = await this.requestJson("GET", "v1", `dealFields/${params.field_id}`);
+    return this.toDealField(data.data);
+  }
+
+  /**
+   * Fetch every dealField across all v1 offset pages. Used by the registry
+   * builder; not exposed as a tool directly.
+   */
+  async fetchAllDealFields(): Promise<DealField[]> {
+    const all: DealField[] = [];
+    let start = 0;
+
+    for (let page = 0; page < MAX_FIELD_PAGES; page += 1) {
+      const result = await this.listDealFields({ start, limit: FIELD_PAGE_LIMIT });
+      all.push(...result.fields);
+
+      const pagination = result.pagination;
+      if (!pagination || !pagination.more_items_in_collection) break;
+      const next = pagination.next_start;
+      if (typeof next !== "number") break;
+      start = next;
+    }
+
+    return all;
+  }
+
+  /** Force a rebuild of the cached field registry from the API. */
+  async refreshFieldRegistry(): Promise<RefreshFieldRegistryResult> {
+    try {
+      const registry = await this.registry.refresh();
+      return {
+        success: true,
+        message: "Field registry refreshed successfully",
+        field_count: Object.keys(registry.by_key).length,
+        version: registry.version,
+        built_at: registry.built_at,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to refresh registry: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /**
+   * Full single-deal read. Flattens v2 `custom_fields`, resolves them through
+   * the file-cached registry + normalizer, and builds the deal URL. `full`
+   * mode (default) returns normalized custom fields + metadata; `lean` strips
+   * them.
+   */
+  async getDeal(params: GetDealParams): Promise<DealDetail> {
+    const mode = params.output_type ?? "full";
+    const data = await this.requestJson("GET", "v2", `deals/${params.deal_id}`);
+    const raw = (data.data ?? {}) as RawDeal;
+
+    const detail: DealDetail = {
+      id: typeof raw.id === "number" ? raw.id : params.deal_id,
+      title: typeof raw.title === "string" ? raw.title : "",
+      value: toNumberOrNull(raw.value),
+      currency: toStringOrNull(raw.currency),
+      status: toStringOrNull(raw.status),
+      stage_id: toNumberOrNull(raw.stage_id),
+      pipeline_id: toNumberOrNull(raw.pipeline_id),
+      person_id: toNumberOrNull(raw.person_id),
+      org_id: toNumberOrNull(raw.org_id),
+      user_id: toNumberOrNull(raw.owner_id ?? raw.user_id),
+      expected_close_date: toStringOrNull(raw.expected_close_date),
+      add_time: toStringOrNull(raw.add_time),
+      update_time: toStringOrNull(raw.update_time),
+      won_time: toStringOrNull(raw.won_time),
+      deal_url: `https://${this.domain}.pipedrive.com/deal/${params.deal_id}`,
+    };
+
+    if (mode === "lean") {
+      return detail;
+    }
+
+    const extraFields = flattenCustomFields(raw);
+    let registry = null;
+    try {
+      registry = await this.registry.get();
+    } catch {
+      // Registry unavailable (fetch failed, no cache): return standard fields
+      // rather than fail the whole read. Custom fields simply stay unresolved.
+      registry = null;
+    }
+
+    const normalized = normalizeCustomFields(extraFields, registry);
+    detail.normalized_extra_fields = normalized.normalized_extra_fields;
+    detail.normalized_field_metadata = normalized.normalized_field_metadata;
+    return detail;
+  }
+
+  private toDealField(raw: unknown): DealField {
+    const record = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const known = new Set([
+      "id",
+      "key",
+      "name",
+      "field_type",
+      "options",
+      "edit_flag",
+      "add_visible_flag",
+      "mandatory_flag",
+    ]);
+    const extra_fields: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(record)) {
+      if (!known.has(key)) extra_fields[key] = value;
+    }
+    return DealFieldSchema.parse({
+      id: typeof record.id === "number" ? record.id : null,
+      key: typeof record.key === "string" ? record.key : "",
+      name: typeof record.name === "string" ? record.name : "",
+      field_type: typeof record.field_type === "string" ? record.field_type : "",
+      options: Array.isArray(record.options) ? record.options : null,
+      edit_flag: typeof record.edit_flag === "boolean" ? record.edit_flag : undefined,
+      add_visible_flag:
+        typeof record.add_visible_flag === "boolean" ? record.add_visible_flag : undefined,
+      mandatory_flag:
+        typeof record.mandatory_flag === "boolean" ? record.mandatory_flag : undefined,
+      extra_fields,
+    });
+  }
+
+  private toPagination(raw: unknown): PaginationInfo | null {
+    if (!raw || typeof raw !== "object") return null;
+    const p = raw as Record<string, unknown>;
+    return {
+      start: toNumberOrNull(p.start) ?? 0,
+      limit: toNumberOrNull(p.limit) ?? 0,
+      more_items_in_collection: p.more_items_in_collection === true,
+      next_start: toNumberOrNull(p.next_start),
     };
   }
 
@@ -590,6 +776,51 @@ export class PipedriveClient {
       return fallback;
     }
   }
+}
+
+/** Deal-standard keys that are never treated as custom fields. */
+const STANDARD_DEAL_KEYS = new Set([
+  "id",
+  "title",
+  "value",
+  "currency",
+  "status",
+  "stage_id",
+  "pipeline_id",
+  "person_id",
+  "org_id",
+  "user_id",
+  "owner_id",
+  "creator_user_id",
+  "expected_close_date",
+  "add_time",
+  "update_time",
+  "won_time",
+  "custom_fields",
+]);
+
+/**
+ * Flatten a raw deal's custom fields into a single hash-key map. Pipedrive v2
+ * nests custom fields under `custom_fields`; v1 spreads hash keys at the top
+ * level. This merges both, dropping the nested container and standard keys.
+ */
+export function flattenCustomFields(raw: RawDeal): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  // v1-style: hash keys spread at the top level.
+  for (const [key, value] of Object.entries(raw)) {
+    if (!STANDARD_DEAL_KEYS.has(key)) out[key] = value;
+  }
+
+  // v2-style: nested `custom_fields` container.
+  const nested = raw.custom_fields;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    for (const [key, value] of Object.entries(nested as Record<string, unknown>)) {
+      out[key] = value;
+    }
+  }
+
+  return out;
 }
 
 /**
