@@ -138,6 +138,7 @@ interface RawFile {
   deal_id?: unknown;
   add_time?: unknown;
   url?: unknown;
+  remote_location?: unknown;
   [key: string]: unknown;
 }
 
@@ -414,6 +415,7 @@ export class PipedriveClient {
       deal_id: toNumberOrNull(raw.deal_id),
       add_time: toStringOrNull(raw.add_time),
       url: toStringOrNull(raw.url),
+      remote_location: toStringOrNull(raw.remote_location),
     };
   }
 
@@ -729,6 +731,23 @@ export class PipedriveClient {
         }
 
         if (!response.ok) {
+          // A non-ok response whose final URL left *.pipedrive.com means the
+          // file is stored remotely (e.g. Google Drive) and Pipedrive 302'd us
+          // to the provider, which needs its own auth — the bytes aren't
+          // retrievable via the API token. Surface the provider link instead of
+          // a misleading 401/500. (S3-hosted files return 200 and never hit this.)
+          let finalHost = "";
+          try {
+            finalHost = new URL(response.url).host;
+          } catch {
+            finalHost = "";
+          }
+          if (finalHost && !finalHost.endsWith("pipedrive.com")) {
+            throw new PipedriveError(
+              `File is stored remotely (${finalHost}) and cannot be downloaded via the Pipedrive API. Open it directly at: ${response.url}`,
+              { endpoint, status: response.status },
+            );
+          }
           const message = await this.readErrorMessage(response);
           const options = { endpoint, status: response.status };
           if (response.status === 401 || response.status === 403) {

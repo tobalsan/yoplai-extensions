@@ -223,6 +223,12 @@ export const FileSchema = z.object({
   deal_id: z.number().nullable().describe("The deal this file is linked to."),
   add_time: z.string().nullable().describe("When the file was uploaded (ISO-ish)."),
   url: z.string().nullable().describe("Pipedrive URL for the file, when present."),
+  remote_location: z
+    .string()
+    .nullable()
+    .describe(
+      'Remote storage provider when the file lives outside Pipedrive (e.g. "googledocs", "dropbox"). Such files cannot be fetched by download_file — it returns a typed error with the external link. null for natively-stored files, which download normally.',
+    ),
 });
 export type File = z.infer<typeof FileSchema>;
 

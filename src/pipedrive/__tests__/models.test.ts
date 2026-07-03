@@ -91,9 +91,25 @@ describe("File entity + deal-file schemas", () => {
       deal_id: 42,
       add_time: null,
       url: null,
+      remote_location: null,
     });
     expect(parsed.name).toBe("sale.xlsx");
     expect(parsed.type).toBe("xlsx");
+    expect(parsed.remote_location).toBeNull();
+  });
+
+  it("requires remote_location on the file entity", () => {
+    expect(
+      FileSchema.safeParse({
+        id: 1,
+        name: "sale.xlsx",
+        type: "xlsx",
+        size: 100,
+        deal_id: 42,
+        add_time: null,
+        url: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("requires deal_id for list_deal_files and coerces strings", () => {

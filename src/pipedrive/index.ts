@@ -38,7 +38,7 @@ To resolve a deal's linked entities for an invoice customer: pass the deal's org
 
 Pipeline & stage metadata: pipedrive_list_pipelines / pipedrive_get_pipeline and pipedrive_list_stages / pipedrive_get_stage (optional pipeline_id filter) resolve stage/pipeline names — use them to detect stages like "Final negotiation" / "Won". Deal line items: pipedrive_list_deal_products returns each product's quantity, unit price (item_price) and billing_frequency (the source for devis amounts and recurring MRR/ARR products). pipedrive_list_deal_discounts returns deal-level discounts. All list ops use the same cursor pagination — page with next_cursor until it is null.
 
-To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds the sale info): call pipedrive_list_deal_files with a deal_id to see each file's name, type, and size, pick the right file, then call pipedrive_download_file with its file_id. download_file returns the RAW bytes base64-encoded (content_base64) — the extension never parses or transforms the file. Decode and parse it downstream in your workflow.
+To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds the sale info): call pipedrive_list_deal_files with a deal_id to see each file's name, type, and size, pick the right file, then call pipedrive_download_file with its file_id. download_file returns the RAW bytes base64-encoded (content_base64) — the extension never parses or transforms the file. Decode and parse it downstream in your workflow. A file with a non-null remote_location (e.g. "googledocs") is hosted externally — download_file returns a typed error with the external link instead of bytes; surface that link to the user rather than retrying.
 
 pipedrive_get_deal reads one deal in full detail: all standard fields plus custom fields resolved to human-readable labels and typed values (never raw hash keys). output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata; "lean" strips them. Custom-field schema is available via pipedrive_list_deal_fields / pipedrive_get_deal_field (key → label/options/type, v1 offset pagination via start/limit) — use these for invoice mapping and required-field logic. Field metadata is cached locally; pipedrive_refresh_field_registry forces a rebuild if the schema changed.
 
@@ -72,7 +72,7 @@ pipedrive_validate verifies auth and API reachability.`,
       {
         name: "list_deal_files",
         description:
-          "List the files/attachments on a deal with a lean metadata projection so you can pick the right one. Returns { files, count } where each file has { id, name, type, size (bytes), deal_id, add_time, url }. Returns up to 500 files (deals rarely have more). Read-only; nothing is downloaded or parsed. Pass a file's id to download_file to fetch its bytes.",
+          "List the files/attachments on a deal with a lean metadata projection so you can pick the right one. Returns { files, count } where each file has { id, name, type, size (bytes), deal_id, add_time, url, remote_location }. Returns up to 500 files (deals rarely have more). Read-only; nothing is downloaded or parsed. Pass a file's id to download_file to fetch its bytes — but if remote_location is non-null (e.g. \"googledocs\"), the file is hosted externally and download_file will return a typed error with the link instead.",
         parameters: ListDealFilesParamsSchema,
         execute: async (params) => {
           const parsed = ListDealFilesParamsSchema.parse(params);

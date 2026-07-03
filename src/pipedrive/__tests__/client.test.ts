@@ -251,6 +251,7 @@ function rawFile(overrides: Record<string, unknown> = {}): Record<string, unknow
     deal_id: 42,
     add_time: "2025-07-01 10:00:00",
     url: "https://acme.pipedrive.com/file/100",
+    remote_location: null,
     ...overrides,
   };
 }
@@ -279,6 +280,7 @@ describe("PipedriveClient.listDealFiles", () => {
       deal_id: 42,
       add_time: "2025-07-01 10:00:00",
       url: "https://acme.pipedrive.com/file/100",
+      remote_location: null,
     });
   });
 
@@ -337,6 +339,21 @@ describe("PipedriveClient.downloadFile", () => {
     await expect(createClient().downloadFile({ file_id: 999 })).rejects.toBeInstanceOf(
       PipedriveNotFoundError,
     );
+  });
+
+  it("surfaces a clear error with the external link when a file is stored remotely (e.g. Google Drive)", async () => {
+    const resp = new Response("unauthorized", { status: 401 });
+    Object.defineProperty(resp, "url", {
+      value: "https://drive.google.com/file/d/abc/view",
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(resp);
+
+    await expect(createClient().downloadFile({ file_id: 749981 })).rejects.toMatchObject({
+      message: expect.stringContaining("stored remotely"),
+    });
+    await expect(createClient().downloadFile({ file_id: 749981 })).rejects.toMatchObject({
+      message: expect.stringContaining("https://drive.google.com/file/d/abc/view"),
+    });
   });
 });
 
