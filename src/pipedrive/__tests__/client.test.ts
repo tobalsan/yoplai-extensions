@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PipedriveClient, inCloseDateRange } from "../client.js";
+import { PipedriveClient, inCloseDateRange, inWonDateRange } from "../client.js";
 import {
   PipedriveAuthError,
   PipedriveNotFoundError,
@@ -33,6 +33,7 @@ function rawDeal(overrides: Record<string, unknown> = {}): Record<string, unknow
     org_id: 20,
     owner_id: 30,
     expected_close_date: "2025-07-15",
+    won_time: null,
     ...overrides,
   };
 }
@@ -125,10 +126,11 @@ describe("PipedriveClient.listDeals", () => {
       org_id: 20,
       user_id: 30,
       expected_close_date: "2025-07-15",
+      won_time: null,
       deal_url: "https://acme.pipedrive.com/deal/42",
     });
     // Lean: no raw/custom fields leak through.
-    expect(Object.keys(result.deals[0])).toHaveLength(12);
+    expect(Object.keys(result.deals[0])).toHaveLength(13);
   });
 
   it("passes an explicit cursor through and returns the native next_cursor without a range", async () => {
@@ -173,6 +175,45 @@ describe("PipedriveClient.listDeals", () => {
     expect(spy).toHaveBeenCalledTimes(2);
     expect(url(spy, 1).searchParams.get("cursor")).toBe("page-2");
     expect(result.deals.map((d) => d.id)).toEqual([2, 4]);
+    expect(result.next_cursor).toBeNull();
+    expect(result.count).toBe(2);
+  });
+
+  it("assembles multiple cursor pages to fill a won-date-filtered page with no gaps or dupes", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [
+            rawDeal({ id: 1, status: "won", won_time: "2026-05-30 09:00:00" }), // before range → skip
+            rawDeal({ id: 2, status: "won", won_time: "2026-06-10 09:00:00" }), // in range
+          ],
+          additional_data: { next_cursor: "page-2" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [
+            rawDeal({ id: 3, status: "won", won_time: null }), // not won → skip
+            rawDeal({ id: 4, status: "won", won_time: "2026-06-30 23:59:00" }), // in range
+          ],
+          additional_data: { next_cursor: null },
+        }),
+      );
+
+    const result = await createClient().listDeals({
+      status: "won",
+      won_from: "2026-06-01",
+      won_to: "2026-06-30",
+    });
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(url(spy, 1).searchParams.get("cursor")).toBe("page-2");
+    expect(result.deals.map((d) => d.id)).toEqual([2, 4]);
+    expect(result.deals.map((d) => d.won_time)).toEqual([
+      "2026-06-10 09:00:00",
+      "2026-06-30 23:59:00",
+    ]);
     expect(result.next_cursor).toBeNull();
     expect(result.count).toBe(2);
   });
@@ -548,6 +589,20 @@ describe("inCloseDateRange", () => {
     expect(inCloseDateRange("2025-07-31", "2025-07-01", "2025-07-31")).toBe(true);
     expect(inCloseDateRange("2025-06-30", "2025-07-01", "2025-07-31")).toBe(false);
     expect(inCloseDateRange("2025-08-01", "2025-07-01", "2025-07-31")).toBe(false);
+  });
+});
+
+describe("inWonDateRange", () => {
+  it("excludes deals without a won_time when a bound is set", () => {
+    expect(inWonDateRange(null, "2026-06-01", null)).toBe(false);
+    expect(inWonDateRange(undefined, null, "2026-06-30")).toBe(false);
+  });
+
+  it("applies inclusive lower and upper bounds, comparing only the date portion", () => {
+    expect(inWonDateRange("2026-06-01 00:00:00", "2026-06-01", "2026-06-30")).toBe(true);
+    expect(inWonDateRange("2026-06-30 23:59:00", "2026-06-01", "2026-06-30")).toBe(true);
+    expect(inWonDateRange("2026-05-31 23:59:00", "2026-06-01", "2026-06-30")).toBe(false);
+    expect(inWonDateRange("2026-07-01 00:00:00", "2026-06-01", "2026-06-30")).toBe(false);
   });
 });
 

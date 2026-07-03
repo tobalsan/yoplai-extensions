@@ -30,7 +30,7 @@ export default defineToolExtension({
   displayName: "Pipedrive",
   description:
     "Read-only Pipedrive data access for the sales pipeline: token-bounded deal retrieval with server-side filters and an expected-close-date range narrowing.",
-  systemPrompt: `Use this extension to read the Pipedrive sales pipeline (read-only). pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
+  systemPrompt: `Use this extension to read the Pipedrive sales pipeline (read-only). pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". For deals WON in a given period, filter by won date with won_from / won_to (compared against each deal's won_time) and set status to "won" — the expected close date is NOT the won date, so never use expected_close_* to answer "won in month X". Every returned deal includes won_time. To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
 
 pipedrive_search_deals does free-text title search (e.g. term "try & buy" to flag Try-and-Buy deals for invoicing exclusion) with optional status/person_id/org_id filters. pipedrive_list_deal_notes and pipedrive_list_deal_activities read a single deal's notes (with author/timestamp) and activity history. These use the same next_cursor pagination — page until next_cursor is null.
 
@@ -62,7 +62,7 @@ pipedrive_validate verifies auth and API reachability.`,
       {
         name: "list_deals",
         description:
-          "List deals from the Pipedrive pipeline with a lean per-deal projection. Supports server-side filters (status [default open], pipeline_id, stage_id, person_id, org_id, user_id) and an expected-close-date range (expected_close_from / expected_close_to, YYYY-MM-DD). Returns { deals, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.",
+          "List deals from the Pipedrive pipeline with a lean per-deal projection (now including won_time). Supports server-side filters (status [default open], pipeline_id, stage_id, person_id, org_id, user_id), an expected-close-date range (expected_close_from / expected_close_to, YYYY-MM-DD), and a won-date range (won_from / won_to, YYYY-MM-DD, filters on won_time). Returns { deals, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.",
         parameters: ListDealsParamsSchema,
         execute: async (params) => {
           const parsed = ListDealsParamsSchema.parse(params);

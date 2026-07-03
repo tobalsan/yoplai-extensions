@@ -66,6 +66,12 @@ describe("ListDealsParamsSchema", () => {
     ).toBe(false);
   });
 
+  it("validates the won-date range format", () => {
+    expect(ListDealsParamsSchema.safeParse({ won_from: "2026-06-01" }).success).toBe(true);
+    expect(ListDealsParamsSchema.safeParse({ won_to: "2026-06-30" }).success).toBe(true);
+    expect(ListDealsParamsSchema.safeParse({ won_from: "06/01/2026" }).success).toBe(false);
+  });
+
   it("rejects an unknown status value", () => {
     expect(ListDealsParamsSchema.safeParse({ status: "archived" }).success).toBe(false);
   });

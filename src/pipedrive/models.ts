@@ -50,6 +50,12 @@ export const ListDealsParamsSchema = z
     expected_close_to: DateOnly.optional().describe(
       "Only include deals whose expected close date is on or before this date (YYYY-MM-DD). Net-new close-date range filter.",
     ),
+    won_from: DateOnly.optional().describe(
+      "Only include deals won on or after this date (YYYY-MM-DD), compared against won_time. Pair with status: \"won\".",
+    ),
+    won_to: DateOnly.optional().describe(
+      "Only include deals won on or before this date (YYYY-MM-DD), compared against won_time. Pair with status: \"won\".",
+    ),
     cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
     limit: PositiveIntFromInput.optional().describe(
       "Max deals per page, 1-500 (default 100). Pagination assembles full pages internally when a close-date range is set.",
@@ -73,6 +79,7 @@ export const DealSummarySchema = z.object({
   org_id: z.number().nullable(),
   user_id: z.number().nullable(),
   expected_close_date: z.string().nullable(),
+  won_time: z.string().nullable(),
   deal_url: z.string().nullable(),
 });
 export type DealSummary = z.infer<typeof DealSummarySchema>;

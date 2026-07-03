@@ -302,15 +302,20 @@ export class PipedriveClient {
 
   /**
    * List deals with server-side filters (pipeline/stage/status/person/org/user)
-   * plus the net-new expected-close-date range filter applied during cursor
-   * pagination assembly. Returns a lean per-deal projection and a next_cursor
-   * that resumes exactly where this page stopped (no gaps or dupes).
+   * plus the net-new expected-close-date and won-date range filters, both
+   * applied client-side during cursor pagination assembly. Returns a lean
+   * per-deal projection and a next_cursor that resumes exactly where this
+   * page stopped (no gaps or dupes).
    */
   async listDeals(params: ListDealsParams): Promise<ListDealsResult> {
     const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
     const from = params.expected_close_from ?? null;
     const to = params.expected_close_to ?? null;
     const hasRange = from !== null || to !== null;
+    const wonFrom = params.won_from ?? null;
+    const wonTo = params.won_to ?? null;
+    const hasWonRange = wonFrom !== null || wonTo !== null;
+    const hasFilter = hasRange || hasWonRange;
 
     const query: Record<string, string | number> = {
       limit,
@@ -340,15 +345,14 @@ export class PipedriveClient {
       pagesFetched += 1;
 
       for (const raw of page.data) {
-        if (hasRange && !inCloseDateRange(raw.expected_close_date, from, to)) {
-          continue;
-        }
+        if (hasRange && !inCloseDateRange(raw.expected_close_date, from, to)) continue;
+        if (hasWonRange && !inWonDateRange(raw.won_time, wonFrom, wonTo)) continue;
         matches.push(this.toDealSummary(raw));
       }
 
       cursor = page.nextCursor;
 
-      if (!hasRange) break;
+      if (!hasFilter) break;
       // Stop once we have at least `limit` in-range matches. We break at a
       // native page boundary (never mid-page), so the returned cursor resumes
       // cleanly with no gaps or dupes. A single page may push the count
@@ -590,6 +594,7 @@ export class PipedriveClient {
       org_id: toNumberOrNull(raw.org_id),
       user_id: toNumberOrNull(raw.owner_id ?? raw.user_id),
       expected_close_date: toStringOrNull(raw.expected_close_date),
+      won_time: toStringOrNull(raw.won_time),
       deal_url: `https://${this.domain}.pipedrive.com/deal/${raw.id}`,
     };
   }
@@ -1088,6 +1093,25 @@ export function inCloseDateRange(
 ): boolean {
   const date = toStringOrNull(value);
   if (date === null) return false;
+  if (from !== null && date < from) return false;
+  if (to !== null && date > to) return false;
+  return true;
+}
+
+/**
+ * Inclusive won-date range check. won_time is a full timestamp (e.g.
+ * "2026-06-15 10:23:00"); only its date portion is compared so a `to` bound on
+ * that same calendar day still matches. Deals not yet won (won_time null) are
+ * excluded when any bound is set.
+ */
+export function inWonDateRange(
+  value: unknown,
+  from: string | null,
+  to: string | null,
+): boolean {
+  const ts = toStringOrNull(value);
+  if (ts === null) return false;
+  const date = ts.slice(0, 10);
   if (from !== null && date < from) return false;
   if (to !== null && date > to) return false;
   return true;
