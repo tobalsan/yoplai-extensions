@@ -506,6 +506,18 @@ describe("PennylaneClient", () => {
     );
   });
 
+  it("validates auth and API reachability", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ user: { id: 1 }, company: { id: 2 } }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await expect(client.validate()).resolves.toEqual({
+      ok: true,
+      account: { user: { id: 1 }, company: { id: 2 } },
+    });
+  });
+
   describe("create_invoice_draft", () => {
     it("POSTs with draft: true and passes external_reference through (snake-cased)", async () => {
       const fetchSpy = vi

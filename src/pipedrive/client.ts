@@ -608,6 +608,11 @@ export class PipedriveClient {
     return url.toString();
   }
 
+  async validate(): Promise<{ ok: true; account: Record<string, unknown> }> {
+    const data = await this.requestJson("GET", "v1", "users/me");
+    return { ok: true, account: asRecord(data.data) };
+  }
+
   private async requestJson(
     method: string,
     version: "v1" | "v2",

@@ -251,6 +251,11 @@ export class PennylaneClient {
     return this.request("GET", "me");
   }
 
+  /** Connectivity/auth probe for the extension validate tool. */
+  async validate(): Promise<{ ok: true; account: JsonValue }> {
+    return { ok: true, account: await this.verifyToken() };
+  }
+
   /**
    * List customer invoices, walking the cursor transparently. When `cursor` is
    * omitted, every page is fetched and concatenated so callers get the full

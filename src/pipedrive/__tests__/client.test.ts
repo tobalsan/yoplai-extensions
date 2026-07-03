@@ -41,6 +41,25 @@ function url(spy: ReturnType<typeof vi.spyOn>, call = 0): URL {
   return new URL(String((spy.mock.calls[call] as unknown[])?.[0]));
 }
 
+describe("PipedriveClient.validate", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("checks auth via users/me", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ data: { id: 42, name: "API User" } }));
+
+    const result = await createClient().validate();
+
+    expect(result).toEqual({ ok: true, account: { id: 42, name: "API User" } });
+    const u = url(spy);
+    expect(u.pathname).toBe("/api/v1/users/me");
+    expect(u.searchParams.get("api_token")).toBe("secret-token");
+  });
+});
+
 describe("PipedriveClient.listDeals", () => {
   afterEach(() => {
     vi.restoreAllMocks();

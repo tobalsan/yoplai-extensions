@@ -24,6 +24,8 @@ export const PennylaneConfigSchema = z.object({
   timeoutMs: z.number().optional().default(30_000),
 });
 
+const ValidateParamsSchema = z.object({}).strict();
+
 export default defineToolExtension({
   id: "pennylane",
   displayName: "Pennylane",
@@ -38,6 +40,7 @@ Available tools:
 - pennylane_list_customers / pennylane_search_customers / pennylane_get_customer: read customers
 - pennylane_list_products / pennylane_search_products / pennylane_get_product: read products
 - pennylane_list_vat_rates: discover valid vat_rate codes (e.g. FR_200 = 20%)
+- pennylane_validate: verify auth and API reachability
 - pennylane_create_invoice_draft: create a customer invoice as an editable DRAFT (draft: true); pass external_reference (Pipedrive deal id) for dedup
 - pennylane_update_invoice_draft: edit an existing invoice draft; refuses if the target is already finalized (DraftGuard)
 - pennylane_create_quote: create a quote (devis); it is always created 'pending' (quotes have no draft state); pass external_reference (Pipedrive deal id) for dedup
@@ -64,6 +67,15 @@ Key concepts:
     const client = new PennylaneClient(resolved);
 
     return [
+      {
+        name: "validate",
+        description: "Validate Pennylane auth and API reachability via GET /me.",
+        parameters: ValidateParamsSchema,
+        execute: (params) => {
+          ValidateParamsSchema.parse(params);
+          return client.validate();
+        },
+      },
       {
         name: "list_invoices",
         description: "List customer invoices with pagination (cursor walked transparently).",
