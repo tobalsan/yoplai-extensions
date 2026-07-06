@@ -9,7 +9,7 @@ describe("confluence extension", () => {
     expect(extension.id).toBe("confluence");
     expect(extension.displayName).toBe("Confluence");
     expect(extension.description).toContain("Confluence");
-    expect(extension.requiredSecrets).toEqual(["email", "apiToken"]);
+    expect(extension.requiredSecrets).toEqual(["apiToken"]);
   });
 
   it("parses config defaults", () => {

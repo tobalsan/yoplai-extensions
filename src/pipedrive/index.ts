@@ -44,7 +44,7 @@ pipedrive_get_deal reads one deal in full detail: all standard fields plus custo
 
 pipedrive_validate verifies auth and API reachability.`,
   configSchema: PipedriveConfigSchema,
-  requiredSecrets: ["apiToken", "domain"],
+  requiredSecrets: ["apiToken"],
   createTools(config) {
     const resolved = PipedriveConfigSchema.parse(config.merged);
     const client = new PipedriveClient(resolved);

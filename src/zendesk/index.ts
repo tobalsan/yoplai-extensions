@@ -29,7 +29,7 @@ Notes:
 - This extension is read-only. It cannot create, update, or delete tickets.
 - Ticket ids are numeric.`,
   configSchema: ZendeskConfigSchema,
-  requiredSecrets: ["apiKey", "email"],
+  requiredSecrets: ["apiKey"],
   createTools(config) {
     const resolved = ZendeskConfigSchema.parse(config.merged);
     const client = new ZendeskClient(resolved);
