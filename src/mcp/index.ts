@@ -10,8 +10,18 @@ import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-e
 
 const McpExtensionConfigSchema = z
   .object({
-    configPath: z.string().optional(),
-    agentDir: z.string().optional(),
+    configPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the MCP servers config JSON (mcpServers map). Defaults to mcp.json in the agent directory."
+      ),
+    agentDir: z
+      .string()
+      .optional()
+      .describe(
+        "Directory used to resolve configPath and load a per-agent .env file. Defaults to the agent's workspace directory."
+      ),
   })
   .passthrough();
 

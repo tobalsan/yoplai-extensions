@@ -29,9 +29,17 @@ import {
 import { defineToolExtension } from "../tool-extension.js";
 
 export const HiveageConfigSchema = z.object({
-  apiKey: z.string(),
-  subdomain: z.string(),
-  timeoutMs: z.number().optional().default(30_000),
+  apiKey: z
+    .string()
+    .describe("Hiveage API key used as the Basic auth username. Find it under Settings > API in your Hiveage account."),
+  subdomain: z
+    .string()
+    .describe("Your Hiveage account subdomain, e.g. \"acme\" for https://acme.hiveage.com."),
+  timeoutMs: z
+    .number()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for Hiveage API calls. Defaults to 30000."),
 });
 
 export default defineToolExtension({

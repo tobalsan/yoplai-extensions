@@ -17,7 +17,7 @@ const OptionalNumber = z
   .optional();
 
 export const ExaConfigSchema = z.object({
-  apiKey: z.string(),
+  apiKey: z.string().describe("Exa API key from your Exa dashboard (dashboard.exa.ai/api-keys)."),
 });
 
 export const SearchTypeSchema = z.enum(["auto", "fast", "deep"]);

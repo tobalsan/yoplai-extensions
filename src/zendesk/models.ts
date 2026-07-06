@@ -6,10 +6,20 @@ const NullableBoolean = z.boolean().nullable().optional();
 const NullableStringArray = z.array(z.string()).nullable().optional();
 
 export const ZendeskConfigSchema = z.object({
-  subdomain: z.string(),
-  email: z.string(),
-  apiKey: z.string(),
-  timeoutMs: z.number().optional().default(30_000),
+  subdomain: z.string().describe("Zendesk subdomain, e.g. \"acme\" for acme.zendesk.com."),
+  email: z
+    .string()
+    .describe("Email address of the Zendesk account used to authenticate with the API token."),
+  apiKey: z
+    .string()
+    .describe(
+      "Zendesk API token for the account email. Generate one in Zendesk Admin Center under Apps and integrations > APIs > Zendesk API.",
+    ),
+  timeoutMs: z
+    .number()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for Zendesk API calls. Defaults to 30000."),
 });
 export type ZendeskConfig = z.infer<typeof ZendeskConfigSchema>;
 

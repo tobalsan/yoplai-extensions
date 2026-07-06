@@ -20,8 +20,14 @@ import {
 import { defineToolExtension } from "../tool-extension.js";
 
 export const PennylaneConfigSchema = z.object({
-  apiToken: z.string(),
-  timeoutMs: z.number().optional().default(30_000),
+  apiToken: z
+    .string()
+    .describe("Pennylane API token. Generate one under Settings > API in your Pennylane account."),
+  timeoutMs: z
+    .number()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for Pennylane API calls. Defaults to 30000."),
 });
 
 const ValidateParamsSchema = z.object({}).strict();

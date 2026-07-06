@@ -88,8 +88,14 @@ const JsonArrayInput = z.union([JsonArray, JsonArrayString]);
 const StringArrayInput = z.union([z.array(z.string().min(1)).min(1), StringArrayString]);
 
 export const FirecrawlConfigSchema = z.object({
-  apiKey: z.string(),
-  timeoutMs: z.number().int().positive().optional().default(60_000),
+  apiKey: z.string().describe("Firecrawl API key, e.g. fc-xxxxxxxx. Get one at firecrawl.dev/app/api-keys."),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(60_000)
+    .describe("Default request timeout in milliseconds for Firecrawl API calls. Defaults to 60000."),
 });
 
 export const ScrapeParamsSchema = z

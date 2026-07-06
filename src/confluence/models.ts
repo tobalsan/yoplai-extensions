@@ -43,11 +43,36 @@ const BodyFormatSchema = z.enum([
 ]);
 
 export const ConfluenceConfigSchema = z.object({
-  subdomain: z.string().min(1),
-  email: z.string().email(),
-  apiToken: z.string().min(1),
-  confluenceSpace: z.string().min(1).optional(),
-  timeoutMs: z.number().int().positive().optional().default(30_000),
+  subdomain: z
+    .string()
+    .min(1)
+    .describe(
+      'Confluence Cloud subdomain, e.g. "yourcompany" for https://yourcompany.atlassian.net.',
+    ),
+  email: z
+    .string()
+    .email()
+    .describe("Atlassian account email associated with the API token."),
+  apiToken: z
+    .string()
+    .min(1)
+    .describe(
+      "Atlassian API token for this account, created at https://id.atlassian.com/manage-profile/security/api-tokens.",
+    ),
+  confluenceSpace: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional space key (e.g. \"ENG\") to scope all operations to a single space.",
+    ),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for calls to the Confluence API."),
 });
 
 export const SearchParamsSchema = z

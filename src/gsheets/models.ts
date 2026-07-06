@@ -1,8 +1,17 @@
 import { z } from "zod";
 
 export const GSheetsConfigSchema = z.object({
-  serviceAccountJson: z.string().min(1),
-  timeoutMs: z.number().optional().default(30_000),
+  serviceAccountJson: z
+    .string()
+    .min(1)
+    .describe(
+      "Google service account credentials JSON (the full key file contents), created in Google Cloud Console with Sheets API access shared to the account.",
+    ),
+  timeoutMs: z
+    .number()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for Google Sheets API calls. Defaults to 30000."),
 });
 
 export type GSheetsConfig = z.infer<typeof GSheetsConfigSchema>;

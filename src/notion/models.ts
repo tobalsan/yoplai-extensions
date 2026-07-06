@@ -121,9 +121,21 @@ const HeadingTypeArrayInput = z.union([
 ]);
 
 export const NotionConfigSchema = z.object({
-  apiKey: z.string(),
-  notionVersion: z.string().optional().default("2026-03-11"),
-  timeoutMs: z.number().int().positive().optional().default(30_000),
+  apiKey: z.string().describe(
+    "Notion integration secret from an internal integration at notion.so/my-integrations. Starts with `ntn_` or `secret_`.",
+  ),
+  notionVersion: z
+    .string()
+    .optional()
+    .default("2026-03-11")
+    .describe("Notion API version header (YYYY-MM-DD). Defaults to 2026-03-11; only change if instructed by Notion."),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .default(30_000)
+    .describe("Request timeout in milliseconds for calls to the Notion API. Defaults to 30000."),
 });
 
 export const ListDataSourcesParamsSchema = z

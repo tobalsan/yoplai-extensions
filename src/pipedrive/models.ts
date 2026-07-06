@@ -18,8 +18,18 @@ const DateOnly = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a date in YYYY-MM-DD format");
 
 export const PipedriveConfigSchema = z.object({
-  apiToken: z.string().min(1, "PIPEDRIVE_API_TOKEN is required"),
-  domain: z.string().min(1, "PIPEDRIVE_DOMAIN is required"),
+  apiToken: z
+    .string()
+    .min(1, "PIPEDRIVE_API_TOKEN is required")
+    .describe(
+      "Pipedrive API token used to authenticate requests. Find it in Pipedrive under Settings > Personal preferences > API.",
+    ),
+  domain: z
+    .string()
+    .min(1, "PIPEDRIVE_DOMAIN is required")
+    .describe(
+      'Your company\'s Pipedrive subdomain (the part before ".pipedrive.com" in your Pipedrive URL), e.g. "acme" for acme.pipedrive.com.',
+    ),
 });
 export type PipedriveConfig = z.infer<typeof PipedriveConfigSchema>;
 

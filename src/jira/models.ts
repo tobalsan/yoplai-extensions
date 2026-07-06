@@ -9,15 +9,17 @@ const ProjectKeysSchema = z.preprocess((value) => {
   if (!trimmed) return undefined;
   if (trimmed.startsWith("[")) return JSON.parse(trimmed);
   return trimmed.split(",").map((part) => part.trim()).filter(Boolean);
-}, z.array(z.string().min(1)).optional());
+}, z.array(z.string().min(1)).optional()).describe(
+  "Comma-separated list of Jira project keys to scope this extension to, e.g. \"ENG, OPS\". Leave blank to allow all projects.",
+);
 
 export const JiraConfigSchema = z.object({
-  subdomain: z.string().min(1),
-  email: z.string().email(),
-  apiToken: z.string().min(1),
+  subdomain: z.string().min(1).describe("Jira Cloud subdomain, e.g. \"acme\" for acme.atlassian.net."),
+  email: z.string().email().describe("Email address of the Jira account used to authenticate with the API token."),
+  apiToken: z.string().min(1).describe("Jira API token for the account email. Create one at id.atlassian.com/manage-profile/security/api-tokens."),
   jiraProjectKeys: ProjectKeysSchema,
-  readOnly: z.boolean().optional().default(false),
-  timeoutMs: z.number().int().positive().optional().default(30_000),
+  readOnly: z.boolean().optional().default(false).describe("When enabled, disables issue creation, updates, comments, and transitions."),
+  timeoutMs: z.number().int().positive().optional().default(30_000).describe("Request timeout in milliseconds for Jira API calls. Defaults to 30000."),
 });
 
 export const ValidateParamsSchema = z.object({}).strict();
