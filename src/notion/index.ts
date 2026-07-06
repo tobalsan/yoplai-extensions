@@ -46,6 +46,7 @@ Tools:
 Return and consume JSON-serializable data only.`,
   configSchema: NotionConfigSchema,
   requiredSecrets: ["apiKey"],
+  advancedConfigFields: ["notionVersion", "timeoutMs"],
   createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
     const client = new NotionClient(resolved);

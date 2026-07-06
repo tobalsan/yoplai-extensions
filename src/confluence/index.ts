@@ -58,6 +58,7 @@ Pages can be very large; bodies are returned raw without truncation. Each page/s
 Return and consume JSON-serializable data only.`,
   configSchema: ConfluenceConfigSchema,
   requiredSecrets: ["apiToken"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = ConfluenceConfigSchema.parse(config.merged);
     const client = new ConfluenceClient(resolved);

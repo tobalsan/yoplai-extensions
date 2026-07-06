@@ -119,6 +119,7 @@ const baseExtension = defineToolExtension({
   configSchema: McpExtensionConfigSchema,
   agentConfigSchema: McpExtensionConfigSchema,
   requiredSecrets: [],
+  advancedConfigFields: ["configPath", "agentDir"],
   createTools() {
     return [];
   },

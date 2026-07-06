@@ -68,6 +68,7 @@ Key concepts:
 - the client self-throttles to Pennylane's rate limit (25 requests / 5 s per token) and retries on 429`,
   configSchema: PennylaneConfigSchema,
   requiredSecrets: ["apiToken"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = PennylaneConfigSchema.parse(config.merged);
     const client = new PennylaneClient(resolved);

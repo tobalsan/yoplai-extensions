@@ -30,6 +30,7 @@ Notes:
 - Ticket ids are numeric.`,
   configSchema: ZendeskConfigSchema,
   requiredSecrets: ["apiKey"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = ZendeskConfigSchema.parse(config.merged);
     const client = new ZendeskClient(resolved);

@@ -25,6 +25,7 @@ Tools:
 - gsheets_validate: check extension authentication and access`,
   configSchema: GSheetsConfigSchema,
   requiredSecrets: ["serviceAccountJson"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const parsedConfig = GSheetsConfigSchema.parse(config.merged);
     const client = new GSheetsClient(parsedConfig);

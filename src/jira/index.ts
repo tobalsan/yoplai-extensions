@@ -8,6 +8,7 @@ export default defineToolExtension({
   description: "Jira Cloud extension for scoped issue/project/board workflows.",
   configSchema: JiraConfigSchema,
   requiredSecrets: ["apiToken"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = JiraConfigSchema.parse(config.merged);
     const client = new JiraClient(resolved);

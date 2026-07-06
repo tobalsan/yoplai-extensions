@@ -68,6 +68,7 @@ Common workflows:
 - To find a specific invoice, use hiveage_search_invoices with a query string, or hiveage_list_invoices with pagination.`,
   configSchema: HiveageConfigSchema,
   requiredSecrets: ["apiKey"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = HiveageConfigSchema.parse(config.merged);
     const client = new HiveageClient(resolved);

@@ -18,6 +18,7 @@ export default defineToolExtension({
   systemPrompt: `Use this extension to read and search the web via Firecrawl: scrape a single page to markdown, run web searches, map a site's URLs, or crawl an entire site. firecrawl_crawl is asynchronous — it returns a job id immediately; poll firecrawl_monitor with that id every few seconds until status is "completed" or "failed". Crawl results expire roughly 24 hours after completion. Return and consume JSON-serializable data only.`,
   configSchema: FirecrawlConfigSchema,
   requiredSecrets: ["apiKey"],
+  advancedConfigFields: ["timeoutMs"],
   createTools(config) {
     const resolved = FirecrawlConfigSchema.parse(config.merged);
     const client = new FirecrawlClient(resolved);
