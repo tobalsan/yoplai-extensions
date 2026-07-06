@@ -24,6 +24,7 @@ export interface ToolExtensionDefinition {
   configSchema: z.ZodTypeAny;
   agentConfigSchema?: z.ZodTypeAny;
   requiredSecrets: string[];
+  configRoute?: { path: string };
   createTools(config: ResolvedToolExtensionConfig): ToolExtensionTool[];
 }
 
@@ -125,6 +126,8 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
     description: definition.description,
     systemPrompt: definition.systemPrompt,
     requiredSecrets: definition.requiredSecrets,
+    configJsonSchema: zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }),
+    configRoute: definition.configRoute,
     createTools: definition.createTools,
     dependencies: [],
     configSchema: z.object({ enabled: z.boolean().optional() }).passthrough(),
