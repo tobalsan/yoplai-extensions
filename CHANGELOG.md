@@ -4,6 +4,8 @@
 
 ### Added
 
+- `googleDrive` read tools (ALG-358): adds `list_files` (optional name-substring filter + `pageSize`/`pageToken` pagination), `search_files` (Drive `q` query syntax), and `read_file` (downloads a file and extracts text — Google Docs/Sheets/Slides are exported to text/CSV, PDF and DOCX are text-extracted) alongside the existing `validate`. All tools consume the injected fresh OAuth token and return the documented not-connected signal (never a raw 401) when no valid connection exists. Read-only only — no write scopes, no mutating tools.
+
 - `googleDrive` extension (ALG-357 tracer bullet): declares an `oauth` requirement for Google (Drive read-only + userinfo.email) and exposes a single `validate` tool that returns connected + the Google account when the host injects a fresh access token, or the documented not-connected signal otherwise. `defineToolExtension` now supports the `oauth: { provider, scopes }` requirement and injects the host-resolved token into `createTools` config.
 
 - Pennylane quote-write path: `create_quote` (creates a `pending` quote — the draft-equivalent, since Pennylane quotes have no draft state — and accepts `external_reference` for correlation/dedup) and `update_quote` (re-reads the target and routes it through the existing `DraftGuard`, refusing to edit any non-`pending` quote; `invoice_lines` uses the `{ create, update, delete }` diff object). No quote finalize/accept/send/status tool is exposed.
