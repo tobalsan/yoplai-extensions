@@ -72,7 +72,7 @@ Google credentials go under a top-level `oauth` key in `aihub.json` (BYO — bri
         "clientSecret": "$env:GOOGLE_CLIENT_SECRET"
       }
     },
-    "encryptionKey": "$env:AIHUB_OAUTH_ENCRYPTION_KEY"
+    "encryptionKey": "$env:OAUTH_ENCRYPTION_KEY"
   }
 }
 ```
@@ -82,7 +82,7 @@ Actual secrets in `$AIHUB_HOME/.env` (env var names are your choice — just mat
 ```bash
 GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxx
-AIHUB_OAUTH_ENCRYPTION_KEY=<random 32-byte secret>
+OAUTH_ENCRYPTION_KEY=<random 32-byte secret>
 ```
 
 Notes:
