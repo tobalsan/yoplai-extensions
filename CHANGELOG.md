@@ -4,6 +4,8 @@
 
 ### Added
 
+- `gmail` extension with Gmail MCP parity for drafts, threads, labels, and Gmail query search via host-managed Google OAuth.
+
 - `googleDrive` read tools (ALG-358): adds `list_files` (optional name-substring filter + `pageSize`/`pageToken` pagination), `search_files` (Drive `q` query syntax), and `read_file` (downloads a file and extracts text — Google Docs/Sheets/Slides are exported to text/CSV, PDF and DOCX are text-extracted) alongside the existing `validate`. All tools consume the injected fresh OAuth token and return the documented not-connected signal (never a raw 401) when no valid connection exists. Read-only only — no write scopes, no mutating tools.
 
 - `googleDrive` extension (ALG-357 tracer bullet): declares an `oauth` requirement for Google (Drive read-only + userinfo.email) and exposes a single `validate` tool that returns connected + the Google account when the host injects a fresh access token, or the documented not-connected signal otherwise. `defineToolExtension` now supports the `oauth: { provider, scopes }` requirement and injects the host-resolved token into `createTools` config.
