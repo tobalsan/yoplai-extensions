@@ -352,15 +352,14 @@ export type ListVatRatesParams = z.infer<typeof ListVatRatesParamsSchema>;
 
 /** An int64 id accepted as string or number for write payloads. */
 const IdInput = z.union([z.string(), z.number()]);
+const NumericInt64IdInput = z.number().int().safe();
+const NumericString = z.string().regex(/^-?\d+(?:\.\d+)?$/, "value must be a numeric string");
 
-/**
- * A single invoice line on a draft write (§2.3). Two shapes (`oneOf`):
- * product-based (`productId` + `quantity`, auto-filling label/price/vat) or
- * free-form (`label` + `quantity` + `rawCurrencyUnitPrice` + `unit` + `vatRate`).
- * We validate the union loosely and let Pennylane enforce the exact `oneOf` — a
- * `422` surfaces mismatches. Money is a decimal string; `quantity` may be a
- * number or decimal string.
- */
+export const DiscountInputSchema = z
+  .object({ type: z.enum(["relative", "absolute"]), value: NumericString })
+  .strict();
+
+/** Loose invoice/update line input; Pennylane enforces its write `oneOf`. */
 export const InvoiceLineInputSchema = z
   .object({
     productId: IdInput.optional(),
@@ -372,8 +371,37 @@ export const InvoiceLineInputSchema = z
     vatRate: z.string().optional(),
     ledgerAccountId: IdInput.optional(),
     sectionRank: z.number().optional(),
+    discount: DiscountInputSchema.optional(),
   })
   .strict();
+
+const QuoteLineSharedFields = {
+  description: z.string().nullable().optional(),
+  sectionRank: z.number().int().optional(),
+  ledgerAccountId: NumericInt64IdInput.optional(),
+  discount: DiscountInputSchema.optional(),
+};
+
+/** Strict quote-create line shapes from Pennylane's `oneOf`. */
+const QuoteLineInputSchema = z.union([
+  z.object({
+    productId: NumericInt64IdInput,
+    quantity: z.number(),
+    label: z.string().optional(),
+    rawCurrencyUnitPrice: z.string().optional(),
+    unit: z.string().optional(),
+    vatRate: z.string().optional(),
+    ...QuoteLineSharedFields,
+  }).strict(),
+  z.object({
+    label: z.string(),
+    quantity: z.number(),
+    rawCurrencyUnitPrice: z.string(),
+    unit: z.string(),
+    vatRate: z.string(),
+    ...QuoteLineSharedFields,
+  }).strict(),
+]);
 export type InvoiceLineInput = z.infer<typeof InvoiceLineInputSchema>;
 
 /**
@@ -436,15 +464,16 @@ export type UpdateInvoiceDraftParams = z.infer<typeof UpdateInvoiceDraftParamsSc
  */
 export const CreateQuoteParamsSchema = z
   .object({
-    customerId: IdInput,
+    customerId: NumericInt64IdInput,
     date: IsoDate,
     deadline: IsoDate,
-    invoiceLines: z.array(InvoiceLineInputSchema).min(1),
+    invoiceLines: z.array(QuoteLineInputSchema).min(1),
+    discount: DiscountInputSchema.optional(),
     label: z.string().max(2000).optional(),
     externalReference: z.string().optional(),
     currency: z.string().optional(),
     language: z.string().optional(),
-    quoteTemplateId: IdInput.optional(),
+    quoteTemplateId: NumericInt64IdInput.optional(),
     pdfInvoiceSubject: z.string().optional(),
     pdfInvoiceFreeText: z.string().optional(),
     pdfDescription: z.string().optional(),

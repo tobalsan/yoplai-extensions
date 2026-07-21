@@ -184,7 +184,7 @@ Key concepts:
       {
         name: "create_quote",
         description:
-          "Create a quote (devis). Pennylane quotes have no draft state — the created quote is always 'pending' (the draft-equivalent). Accepts external_reference (Pipedrive deal id) for correlation/dedup. Requires customer_id, date, deadline, and at least one line. Does NOT accept or send the quote.",
+          "Create a quote (devis), always in 'pending' state. Requires customerId, date, deadline, and invoiceLines in one of two shapes: product line { productId: number, quantity: number } with optional product-value overrides, or standard line { label, quantity: number, rawCurrencyUnitPrice: string, unit, vatRate }. Root and lines accept discount { type: 'relative' | 'absolute', value: numeric string }. Accepts externalReference for dedup. Does NOT accept or send quote.",
         parameters: CreateQuoteParamsSchema,
         execute: (params) => client.createQuote(params),
       },

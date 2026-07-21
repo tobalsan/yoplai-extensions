@@ -553,6 +553,27 @@ describe("PennylaneClient", () => {
         vat_rate: "FR_200",
       });
     });
+
+    it("accepts legacy loose invoice line values", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 78, draft: true, status: "draft" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await client.createInvoiceDraft({
+        customerId: "123",
+        date: "2026-06-15",
+        deadline: "2026-07-15",
+        invoiceLines: [{
+          productId: "456",
+          quantity: "2.5",
+          rawCurrencyUnitPrice: 100,
+          sectionRank: 1.5,
+        }],
+      });
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    });
   });
 
   describe("update_invoice_draft", () => {
@@ -630,6 +651,66 @@ describe("PennylaneClient", () => {
         raw_currency_unit_price: "500.00",
         vat_rate: "FR_200",
       });
+    });
+
+    it("serializes product lines and root/line discounts", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ id: 89, status: "pending" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await client.createQuote({
+        customerId: 42,
+        date: "2026-07-02",
+        deadline: "2026-08-02",
+        discount: { type: "absolute", value: "25.50" },
+        invoiceLines: [
+          {
+            productId: 123,
+            quantity: 2,
+            discount: { type: "relative", value: "10" },
+          },
+        ],
+      });
+
+      const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+      expect(body.discount).toEqual({ type: "absolute", value: "25.50" });
+      expect(body.invoice_lines[0]).toEqual({
+        product_id: 123,
+        quantity: 2,
+        discount: { type: "relative", value: "10" },
+      });
+    });
+
+    it("accepts nullable description and integer sectionRank", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ id: 90, status: "pending" }));
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.createQuote({
+        customerId: 42,
+        date: "2026-07-02",
+        deadline: "2026-08-02",
+        invoiceLines: [{ productId: 123, quantity: 1, description: null, sectionRank: 2 }],
+      })).resolves.toBeDefined();
+    });
+
+    it.each([
+      [{ description: "missing standard fields", quantity: 1 }],
+      [{ label: "Bad quantity", quantity: "1", rawCurrencyUnitPrice: "10.00", unit: "piece", vatRate: "FR_200" }],
+      [{ productId: "123", quantity: 1 }],
+      [{ productId: 123, quantity: 1, ledgerAccountId: "456" }],
+      [{ productId: 123, quantity: 1, sectionRank: 1.5 }],
+    ])("rejects invalid line before HTTP", async (line) => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.createQuote({
+        customerId: 42,
+        date: "2026-07-02",
+        deadline: "2026-08-02",
+        invoiceLines: [line],
+      })).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
