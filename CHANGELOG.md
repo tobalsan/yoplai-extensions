@@ -4,6 +4,8 @@
 
 ### Added
 
+- MCP OAuth connection routes and per-agent token persistence (ALG-392).
+
 - `gmail` extension with Gmail MCP parity for drafts, threads, labels, and Gmail query search via host-managed Google OAuth.
 
 - `googleDrive` read tools (ALG-358): adds `list_files` (optional name-substring filter + `pageSize`/`pageToken` pagination), `search_files` (Drive `q` query syntax), and `read_file` (downloads a file and extracts text — Google Docs/Sheets/Slides are exported to text/CSV, PDF and DOCX are text-extracted) alongside the existing `validate`. All tools consume the injected fresh OAuth token and return the documented not-connected signal (never a raw 401) when no valid connection exists. Read-only only — no write scopes, no mutating tools.
