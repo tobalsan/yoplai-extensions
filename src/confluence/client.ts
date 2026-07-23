@@ -386,9 +386,11 @@ export class ConfluenceClient {
     });
 
     if (!response.ok) {
-      throw new ConfluenceError(`File download failed with status ${response.status}`, {
+      const responseBody = await this.readErrorMessage(response);
+      throw new ConfluenceError(`File download failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
         endpoint: input.url,
         status: response.status,
+        responseBody,
       });
     }
 
@@ -554,37 +556,45 @@ export class ConfluenceClient {
         }
 
         if (response.status === 401 || response.status === 403) {
+          const responseBody = await this.readErrorMessage(response);
           throw new ConfluenceAuthError(
-            `Confluence authentication failed with status ${response.status}`,
+            `Confluence authentication failed with status ${response.status}: ${responseBody}`,
             {
               endpoint: path,
               status: response.status,
               requestId,
+              responseBody,
             },
           );
         }
 
         if (response.status === 404) {
-          throw new ConfluenceNotFoundError(`Confluence resource not found: ${path}`, {
+          const responseBody = await this.readErrorMessage(response);
+          throw new ConfluenceNotFoundError(`Confluence resource not found: ${path}: ${responseBody}`, {
             endpoint: path,
             status: 404,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 409) {
-          throw new ConfluenceConflictError(await this.readErrorMessage(response), {
+          const responseBody = await this.readErrorMessage(response);
+          throw new ConfluenceConflictError(`Confluence request failed with status ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 422) {
-          throw new ConfluenceValidationError(await this.readErrorMessage(response), {
+          const responseBody = await this.readErrorMessage(response);
+          throw new ConfluenceValidationError(`Confluence request failed with status ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -600,15 +610,18 @@ export class ConfluenceClient {
               endpoint: path,
               status: response.status,
               requestId,
+              responseBody: detail,
             },
           );
         }
 
         if (!response.ok) {
-          throw new ConfluenceError(`Confluence request failed with status ${response.status}`, {
+          const responseBody = await this.readErrorMessage(response);
+          throw new ConfluenceError(`Confluence request failed with status ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -635,24 +648,6 @@ export class ConfluenceClient {
   }
 
   private async readErrorMessage(response: Response): Promise<string> {
-    const text = await response.text();
-    if (!text) {
-      return `Confluence request failed with status ${response.status}`;
-    }
-    try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      if (typeof parsed.message === "string") {
-        return parsed.message;
-      }
-      if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-        const first = parsed.errors[0];
-        if (isPlainObject(first) && typeof first.title === "string") {
-          return first.title;
-        }
-      }
-      return text;
-    } catch {
-      return text;
-    }
+    return (await response.text().catch(() => "")).slice(0, 500);
   }
 }

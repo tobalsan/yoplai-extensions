@@ -14,6 +14,13 @@ import {
 
 export type DriveFetch = typeof fetch;
 
+export class GoogleDriveRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly endpoint: string, readonly responseBody: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
 export interface DriveUser {
   displayName?: string;
   emailAddress?: string;
@@ -221,10 +228,10 @@ export class GoogleDriveClient {
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(
-        `Google Drive request failed (HTTP ${response.status})${
-          body ? `: ${body.slice(0, 200)}` : ""
-        }`,
+      const responseBody = body.slice(0, 500);
+      throw new GoogleDriveRequestError(
+        `Google Drive request failed (HTTP ${response.status}) for ${url}${responseBody ? `: ${responseBody}` : ""}`,
+        response.status, url, responseBody,
       );
     }
     return response;

@@ -2,12 +2,14 @@ export interface HiveageErrorOptions {
   endpoint?: string;
   status?: number;
   correlationId?: string;
+  responseBody?: string;
 }
 
 export class HiveageError extends Error {
   endpoint?: string;
   status?: number;
   correlationId?: string;
+  responseBody?: string;
 
   constructor(message: string, options: HiveageErrorOptions = {}) {
     super(message);
@@ -15,6 +17,7 @@ export class HiveageError extends Error {
     this.endpoint = options.endpoint;
     this.status = options.status;
     this.correlationId = options.correlationId;
+    this.responseBody = options.responseBody;
   }
 }
 

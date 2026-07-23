@@ -232,25 +232,30 @@ export class FirecrawlClient {
         }
 
         if (response.status === 401 || response.status === 403) {
+          const responseBody = await this.readResponseBody(response);
           throw new FirecrawlAuthError(
-            `Firecrawl authentication failed with status ${response.status}`,
-            { endpoint, status: response.status, requestId },
+            `Firecrawl authentication failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`,
+            { endpoint, status: response.status, requestId, responseBody },
           );
         }
 
         if (response.status === 404) {
-          throw new FirecrawlNotFoundError(`Firecrawl resource not found: ${endpoint}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new FirecrawlNotFoundError(`Firecrawl resource not found: ${endpoint}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint,
             status: 404,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 409 || response.status === 422) {
-          throw new FirecrawlValidationError(await this.readErrorMessage(response), {
+          const responseBody = await this.readResponseBody(response);
+          throw new FirecrawlValidationError(`Firecrawl request failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -259,17 +264,20 @@ export class FirecrawlClient {
             await sleep(Math.min(250 * 2 ** attempt, 4000) + Math.floor(Math.random() * 250));
             continue;
           }
+          const responseBody = await this.readResponseBody(response);
           throw new FirecrawlServerError(
-            `Firecrawl server error with status ${response.status}`,
-            { endpoint, status: response.status, requestId },
+            `Firecrawl server error with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`,
+            { endpoint, status: response.status, requestId, responseBody },
           );
         }
 
         if (!response.ok) {
-          throw new FirecrawlError(await this.readErrorMessage(response), {
+          const responseBody = await this.readResponseBody(response);
+          throw new FirecrawlError(`Firecrawl request failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -295,19 +303,7 @@ export class FirecrawlClient {
     });
   }
 
-  private async readErrorMessage(response: Response): Promise<string> {
-    const text = await response.text();
-    if (!text) {
-      return `Firecrawl request failed with status ${response.status}`;
-    }
-    try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      if (typeof parsed.error === "string") {
-        return parsed.error;
-      }
-      return text;
-    } catch {
-      return text;
-    }
+  private async readResponseBody(response: Response): Promise<string> {
+    return (await response.text().catch(() => "")).slice(0, 500);
   }
 }

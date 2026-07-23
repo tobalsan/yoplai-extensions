@@ -14,10 +14,19 @@ describe("GmailClient", () => {
     expect(String(fetchImpl.mock.calls[0][0])).toContain("includeSpamTrash=true");
   });
 
-  it("does not leak Gmail response content in errors", async () => {
-    const client = new GmailClient("super-secret", vi.fn().mockResolvedValue(new Response("mailbox body", { status: 403 })));
-    await expect(client.listLabels({ pageSize: 20 })).rejects.toThrow("Gmail request failed (HTTP 403)");
-    await expect(client.listLabels({ pageSize: 20 })).rejects.not.toThrow("mailbox body");
+  it("includes a truncated upstream response body and structured request details", async () => {
+    const body = JSON.stringify({ error: { errors: [{ reason: "rateLimitExceeded" }] }, padding: "x".repeat(500) });
+    const client = new GmailClient("super-secret", vi.fn().mockResolvedValue(new Response(body, { status: 403 })));
+    const error = await client.listLabels({ pageSize: 20 }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      status: 403,
+      endpoint: "/labels",
+      method: "GET",
+      responseBody: body.slice(0, 500),
+      reason: "rateLimitExceeded",
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(body.slice(0, 500));
   });
 
   it("searches draft messages when a draft query is supplied", async () => {

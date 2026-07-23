@@ -2,12 +2,14 @@ export interface NotionErrorOptions {
   endpoint?: string;
   status?: number;
   requestId?: string;
+  responseBody?: string;
 }
 
 export class NotionError extends Error {
   endpoint?: string;
   status?: number;
   requestId?: string;
+  responseBody?: string;
 
   constructor(message: string, options: NotionErrorOptions = {}) {
     super(message);
@@ -15,6 +17,7 @@ export class NotionError extends Error {
     this.endpoint = options.endpoint;
     this.status = options.status;
     this.requestId = options.requestId;
+    this.responseBody = options.responseBody;
   }
 }
 

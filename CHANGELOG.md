@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- HTTP client errors now retain truncated upstream response bodies with status and endpoint details for actionable diagnostics.
+
 ### Added
 
 - `gmail` extension with Gmail MCP parity for drafts, threads, labels, and Gmail query search via host-managed Google OAuth.

@@ -2,12 +2,14 @@ export interface ExaErrorOptions {
   endpoint?: string;
   status?: number;
   requestId?: string;
+  responseBody?: string;
 }
 
 export class ExaError extends Error {
   endpoint?: string;
   status?: number;
   requestId?: string;
+  responseBody?: string;
 
   constructor(message: string, options: ExaErrorOptions = {}) {
     super(message);
@@ -15,6 +17,7 @@ export class ExaError extends Error {
     this.endpoint = options.endpoint;
     this.status = options.status;
     this.requestId = options.requestId;
+    this.responseBody = options.responseBody;
   }
 }
 

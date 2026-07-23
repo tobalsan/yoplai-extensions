@@ -1,17 +1,20 @@
 export interface PipedriveErrorOptions {
   endpoint?: string;
   status?: number;
+  responseBody?: string;
 }
 
 export class PipedriveError extends Error {
   endpoint?: string;
   status?: number;
+  responseBody?: string;
 
   constructor(message: string, options: PipedriveErrorOptions = {}) {
     super(message);
     this.name = new.target.name;
     this.endpoint = options.endpoint;
     this.status = options.status;
+    this.responseBody = options.responseBody;
   }
 }
 

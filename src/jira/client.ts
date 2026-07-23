@@ -18,12 +18,16 @@ export class JiraClient {
         signal: controller.signal,
       });
       const reqId = res.headers.get("x-arequestid") ?? undefined;
-      const text = await res.text();
-      const data = text ? JSON.parse(text) : {};
+      const text = await res.text().catch(() => "");
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) throw new JiraAuthError("Jira authentication failed", res.status, reqId, data);
-        throw new JiraError(`Jira API request failed (${res.status})`, res.status, reqId, data);
+        const responseBody = text.slice(0, 500);
+        const message = `Jira API request failed (${res.status}) ${path}${responseBody ? `: ${responseBody}` : ""}`;
+        let details: unknown = text;
+        try { details = text ? JSON.parse(text) : {}; } catch { /* retain raw body */ }
+        if (res.status === 401 || res.status === 403) throw new JiraAuthError(message, res.status, reqId, details, path, responseBody);
+        throw new JiraError(message, res.status, reqId, details, path, responseBody);
       }
+      const data = text ? JSON.parse(text) : {};
       return data;
     } finally { clearTimeout(timeout); }
   }

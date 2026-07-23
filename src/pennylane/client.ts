@@ -175,26 +175,32 @@ export class PennylaneClient {
         }
 
         if (response.status === 401 || response.status === 403) {
-          throw new PennylaneAuthError("Authentication failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new PennylaneAuthError(`Authentication failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 404) {
-          throw new PennylaneNotFoundError(`Resource not found: ${path}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new PennylaneNotFoundError(`Resource not found: ${path}: ${responseBody}`, {
             endpoint: path,
             status: 404,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 422) {
-          throw new PennylaneValidationError((await response.text()) || "Validation failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new PennylaneValidationError(`Validation failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -203,18 +209,22 @@ export class PennylaneClient {
             await sleep((attempt + 1) * 250);
             continue;
           }
-          throw new PennylaneError(`Server error: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new PennylaneError(`Server error for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
         if (!response.ok) {
-          throw new PennylaneError(`Request failed: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new PennylaneError(`Request failed for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -232,6 +242,15 @@ export class PennylaneClient {
     }
 
     throw new PennylaneRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private async readErrorBody(response: Response): Promise<string> {
+    try {
+      const body = await response.text();
+      return body.slice(0, 500);
+    } catch {
+      return "";
+    }
   }
 
   /** Backoff delay honoring `retry-after` (seconds) when present. */

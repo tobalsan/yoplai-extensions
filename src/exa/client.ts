@@ -181,15 +181,18 @@ export class ExaClient {
             await sleep(Math.min(250 * 2 ** attempt, 4000) + Math.floor(Math.random() * 250));
             continue;
           }
-          throw new ExaServerError(`Exa server error with status ${response.status}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new ExaServerError(`Exa server error with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: response.status,
+            responseBody,
           });
         }
 
         if (!response.ok) {
-          const message = await this.readErrorMessage(response);
-          const options = { endpoint: path, status: response.status };
+          const responseBody = await this.readResponseBody(response);
+          const message = `Exa request failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`;
+          const options = { endpoint: path, status: response.status, responseBody };
           if (response.status === 401 || response.status === 403) {
             throw new ExaAuthError(message, options);
           }
@@ -221,19 +224,7 @@ export class ExaClient {
     throw new ExaRateLimitError("Exa rate limit exceeded", { endpoint: path, status: 429 });
   }
 
-  private async readErrorMessage(response: Response): Promise<string> {
-    const fallback = response.statusText || `Exa request failed with status ${response.status}`;
-    const text = await response.text();
-    if (!text) {
-      return fallback;
-    }
-    try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      return typeof parsed.message === "string" && parsed.message.length > 0
-        ? parsed.message
-        : fallback;
-    } catch {
-      return fallback;
-    }
+  private async readResponseBody(response: Response): Promise<string> {
+    return (await response.text().catch(() => "")).slice(0, 500);
   }
 }
