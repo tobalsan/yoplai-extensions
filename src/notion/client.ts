@@ -385,9 +385,11 @@ export class NotionClient {
     });
 
     if (!response.ok) {
-      throw new NotionError(`File download failed with status ${response.status}`, {
+      const responseBody = await this.readResponseBody(response);
+      throw new NotionError(`File download failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
         endpoint: input.url,
         status: response.status,
+        responseBody,
       });
     }
 
@@ -515,26 +517,32 @@ export class NotionClient {
         }
 
         if (response.status === 401 || response.status === 403) {
-          throw new NotionAuthError(`Notion authentication failed with status ${response.status}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new NotionAuthError(`Notion authentication failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 404) {
-          throw new NotionNotFoundError(`Notion resource not found: ${path}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new NotionNotFoundError(`Notion resource not found: ${path}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: 404,
             requestId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 409 || response.status === 422) {
-          throw new NotionValidationError(await this.readErrorMessage(response, path, requestId), {
+          const responseBody = await this.readResponseBody(response);
+          throw new NotionValidationError(`Notion request failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -543,18 +551,22 @@ export class NotionClient {
             await sleep(Math.min(250 * 2 ** attempt, 4000) + Math.floor(Math.random() * 250));
             continue;
           }
-          throw new NotionServerError(`Notion server error with status ${response.status}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new NotionServerError(`Notion server error with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
         if (!response.ok) {
-          throw new NotionError(`Notion request failed with status ${response.status}`, {
+          const responseBody = await this.readResponseBody(response);
+          throw new NotionError(`Notion request failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
             endpoint: path,
             status: response.status,
             requestId,
+            responseBody,
           });
         }
 
@@ -577,21 +589,7 @@ export class NotionClient {
     throw new NotionRateLimitError("Notion rate limit exceeded", { endpoint: path, status: 429 });
   }
 
-  private async readErrorMessage(response: Response, path: string, requestId?: string): Promise<string> {
-    const text = await response.text();
-    if (!text) {
-      return `Notion request failed with status ${response.status}`;
-    }
-    try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const message = typeof parsed.message === "string" ? parsed.message : text;
-      const code = typeof parsed.code === "string" ? parsed.code : undefined;
-      const prefix = code ? `${code}: ` : "";
-      return `${prefix}${message}`.trim();
-    } catch {
-      void path;
-      void requestId;
-      return text;
-    }
+  private async readResponseBody(response: Response): Promise<string> {
+    return (await response.text().catch(() => "")).slice(0, 500);
   }
 }

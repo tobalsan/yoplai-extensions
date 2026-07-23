@@ -142,26 +142,32 @@ export class HiveageClient {
         }
 
         if (response.status === 401 || response.status === 403) {
-          throw new HiveageAuthError("Authentication failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new HiveageAuthError(`Authentication failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
         if (response.status === 404) {
-          throw new HiveageNotFoundError(`Resource not found: ${path}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new HiveageNotFoundError(`Resource not found: ${path}: ${responseBody}`, {
             endpoint: path,
             status: 404,
             correlationId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 422) {
-          throw new HiveageValidationError((await response.text()) || "Validation failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new HiveageValidationError(`Validation failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
@@ -170,18 +176,22 @@ export class HiveageClient {
             await sleep((attempt + 1) * 250);
             continue;
           }
-          throw new HiveageError(`Server error: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new HiveageError(`Server error for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
         if (!response.ok) {
-          throw new HiveageError(`Request failed: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new HiveageError(`Request failed for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
@@ -199,6 +209,15 @@ export class HiveageClient {
     }
 
     throw new HiveageRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private async readErrorBody(response: Response): Promise<string> {
+    try {
+      const body = await response.text();
+      return body ? body.slice(0, 500) : response.statusText || "No response body";
+    } catch {
+      return response.statusText || "Unable to read response body";
+    }
   }
 
   async listInvoices(input: unknown = {}): Promise<{ invoices: Invoice[] }> {

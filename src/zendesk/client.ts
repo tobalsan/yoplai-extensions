@@ -109,26 +109,32 @@ export class ZendeskClient {
         }
 
         if (response.status === 401 || response.status === 403) {
-          throw new ZendeskAuthError("Authentication failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new ZendeskAuthError(`Authentication failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
         if (response.status === 404) {
-          throw new ZendeskNotFoundError(`Resource not found: ${path}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new ZendeskNotFoundError(`Resource not found: ${path}: ${responseBody}`, {
             endpoint: path,
             status: 404,
             correlationId,
+            responseBody,
           });
         }
 
         if (response.status === 400 || response.status === 422) {
-          throw new ZendeskValidationError((await response.text()) || "Validation failed", {
+          const responseBody = await this.readErrorBody(response);
+          throw new ZendeskValidationError(`Validation failed for ${path}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
@@ -137,18 +143,22 @@ export class ZendeskClient {
             await sleep((attempt + 1) * 250);
             continue;
           }
-          throw new ZendeskError(`Server error: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new ZendeskError(`Server error for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
         if (!response.ok) {
-          throw new ZendeskError(`Request failed: ${response.status}`, {
+          const responseBody = await this.readErrorBody(response);
+          throw new ZendeskError(`Request failed for ${path}: ${response.status}: ${responseBody}`, {
             endpoint: path,
             status: response.status,
             correlationId,
+            responseBody,
           });
         }
 
@@ -166,6 +176,15 @@ export class ZendeskClient {
     }
 
     throw new ZendeskRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private async readErrorBody(response: Response): Promise<string> {
+    try {
+      const body = await response.text();
+      return body ? body.slice(0, 500) : response.statusText || "No response body";
+    } catch {
+      return response.statusText || "Unable to read response body";
+    }
   }
 
   async listTickets(input: unknown = {}): Promise<{

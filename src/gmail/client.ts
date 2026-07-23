@@ -127,15 +127,23 @@ export class GmailClient {
   private async request(path: string, init: RequestInit = {}) {
     const response = await this.fetchImpl(`${GMAIL_API_BASE}${path}`, { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
     if (!response.ok) {
-      const payload = await response.json().catch(() => undefined) as { error?: { status?: string; errors?: Array<{ reason?: string }> } } | undefined;
-      throw new GmailRequestError(response.status, payload?.error?.status ?? payload?.error?.errors?.[0]?.reason);
+      const responseBody = (await response.text().catch(() => "")).slice(0, 500);
+      let payload: { error?: { status?: string; errors?: Array<{ reason?: string }> } } | undefined;
+      try { payload = JSON.parse(responseBody || "{}") as typeof payload; } catch { payload = undefined; }
+      throw new GmailRequestError(
+        response.status,
+        path,
+        init.method ?? "GET",
+        responseBody,
+        payload?.error?.status ?? payload?.error?.errors?.[0]?.reason,
+      );
     }
     return response.json().catch(() => ({}));
   }
 }
 
 export class GmailRequestError extends Error {
-  constructor(readonly status: number, readonly reason?: string) {
-    super(`Gmail request failed (HTTP ${status})`);
+  constructor(readonly status: number, readonly endpoint: string, readonly method: string, readonly responseBody: string, readonly reason?: string) {
+    super(`Gmail request failed (HTTP ${status}) ${method} ${endpoint}${responseBody ? `: ${responseBody}` : ""}`);
   }
 }

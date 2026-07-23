@@ -428,9 +428,17 @@ describe("PipedriveClient retry and error mapping", () => {
       if (typeof fn === "function") fn();
       return 0 as unknown as ReturnType<typeof setTimeout>;
     });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({}, 500));
+    const upstreamBody = "Pipedrive upstream failure: " + "x".repeat(600);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(upstreamBody, { status: 500 }),
+    );
 
-    await expect(createClient().listDeals({})).rejects.toBeInstanceOf(PipedriveServerError);
+    await expect(createClient().listDeals({})).rejects.toMatchObject({
+      endpoint: "deals",
+      status: 500,
+      responseBody: upstreamBody.slice(0, 500),
+      message: expect.stringContaining(`deals: ${upstreamBody.slice(0, 500)}`),
+    });
   });
 });
 

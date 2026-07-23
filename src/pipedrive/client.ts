@@ -652,15 +652,21 @@ export class PipedriveClient {
             await sleep(this.retryDelayMs(response, attempt));
             continue;
           }
-          throw new PipedriveServerError(`Pipedrive server error with status ${response.status}`, {
+          const responseBody = await this.readErrorMessage(response);
+          throw new PipedriveServerError(
+            `Pipedrive server error with status ${response.status} for ${endpoint}: ${responseBody}`,
+            {
             endpoint,
             status: response.status,
-          });
+              responseBody,
+            },
+          );
         }
 
         if (!response.ok) {
-          const message = await this.readErrorMessage(response);
-          const options = { endpoint, status: response.status };
+          const responseBody = await this.readErrorMessage(response);
+          const message = `Pipedrive request failed for ${endpoint}: ${responseBody}`;
+          const options = { endpoint, status: response.status, responseBody };
           if (response.status === 401 || response.status === 403) {
             throw new PipedriveAuthError(message, options);
           }
@@ -724,13 +730,19 @@ export class PipedriveClient {
             await sleep(this.retryDelayMs(response, attempt));
             continue;
           }
-          throw new PipedriveServerError(`Pipedrive server error with status ${response.status}`, {
+          const responseBody = await this.readErrorMessage(response);
+          throw new PipedriveServerError(
+            `Pipedrive server error with status ${response.status} for ${endpoint}: ${responseBody}`,
+            {
             endpoint,
             status: response.status,
-          });
+              responseBody,
+            },
+          );
         }
 
         if (!response.ok) {
+          const responseBody = await this.readErrorMessage(response);
           // A non-ok response whose final URL left *.pipedrive.com means the
           // file is stored remotely (e.g. Google Drive) and Pipedrive 302'd us
           // to the provider, which needs its own auth — the bytes aren't
@@ -744,12 +756,12 @@ export class PipedriveClient {
           }
           if (finalHost && !finalHost.endsWith("pipedrive.com")) {
             throw new PipedriveError(
-              `File is stored remotely (${finalHost}) and cannot be downloaded via the Pipedrive API. Open it directly at: ${response.url}`,
-              { endpoint, status: response.status },
+              `File is stored remotely (${finalHost}) and cannot be downloaded via the Pipedrive API. Open it directly at: ${response.url}. Response: ${responseBody}`,
+              { endpoint, status: response.status, responseBody },
             );
           }
-          const message = await this.readErrorMessage(response);
-          const options = { endpoint, status: response.status };
+          const message = `Pipedrive request failed for ${endpoint}: ${responseBody}`;
+          const options = { endpoint, status: response.status, responseBody };
           if (response.status === 401 || response.status === 403) {
             throw new PipedriveAuthError(message, options);
           }
@@ -947,12 +959,9 @@ export class PipedriveClient {
 
   private async readErrorMessage(response: Response): Promise<string> {
     const fallback = response.statusText || `Pipedrive request failed with status ${response.status}`;
-    const text = await response.text();
-    if (!text) return fallback;
     try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const message = parsed.error ?? parsed.message;
-      return typeof message === "string" && message.length > 0 ? message : fallback;
+      const text = await response.text();
+      return text ? text.slice(0, 500) : fallback;
     } catch {
       return fallback;
     }
