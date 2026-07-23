@@ -18,7 +18,7 @@ export class JiraClient {
         signal: controller.signal,
       });
       const reqId = res.headers.get("x-arequestid") ?? undefined;
-      const text = await res.text();
+      const text = await res.text().catch(() => "");
       if (!res.ok) {
         const responseBody = text.slice(0, 500);
         const message = `Jira API request failed (${res.status}) ${path}${responseBody ? `: ${responseBody}` : ""}`;

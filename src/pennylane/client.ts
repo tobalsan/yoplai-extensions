@@ -247,9 +247,9 @@ export class PennylaneClient {
   private async readErrorBody(response: Response): Promise<string> {
     try {
       const body = await response.text();
-      return body ? body.slice(0, 500) : response.statusText || "No response body";
+      return body.slice(0, 500);
     } catch {
-      return response.statusText || "Unable to read response body";
+      return "";
     }
   }
 

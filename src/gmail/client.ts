@@ -127,9 +127,10 @@ export class GmailClient {
   private async request(path: string, init: RequestInit = {}) {
     const response = await this.fetchImpl(`${GMAIL_API_BASE}${path}`, { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
     if (!response.ok) {
-      const responseBody = (await response.text().catch(() => "")).slice(0, 500);
+      const body = await response.text().catch(() => "");
+      const responseBody = body.slice(0, 500);
       let payload: { error?: { status?: string; errors?: Array<{ reason?: string }> } } | undefined;
-      try { payload = JSON.parse(responseBody || "{}") as typeof payload; } catch { payload = undefined; }
+      try { payload = JSON.parse(body || "{}") as typeof payload; } catch { payload = undefined; }
       throw new GmailRequestError(
         response.status,
         path,

@@ -188,7 +188,14 @@ describe("ConfluenceClient", () => {
       .mockResolvedValue(new Response("{}", { status: 500 }));
 
     const client = new ConfluenceClient(baseConfig);
-    await expect(client.validate()).rejects.toBeInstanceOf(ConfluenceServerError);
+    const error = await client.validate().catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      responseBody: "{}",
+      endpoint: "/api/v2/spaces",
+      status: 500,
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("{}");
     expect(fetchSpy).toHaveBeenCalledTimes(4);
     setTimeoutSpy.mockRestore();
   });
@@ -253,6 +260,18 @@ describe("ConfluenceClient", () => {
         authenticated: true,
       },
     });
+  });
+
+  it("includes the upstream response body when a file download fails", async () => {
+    const url = "https://mycompany.atlassian.net/wiki/download/attachments/1/a.pdf";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("upstream unavailable", { status: 503 }));
+
+    const client = new ConfluenceClient(baseConfig);
+    const error = await client.downloadAndExtractFile({ url }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 503, endpoint: url, responseBody: "upstream unavailable" });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("upstream unavailable");
   });
 
   it("wraps CQL with space filter when confluenceSpace is set", async () => {

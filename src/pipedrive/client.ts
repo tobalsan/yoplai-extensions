@@ -958,12 +958,11 @@ export class PipedriveClient {
   }
 
   private async readErrorMessage(response: Response): Promise<string> {
-    const fallback = response.statusText || `Pipedrive request failed with status ${response.status}`;
     try {
       const text = await response.text();
-      return text ? text.slice(0, 500) : fallback;
+      return text.slice(0, 500);
     } catch {
-      return fallback;
+      return "";
     }
   }
   /**
