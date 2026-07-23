@@ -89,4 +89,36 @@ describe("McpClientManager", () => {
     });
     expect(stdioParams?.env).not.toHaveProperty("LINEAR_OAUTH_TOKEN");
   });
+
+  it("uses a refreshed OAuth token and marks 401 failures for reconnect", async () => {
+    const marked: string[] = [];
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async (_server, token) => {
+        expect(token).toBe("fresh-token");
+        throw new Error("401 Unauthorized");
+      },
+      async () => "fresh-token",
+      async (server) => { marked.push(server.name); }
+    );
+
+    await manager.connect();
+
+    expect(marked).toEqual(["claap"]);
+    expect(manager.getErrors()).toEqual([{ server: "claap", message: "401 Unauthorized" }]);
+  });
+
+  it("returns the structured not-connected response after a tool 401", async () => {
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
+      undefined,
+      async () => undefined,
+      undefined,
+      (server) => ({ connected: false, server, reason: "needs_reconnect" })
+    );
+    await manager.connect();
+    await manager.listTools();
+    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
+  });
 });

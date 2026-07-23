@@ -69,3 +69,19 @@ extensions:
 ```
 
 Unavailable or invalid servers are logged and skipped; tools from healthy servers remain available.
+
+## OAuth servers
+
+For an OAuth-protected remote MCP server such as Claap, configure only its URL:
+
+```json
+{ "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
+```
+
+Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions. The callback is `${AIHUB_BASE_URL}/api/mcp/oauth/callback` (or `http://localhost:4000` when unset).
+
+Claap can instead use a workspace API key, which remains the unchanged static-header path:
+
+```json
+{ "mcpServers": { "claap": { "url": "https://api.claap.io/mcp", "headers": { "Authorization": "Bearer ${CLAAP_API_KEY}" } } } }
+```

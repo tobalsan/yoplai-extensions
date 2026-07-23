@@ -22,7 +22,9 @@ export interface McpClientHandle {
   close(): Promise<void>;
 }
 
-export type McpClientFactory = (server: McpServerConfig) => Promise<McpClientHandle>;
+export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
+export type McpTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
+export type McpNotConnectedResponse = (server: string) => unknown;
 
 export interface McpServerError {
   server: string;
@@ -36,9 +38,9 @@ export class SdkMcpClientHandle implements McpClientHandle {
     private readonly transport: Transport
   ) {}
 
-  static async connect(server: McpServerConfig): Promise<SdkMcpClientHandle> {
+  static async connect(server: McpServerConfig, accessToken?: string): Promise<SdkMcpClientHandle> {
     const client = new Client({ name: "aihub-mcp", version: "0.1.0" });
-    const transport = createTransport(server);
+    const transport = createTransport(server, accessToken);
     await client.connect(transport);
     return new SdkMcpClientHandle(server.name, client, transport);
   }
@@ -65,7 +67,7 @@ export class SdkMcpClientHandle implements McpClientHandle {
   }
 }
 
-function createTransport(server: McpServerConfig): Transport {
+function createTransport(server: McpServerConfig, accessToken?: string): Transport {
   if (server.type === "stdio") {
     return new StdioClientTransport({
       command: server.command,
@@ -75,7 +77,7 @@ function createTransport(server: McpServerConfig): Transport {
     });
   }
 
-  const headers = server.headers ? new Headers(server.headers) : undefined;
+  const headers = server.headers ? new Headers(server.headers) : accessToken ? new Headers({ Authorization: `Bearer ${accessToken}` }) : undefined;
   const requestInit = headers ? { headers } : undefined;
   if (server.url.includes("/sse")) {
     return new SSEClientTransport(new URL(server.url), {
@@ -107,16 +109,28 @@ export class McpClientManager {
 
   constructor(
     private readonly servers: McpServerConfig[],
-    private readonly clientFactory: McpClientFactory = SdkMcpClientHandle.connect
+    private readonly clientFactory: McpClientFactory = SdkMcpClientHandle.connect,
+    private readonly tokenProvider?: McpTokenProvider,
+    private readonly onAuthFailure?: (server: McpServerConfig) => Promise<void>,
+    private readonly requiresOAuth?: (server: McpServerConfig) => Promise<boolean>,
+    private readonly notConnectedResponse?: McpNotConnectedResponse
   ) {}
 
   async connect(): Promise<void> {
     await Promise.all(
       this.servers.map(async (server) => {
         try {
-          const client = await this.clientFactory(server);
+          const accessToken = server.type === "http" && !server.headers && this.tokenProvider
+            ? await this.tokenProvider(server)
+            : undefined;
+          if (server.type === "http" && !server.headers && this.tokenProvider && await this.requiresOAuth?.(server) && !accessToken) {
+            this.recordError(server.name, new Error("OAuth connection required"));
+            return;
+          }
+          const client = await this.clientFactory(server, accessToken);
           this.clients.set(server.name, client);
         } catch (error) {
+          if (isUnauthorized(error) && this.onAuthFailure) await this.onAuthFailure(server);
           this.recordError(server.name, error);
         }
       })
@@ -129,6 +143,8 @@ export class McpClientManager {
         try {
           return await client.listTools();
         } catch (error) {
+          const config = this.servers.find((item) => item.name === server);
+          if (config && isUnauthorized(error) && this.onAuthFailure) await this.onAuthFailure(config);
           this.recordError(server, error);
           this.clients.delete(server);
           return [];
@@ -159,7 +175,14 @@ export class McpClientManager {
     if (!client) {
       throw new Error(`MCP server "${server}" is not connected`);
     }
-    return await client.callTool(tool, args);
+    try {
+      return await client.callTool(tool, args);
+    } catch (error) {
+      const config = this.servers.find((item) => item.name === server);
+      if (config && isUnauthorized(error) && this.onAuthFailure) await this.onAuthFailure(config);
+      if (config && isUnauthorized(error) && this.notConnectedResponse) return this.notConnectedResponse(server);
+      throw error;
+    }
   }
 
   getErrors(): McpServerError[] {
@@ -177,4 +200,9 @@ export class McpClientManager {
     this.errors.push({ server, message });
     console.warn(`[mcp] server "${server}" unavailable: ${message}`);
   }
+}
+
+function isUnauthorized(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b401\b|unauthori[sz]ed/i.test(message);
 }
