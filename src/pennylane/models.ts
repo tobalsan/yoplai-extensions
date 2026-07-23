@@ -461,6 +461,11 @@ export type UpdateInvoiceDraftParams = z.infer<typeof UpdateInvoiceDraftParamsSc
  * hook for correlation/dedup (returned on the quote but not server-side
  * filterable, so callers match it client-side via `search_quotes`). Line items
  * share the same product-based / free-form shapes as invoice drafts (§2.3).
+ * Unlike invoices, quotes have **no top-level `label`**: `POST /quotes` rejects
+ * it with a 500 `NotExistPropertyDefinition` ("These additional properties are
+ * not supported: label."). The quote's response `label` field is read-only,
+ * mirroring the quote number — it is not settable here. (Line-level `label` on
+ * `invoiceLines` is unaffected.)
  */
 export const CreateQuoteParamsSchema = z
   .object({
@@ -469,7 +474,6 @@ export const CreateQuoteParamsSchema = z
     deadline: IsoDate,
     invoiceLines: z.array(QuoteLineInputSchema).min(1),
     discount: DiscountInputSchema.optional(),
-    label: z.string().max(2000).optional(),
     externalReference: z.string().optional(),
     currency: z.string().optional(),
     language: z.string().optional(),
@@ -504,6 +508,11 @@ export type QuoteLinesDiff = z.infer<typeof QuoteLinesDiffSchema>;
  * quote (accepted/denied/invoiced/expired/sent) is refused and the `PUT` never
  * issues. Status is not editable here (there is deliberately no accept/send
  * tool). `invoiceLines` uses the `{ create, update, delete }` diff object.
+ * Unlike invoices, quotes have **no top-level `label`**: `PUT /quotes/{id}`
+ * rejects it with a 500 `NotExistPropertyDefinition` ("These additional
+ * properties are not supported: label."). The quote's response `label` field
+ * is read-only, mirroring the quote number — it is not settable here.
+ * (Line-level `label` on `invoiceLines` is unaffected.)
  */
 export const UpdateQuoteParamsSchema = z
   .object({
@@ -512,7 +521,6 @@ export const UpdateQuoteParamsSchema = z
     date: IsoDate.optional(),
     deadline: IsoDate.optional(),
     invoiceLines: QuoteLinesDiffSchema.optional(),
-    label: z.string().max(2000).optional(),
     externalReference: z.string().optional(),
     currency: z.string().optional(),
     language: z.string().optional(),

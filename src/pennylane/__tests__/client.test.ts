@@ -712,6 +712,20 @@ describe("PennylaneClient", () => {
       })).rejects.toThrow();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    it("rejects a top-level label before HTTP (Pennylane quotes have no such field)", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.createQuote({
+        customerId: 42,
+        date: "2026-07-02",
+        deadline: "2026-08-02",
+        label: "nope",
+        invoiceLines: [{ productId: 123, quantity: 1 }],
+      })).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe("update_quote", () => {
@@ -724,7 +738,6 @@ describe("PennylaneClient", () => {
 
       const result = await client.updateQuote({
         id: 7,
-        label: "Updated",
         invoiceLines: {
           create: [{ label: "New line", quantity: 1, rawCurrencyUnitPrice: "10.00", vatRate: "FR_200" }],
           update: [{ id: 3, quantity: 5 }],
@@ -732,6 +745,7 @@ describe("PennylaneClient", () => {
         },
       });
 
+      // Response-side label (read-only, mirrors the quote number) passes through.
       expect(result.quote.label).toBe("Updated");
       // First call reads the target, second call writes.
       expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
@@ -741,7 +755,8 @@ describe("PennylaneClient", () => {
       const putCall = fetchSpy.mock.calls[1];
       expect(putCall?.[1]?.method).toBe("PUT");
       const body = JSON.parse(String(putCall?.[1]?.body));
-      expect(body.label).toBe("Updated");
+      // Top-level label is not a valid quote field — it must NOT be sent.
+      expect(body.label).toBeUndefined();
       // invoice_lines is a diff object, snake-cased, not a flat array.
       expect(body.invoice_lines.create[0]).toMatchObject({ raw_currency_unit_price: "10.00" });
       expect(body.invoice_lines.update[0]).toMatchObject({ id: 3, quantity: 5 });
@@ -760,13 +775,21 @@ describe("PennylaneClient", () => {
         .mockResolvedValue(jsonResponse({ id: 9, status }));
       const client = new PennylaneClient({ apiToken: "t" });
 
-      await expect(client.updateQuote({ id: 9, label: "nope" })).rejects.toBeInstanceOf(
+      await expect(client.updateQuote({ id: 9, externalReference: "nope" })).rejects.toBeInstanceOf(
         PennylaneGuardRefusedError,
       );
 
       // Only the read happened; no PUT was issued.
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    });
+
+    it("rejects a top-level label before HTTP (Pennylane quotes have no such field)", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(client.updateQuote({ id: 9, label: "nope" })).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });
