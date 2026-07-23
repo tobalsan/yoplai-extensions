@@ -131,7 +131,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   const managers = new Map<string, Promise<McpClientManager>>();
   const oauthServers = new Set<string>();
   let runtime: { getDataDir(): string; getConfig(): { extensions?: Record<string, unknown>; env?: Record<string, string> }; getAgent(id: string): AgentLike | undefined } | undefined;
-  const redirectUri = `${(process.env.AIHUB_BASE_URL ?? "http://localhost:4000").replace(/\/$/, "")}/api/mcp/oauth/callback`;
+  const redirectUri = `${(process.env.BASE_URL ?? "http://localhost:4000").replace(/\/$/, "")}/api/mcp/oauth/callback`;
   let oauth: McpOAuthStore | undefined;
 
   function loadedForAgent(agentId: string): LoadedMcpConfig | undefined {

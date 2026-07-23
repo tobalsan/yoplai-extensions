@@ -78,7 +78,19 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
 ```
 
-Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions. The callback is `${AIHUB_BASE_URL}/api/mcp/oauth/callback` (or `http://localhost:4000` when unset).
+Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions.
+
+Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `aihub.json` is sufficient; do not include an `/api` suffix:
+
+```json
+{
+  "env": {
+    "BASE_URL": "https://aihub.example.com"
+  }
+}
+```
+
+The callback becomes `${BASE_URL}/api/mcp/oauth/callback`. Without this variable, it defaults to `http://localhost:4000`, which is suitable only for a gateway available there. Restart the gateway after changing it.
 
 Claap can instead use a workspace API key, which remains the unchanged static-header path:
 

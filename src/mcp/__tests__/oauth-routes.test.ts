@@ -7,7 +7,7 @@ import { createMcpExtension } from "../index.js";
 import { McpOAuthStore } from "../oauth.js";
 
 const dirs: string[] = [];
-afterEach(async () => { vi.unstubAllGlobals(); vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js"); vi.resetModules(); vi.useRealTimers(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js"); vi.resetModules(); vi.useRealTimers(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
 
 function app() {
   const routes = new Map<string, (c: any) => Promise<unknown>>();
@@ -45,7 +45,9 @@ describe("MCP OAuth routes", () => {
   it("runs authorize, callback, and status against an OAuth MCP server", async () => {
     const exchange = vi.fn().mockResolvedValue({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 });
     const discover = vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register" } });
-    const register = vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: ["http://localhost:4000/api/mcp/oauth/callback"] });
+    const redirectUri = "https://aihub.example.com/api/mcp/oauth/callback";
+    vi.stubEnv("BASE_URL", "https://aihub.example.com/");
+    const register = vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: [redirectUri] });
     const authorize = vi.fn().mockImplementation((_url, options) => ({ authorizationUrl: new URL(`https://auth.test/authorize?code_challenge=challenge&state=${options.state}`), codeVerifier: "verifier" }));
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
       discoverOAuthServerInfo: discover,
@@ -68,10 +70,10 @@ describe("MCP OAuth routes", () => {
     expect(state).toBeTruthy();
     await expect(routes.routes.get("GET /mcp/oauth/callback")!(context({ code: "code", state: state! }))).resolves.toMatchObject({ body: expect.stringContaining("success:true") });
     expect(discover).toHaveBeenCalledWith("https://api.claap.io/mcp");
-    expect(register).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ clientMetadata: expect.objectContaining({ redirect_uris: ["http://localhost:4000/api/mcp/oauth/callback"] }) }));
-    expect(authorize).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ redirectUrl: "http://localhost:4000/api/mcp/oauth/callback", resource: new URL("https://api.claap.io/mcp") }));
+    expect(register).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ clientMetadata: expect.objectContaining({ redirect_uris: [redirectUri] }) }));
+    expect(authorize).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ redirectUrl: redirectUri, resource: new URL("https://api.claap.io/mcp") }));
     expect(exchange).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ authorizationCode: "code", codeVerifier: "verifier" }));
-    const persisted = new McpOAuthStore(work, "http://localhost:4000/api/mcp/oauth/callback");
+    const persisted = new McpOAuthStore(work, redirectUri);
     await expect(persisted.read("casey", "claap")).resolves.toMatchObject({ client: { client_id: "client" }, tokens: { access_token: "access" }, state: "connected" });
     const oauthRoot = path.join(work, "mcp", "oauth");
     const tokenFile = path.join(oauthRoot, (await fs.readdir(oauthRoot))[0]!, (await fs.readdir(path.join(oauthRoot, (await fs.readdir(oauthRoot))[0]!)))[0]!);
