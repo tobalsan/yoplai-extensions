@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -156,4 +156,202 @@ describe("FieldRegistryStore", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(registry.by_key.hash1.name).toBe("Priority");
   });
+});
+
+describe("defaultCachePath", () => {
+  const originalHome = process.env.HOME;
+  const originalNewWorkspace = process.env.YOPLAI_WORKSPACE_DIR;
+  const originalLegacyWorkspace = process.env.AIHUB_WORKSPACE_DIR;
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalNewWorkspace === undefined) delete process.env.YOPLAI_WORKSPACE_DIR;
+    else process.env.YOPLAI_WORKSPACE_DIR = originalNewWorkspace;
+    if (originalLegacyWorkspace === undefined) delete process.env.AIHUB_WORKSPACE_DIR;
+    else process.env.AIHUB_WORKSPACE_DIR = originalLegacyWorkspace;
+
+    vi.restoreAllMocks();
+    vi.resetModules();
+    for (const dir of tempDirs.splice(0)) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers YOPLAI_WORKSPACE_DIR over the legacy AIHUB_WORKSPACE_DIR and does not warn", async () => {
+    process.env.YOPLAI_WORKSPACE_DIR = "/tmp/yoplai-ws";
+    process.env.AIHUB_WORKSPACE_DIR = "/tmp/aihub-ws";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(path.join("/tmp/yoplai-ws", ".cache", "deal_field_registry.json"));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy AIHUB_WORKSPACE_DIR and warns once", async () => {
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    process.env.AIHUB_WORKSPACE_DIR = "/tmp/aihub-ws";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(path.join("/tmp/aihub-ws", ".cache", "deal_field_registry.json"));
+    defaultCachePath();
+
+    const legacyWarnings = warn.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("AIHUB_WORKSPACE_DIR"),
+    );
+    expect(legacyWarnings).toHaveLength(1);
+  });
+
+  it("prefers the new state dir over the legacy one when both exist", async () => {
+    const home = await tempHome();
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    delete process.env.AIHUB_WORKSPACE_DIR;
+    process.env.HOME = home;
+    await mkdir(path.join(home, ".local", "state", "yoplai", "extensions", "pipedrive"), { recursive: true });
+    await mkdir(path.join(home, ".local", "state", "aihub", "extensions", "pipedrive"), { recursive: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(
+      path.join(home, ".local", "state", "yoplai", "extensions", "pipedrive", "deal_field_registry.json"),
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("resolves to the new state dir even when only the legacy state dir exists", async () => {
+    const home = await tempHome();
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    delete process.env.AIHUB_WORKSPACE_DIR;
+    process.env.HOME = home;
+    await mkdir(path.join(home, ".local", "state", "aihub", "extensions", "pipedrive"), { recursive: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(newStateCachePath(home));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reads a legacy state-dir cache, then writes the refreshed cache to the new state dir", async () => {
+    const home = await tempHome();
+    const legacyCachePath = await seedLegacyCache(home, 1_000_000);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { FieldRegistryStore } = await import("../field-registry.js");
+
+    const fetcher = vi.fn(async () => [field({ key: "hash2", name: "Fresh" })]);
+    const store = new FieldRegistryStore(fetcher, { now: () => 1_000_000 });
+    expect(store.cachePath).toBe(newStateCachePath(home));
+
+    // The legacy cache is still honored...
+    const served = await store.get();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(served.by_key.hash1.name).toBe("Legacy");
+
+    // ...but the rebuild lands on the new path, leaving the legacy file inert.
+    const refreshed = await store.refresh();
+    expect(refreshed.by_key.hash2.name).toBe("Fresh");
+    const written = JSON.parse(await readFile(newStateCachePath(home), "utf8"));
+    expect(written.registry.by_key.hash2.name).toBe("Fresh");
+    const legacyAfter = JSON.parse(await readFile(legacyCachePath, "utf8"));
+    expect(legacyAfter.registry.by_key.hash1.name).toBe("Legacy");
+
+    // A later process reads the new file and never shadows it with the legacy one.
+    const nextFetcher = vi.fn(async () => [field({ key: "hash3", name: "Unused" })]);
+    const next = await new FieldRegistryStore(nextFetcher, { now: () => 1_000_000 }).get();
+    expect(nextFetcher).not.toHaveBeenCalled();
+    expect(next.by_key.hash2.name).toBe("Fresh");
+
+    const legacyWarnings = warn.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes(legacyCachePath),
+    );
+    expect(legacyWarnings).toHaveLength(1);
+    expect(String(legacyWarnings[0][0])).toContain(newStateCachePath(home));
+  });
+
+  it("serves a legacy state-dir cache within the stale-grace window when the fetch fails", async () => {
+    const home = await tempHome();
+    await seedLegacyCache(home, 1_000_000);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { FieldRegistryStore } = await import("../field-registry.js");
+
+    const fetcher = vi.fn().mockRejectedValue(new Error("Pipedrive down"));
+    const clock = 1_000_000 + (DEFAULT_TTL_SECONDS + 60) * 1000; // expired, within grace
+    const served = await new FieldRegistryStore(fetcher, { now: () => clock }).get();
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(served.by_key.hash1.name).toBe("Legacy");
+  });
+
+  it("ignores an empty YOPLAI_WORKSPACE_DIR and uses the legacy workspace, warning once", async () => {
+    process.env.YOPLAI_WORKSPACE_DIR = "";
+    process.env.AIHUB_WORKSPACE_DIR = "/tmp/legacy-ws";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(path.join("/tmp/legacy-ws", ".cache", "deal_field_registry.json"));
+
+    const legacyWarnings = warn.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("AIHUB_WORKSPACE_DIR"),
+    );
+    expect(legacyWarnings).toHaveLength(1);
+  });
+
+  it("ignores an empty legacy AIHUB_WORKSPACE_DIR without warning", async () => {
+    const home = await tempHome();
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    process.env.AIHUB_WORKSPACE_DIR = "  ";
+    process.env.HOME = home;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(newStateCachePath(home));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses the new state dir when neither exists", async () => {
+    const home = await tempHome();
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    delete process.env.AIHUB_WORKSPACE_DIR;
+    process.env.HOME = home;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.resetModules();
+    const { defaultCachePath } = await import("../field-registry.js");
+
+    expect(defaultCachePath()).toBe(
+      path.join(home, ".local", "state", "yoplai", "extensions", "pipedrive", "deal_field_registry.json"),
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  async function tempHome(): Promise<string> {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "pd-registry-home-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  function newStateCachePath(home: string): string {
+    return path.join(home, ".local", "state", "yoplai", "extensions", "pipedrive", "deal_field_registry.json");
+  }
+
+  /** Simulate a pre-rename install: only the legacy state dir holds a cache. */
+  async function seedLegacyCache(home: string, fetchedAt: number): Promise<string> {
+    delete process.env.YOPLAI_WORKSPACE_DIR;
+    delete process.env.AIHUB_WORKSPACE_DIR;
+    process.env.HOME = home;
+    const legacyDir = path.join(home, ".local", "state", "aihub", "extensions", "pipedrive");
+    await mkdir(legacyDir, { recursive: true });
+    const legacyCachePath = path.join(legacyDir, "deal_field_registry.json");
+    const registry = buildRegistry([field({ key: "hash1", name: "Legacy" })], () => fetchedAt);
+    await writeFile(legacyCachePath, JSON.stringify({ fetchedAt, registry }), "utf8");
+    return legacyCachePath;
+  }
 });

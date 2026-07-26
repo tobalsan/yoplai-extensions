@@ -15,7 +15,7 @@ Scopes requested: `drive.readonly` + `userinfo.email`. Read-only, no mutations.
 
 ## How it differs from other extensions
 
-Unlike `gsheets`/`pipedrive`/etc., **no credential goes in the extension config**. The Google app credentials live host-side in AIHub's OAuth framework; the agent config only *opts in*. Setup is two parts: **operator** (register a Google OAuth client + configure AIHub once) and **user** (click Connect).
+Unlike `gsheets`/`pipedrive`/etc., **no credential goes in the extension config**. The Google app credentials live host-side in Yoplai's OAuth framework; the agent config only *opts in*. Setup is two parts: **operator** (register a Google OAuth client + configure Yoplai once) and **user** (click Connect).
 
 ---
 
@@ -24,14 +24,14 @@ Unlike `gsheets`/`pipedrive`/etc., **no credential goes in the extension config*
 ```bash
 pnpm install
 pnpm build
-ln -sfn "$PWD/dist/google-drive" ~/.aihub/extensions/google-drive
+ln -sfn "$PWD/dist/google-drive" ~/.yoplai/extensions/google-drive
 ```
 
 ## 2. Enable it for an agent
 
 Opt in under `extensions` in the agent's `agent.yaml`. Config is empty — the token is injected by the host, not read from here.
 
-`~/.aihub/agents/<agent>/agent.yaml`:
+`~/.yoplai/agents/<agent>/agent.yaml`:
 
 ```yaml
 extensions:
@@ -54,18 +54,18 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
    Base defaults to `http://localhost:4000` if unset. Any mismatch → `redirect_uri_mismatch`.
 5. Copy the generated **client ID** and **client secret**.
 
-## 4. Operator: configure AIHub (host `aihub.json`)
+## 4. Operator: configure Yoplai (host `yoplai.json`)
 
-Google credentials go under a top-level `oauth` key in `aihub.json` (BYO — bring-your-own client). `$env:` refs are supported and recommended.
+Google credentials go under a top-level `oauth` key in `yoplai.json` (BYO — bring-your-own client). `$env:` refs are supported and recommended.
 
-`~/.aihub/aihub.json`:
+`~/.yoplai/yoplai.json`:
 
 ```jsonc
 {
   "version": 3,
   "agents": "./agents/*",
   "oauth": {
-    "redirectBaseUrl": "https://aihub.example.com",
+    "redirectBaseUrl": "https://yoplai.example.com",
     "providers": {
       "google": {
         "clientId": "$env:GOOGLE_CLIENT_ID",
@@ -77,7 +77,7 @@ Google credentials go under a top-level `oauth` key in `aihub.json` (BYO — bri
 }
 ```
 
-Actual secrets in `$AIHUB_HOME/.env` (env var names are your choice — just match the `$env:` refs):
+Actual secrets in `$YOPLAI_HOME/.env` (env var names are your choice — just match the `$env:` refs):
 
 ```bash
 GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
@@ -91,7 +91,7 @@ Notes:
 
 ## 5. User: connect
 
-In the AIHub web UI, open **`/connections`** for the agent and click **Connect Google Drive**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
+In the Yoplai web UI, open **`/connections`** for the agent and click **Connect Google Drive**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
 
 - **Needs reconnect** (grant revoked/expired-beyond-refresh) → click **Reconnect**.
 - **Disconnect** revokes and clears the grant.
@@ -104,4 +104,4 @@ Until connected, every tool returns a documented not-connected signal (never a r
 
 Run `googleDrive_validate` from the agent — a healthy connection returns `connected: true` with the Google account and scopes.
 
-Operator reference (host repo): `aihub/docs/oauth-google-drive-setup.md`.
+Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md`.

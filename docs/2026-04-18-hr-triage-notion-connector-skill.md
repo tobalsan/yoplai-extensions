@@ -4,11 +4,11 @@
 
 An existing webhook-triggered LangGraph workflow triages job applications.
 
-AIHub needs an equivalent manual HR-agent workflow. The replacement should not port the LangGraph graph as one opaque connector tool. Instead, AIHub should provide a reusable generic Notion connector, and the HR agent should use a skill that describes how to orchestrate triage with its own model.
+Yoplai needs an equivalent manual HR-agent workflow. The replacement should not port the LangGraph graph as one opaque connector tool. Instead, Yoplai should provide a reusable generic Notion connector, and the HR agent should use a skill that describes how to orchestrate triage with its own model.
 
 ## Goals
 
-- Add a generic `notion` connector usable by multiple AIHub agents.
+- Add a generic `notion` connector usable by multiple Yoplai agents.
 - Expose low-level Notion tools so agents can navigate databases, pages, blocks, and files freely.
 - Include a resume extraction tool for Notion-hosted PDF/DOCX files.
 - Add an HR skill that tells the agent how to find untriaged applications and triage them.
@@ -24,7 +24,7 @@ AIHub needs an equivalent manual HR-agent workflow. The replacement should not p
 - No webhook automation in this slice.
 - No scheduler or polling loop.
 - No LangGraph runtime port.
-- No Langfuse dependency in AIHub.
+- No Langfuse dependency in Yoplai.
 - No batching or parallel writes to Notion.
 - No HR-specific connector API.
 - No hardcoded applications database ID in the skill.
@@ -104,7 +104,7 @@ All tool `parameters` must be `z.object({ ... })`.
 
 Skill name: likely `hr-application-triage`.
 
-Skill location: save in the HR agent workspace where AIHub can load it. Current AIHub docs prefer `{agent_workspace}/agent/skills/`, but runtime also loads `{workspace}/skills`; the implementation should account for this mismatch.
+Skill location: save in the HR agent workspace where Yoplai can load it. Current Yoplai docs prefer `{agent_workspace}/agent/skills/`, but runtime also loads `{workspace}/skills`; the implementation should account for this mismatch.
 
 The skill should describe the manual triage procedure and reference the `notion` connector tools.
 
@@ -266,7 +266,7 @@ The old workflow deleted headings named `AI Summary` or `AI Assessment`; the new
 - As an HR user, I can ask the HR agent to triage untriaged applications and have Notion updated.
 - As an HR user, I can ask the HR agent to triage a specific candidate page.
 - As an HR user, I can trust the agent not to reject borderline candidates too aggressively.
-- As another AIHub agent owner, I can reuse the same generic Notion connector for non-HR workflows.
+- As another Yoplai agent owner, I can reuse the same generic Notion connector for non-HR workflows.
 
 ## Error Handling
 
@@ -280,7 +280,7 @@ The old workflow deleted headings named `AI Summary` or `AI Assessment`; the new
 
 ## Security
 
-- Notion token must come from AIHub connector config/secrets.
+- Notion token must come from Yoplai connector config/secrets.
 - Do not expose token values in tool outputs or skill text.
 - Connector should return JSON-serializable data only.
 - Keep connector generic; do not embed HR prompt text or private database IDs.
@@ -310,7 +310,7 @@ Skill validation should be manual or fixture-based:
 
 ## Open Questions
 
-- Exact AIHub HR agent workspace path.
+- Exact Yoplai HR agent workspace path.
 - Whether the connector should normalize Notion property names internally or leave that entirely to the skill/agent.
 - Which package to use for PDF/DOCX extraction in TypeScript.
 - Whether to support Notion database APIs and data source APIs both, depending on active Notion API version.

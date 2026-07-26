@@ -31,19 +31,58 @@ export interface FieldRegistryStoreOptions {
   now?: () => number;
 }
 
+let warnedLegacyWorkspaceEnv = false;
+let warnedLegacyCachePath = false;
+
+function trimValue(value: string | undefined): string | undefined {
+  const next = value?.trim();
+  return next ? next : undefined;
+}
+
+interface CacheLocation {
+  /** Where the cache is read from first and always written. */
+  cachePath: string;
+  /** Pre-rename cache file, read only when `cachePath` is absent. */
+  legacyCachePath: string | null;
+}
+
 /**
  * Default cache location: the agent workspace folder. Honors
- * AIHUB_WORKSPACE_DIR when set (the runtime points it at the per-agent
- * workspace), otherwise falls back to a stable local state dir. This replaces
- * the legacy Redis cache with a local file.
+ * YOPLAI_WORKSPACE_DIR, falling back to the legacy AIHUB_WORKSPACE_DIR (warns
+ * once) when it is the one actually used (the runtime points it at the
+ * per-agent workspace). Otherwise uses a stable local state dir,
+ * ~/.local/state/yoplai/extensions/pipedrive, with the pre-rename
+ * ~/.local/state/aihub/extensions/pipedrive kept only as a read fallback.
+ * This replaces the legacy Redis cache with a local file.
  */
+function defaultCacheLocation(): CacheLocation {
+  const workspace = trimValue(process.env.YOPLAI_WORKSPACE_DIR);
+  const legacyWorkspace = trimValue(process.env.AIHUB_WORKSPACE_DIR);
+  const chosenWorkspace = workspace ?? legacyWorkspace;
+
+  if (chosenWorkspace !== undefined) {
+    if (workspace === undefined && !warnedLegacyWorkspaceEnv) {
+      warnedLegacyWorkspaceEnv = true;
+      console.warn("[pipedrive] AIHUB_WORKSPACE_DIR is deprecated; use YOPLAI_WORKSPACE_DIR instead.");
+    }
+    // The workspace dir itself was not renamed, so there is no legacy file there.
+    return {
+      cachePath: path.join(chosenWorkspace, ".cache", "deal_field_registry.json"),
+      legacyCachePath: null,
+    };
+  }
+
+  const stateDir = path.join(os.homedir(), ".local", "state", "yoplai", "extensions", "pipedrive");
+  const legacyStateDir = path.join(os.homedir(), ".local", "state", "aihub", "extensions", "pipedrive");
+  return {
+    cachePath: path.join(stateDir, "deal_field_registry.json"),
+    legacyCachePath: path.join(legacyStateDir, "deal_field_registry.json"),
+  };
+}
+
+/** Absolute path the cache is read from first and always written to. */
 export function defaultCachePath(): string {
-  const workspace = process.env.AIHUB_WORKSPACE_DIR?.trim();
-  const base =
-    workspace && workspace.length > 0
-      ? path.join(workspace, ".cache")
-      : path.join(os.homedir(), ".local", "state", "aihub", "extensions", "pipedrive");
-  return path.join(base, "deal_field_registry.json");
+  return defaultCacheLocation().cachePath;
 }
 
 /** Build the key→FieldMeta map and a deterministic version hash from raw fields. */
@@ -94,6 +133,7 @@ interface CacheEnvelope {
  */
 export class FieldRegistryStore {
   readonly cachePath: string;
+  private readonly legacyCachePath: string | null;
   private readonly ttlMs: number;
   private readonly graceMs: number;
   private readonly now: () => number;
@@ -102,7 +142,12 @@ export class FieldRegistryStore {
     private readonly fetchFields: DealFieldsFetcher,
     options: FieldRegistryStoreOptions = {},
   ) {
-    this.cachePath = options.cachePath ?? defaultCachePath();
+    const location =
+      options.cachePath === undefined
+        ? defaultCacheLocation()
+        : { cachePath: options.cachePath, legacyCachePath: null };
+    this.cachePath = location.cachePath;
+    this.legacyCachePath = location.legacyCachePath;
     this.ttlMs = (options.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000;
     this.graceMs = (options.graceSeconds ?? DEFAULT_GRACE_SECONDS) * 1000;
     this.now = options.now ?? Date.now;
@@ -147,17 +192,47 @@ export class FieldRegistryStore {
     return this.now() - envelope.fetchedAt < this.ttlMs + this.graceMs;
   }
 
+  /**
+   * Reads the cache, falling back to the pre-rename file only when the current
+   * one is absent (a corrupt current file does not un-shadow it). Writes always
+   * go to the current path, so the legacy file goes inert after the next write.
+   */
   private async readCache(): Promise<CacheEnvelope | null> {
+    const current = await this.readCacheAt(this.cachePath);
+    if (current !== "absent") return current;
+    if (this.legacyCachePath === null) return null;
+
+    const legacy = await this.readCacheAt(this.legacyCachePath);
+    if (legacy === "absent" || legacy === null) return null;
+
+    if (!warnedLegacyCachePath) {
+      warnedLegacyCachePath = true;
+      console.warn(
+        `[pipedrive] reading legacy cache ${this.legacyCachePath}; new caches are written to ${this.cachePath}.`,
+      );
+    }
+    return legacy;
+  }
+
+  /** `"absent"` when there is no such file; `null` when it exists but is unusable. */
+  private async readCacheAt(cachePath: string): Promise<CacheEnvelope | null | "absent"> {
+    let raw: string;
     try {
-      const raw = await readFile(this.cachePath, "utf8");
+      raw = await readFile(cachePath, "utf8");
+    } catch (error) {
+      if (isMissingFile(error)) return "absent";
+      // Unreadable cache: treat as unusable (a rebuild will replace it).
+      return null;
+    }
+
+    try {
       if (!raw.trim()) return null;
       const parsed = JSON.parse(raw) as { fetchedAt?: unknown; registry?: unknown };
       if (typeof parsed.fetchedAt !== "number") return null;
       const registry = FieldRegistrySchema.parse(parsed.registry);
       return { fetchedAt: parsed.fetchedAt, registry };
-    } catch (error) {
-      if (isMissingFile(error)) return null;
-      // Corrupt/unparseable cache: treat as absent (a rebuild will replace it).
+    } catch {
+      // Corrupt/unparseable cache: treat as unusable (a rebuild will replace it).
       return null;
     }
   }

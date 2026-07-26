@@ -99,7 +99,7 @@ export class McpOAuthStore {
     const existing = await this.read(agent, server);
     const client = existing?.client ?? await registerClient(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,
-      clientMetadata: { client_name: "AIHub MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
+      clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
     });
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {

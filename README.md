@@ -1,23 +1,31 @@
-# AIHub Tool Extensions
+# Yoplai Tool Extensions
 
-Self-contained agent tool packages for external APIs, used with [AIHub](https://github.com/algodyn/aihub).
+Self-contained agent tool packages for external APIs, used with [Yoplai](https://github.com/algodyn/yoplai).
 
 ## Usage
 
-Build and symlink (or copy) individual built extension directories into `$AIHUB_HOME/extensions` (`~/.aihub/extensions` by default), or set `extensionsPath` in `aihub.json`.
+Build and symlink (or copy) individual built extension directories into `$YOPLAI_HOME/extensions` (`~/.yoplai/extensions` by default), or set `extensionsPath` in `yoplai.json`.
+
+A pre-rename install under `~/.aihub` still works, with a one-time deprecation warning, but the two kinds of fallback trigger differently:
+
+- `YOPLAI_HOME` env var, falling back to `AIHUB_HOME` **when `YOPLAI_HOME` isn't set** (`src/mcp/index.ts`)
+- `YOPLAI_WORKSPACE_DIR` env var, falling back to `AIHUB_WORKSPACE_DIR` **when `YOPLAI_WORKSPACE_DIR` isn't set** (`src/pipedrive/field-registry.ts`)
+- On-disk default state paths under `~/.local/state/yoplai/extensions/...`, read from the legacy `~/.local/state/aihub/extensions/...` file only **when the new file doesn't exist yet**, for the pipedrive field-registry cache. Every write goes to the new path, so the legacy file goes inert after the first write; it can be deleted once the new file exists.
+
+New installs should use `~/.yoplai` / `YOPLAI_*`.
 
 ```bash
 pnpm install
 pnpm build
-mkdir -p ~/.aihub/extensions
-ln -sfn "$PWD/dist/hiveage" ~/.aihub/extensions/hiveage
-ln -sfn "$PWD/dist/pipedrive" ~/.aihub/extensions/pipedrive
-ln -sfn "$PWD/dist/pennylane" ~/.aihub/extensions/pennylane
+mkdir -p ~/.yoplai/extensions
+ln -sfn "$PWD/dist/hiveage" ~/.yoplai/extensions/hiveage
+ln -sfn "$PWD/dist/pipedrive" ~/.yoplai/extensions/pipedrive
+ln -sfn "$PWD/dist/pennylane" ~/.yoplai/extensions/pennylane
 ```
 
-AIHub v3 keeps agent config in each agent workspace. Root `aihub.json` only discovers agent folders and can hold shared extension defaults.
+Yoplai v3 keeps agent config in each agent workspace. Root `yoplai.json` only discovers agent folders and can hold shared extension defaults.
 
-`~/.aihub/aihub.json`:
+`~/.yoplai/yoplai.json`:
 
 ```json
 {
@@ -28,7 +36,7 @@ AIHub v3 keeps agent config in each agent workspace. Root `aihub.json` only disc
 
 Configure extension access in the agent folder's `agent.yaml`. Presence under `extensions` opts the agent in; `enabled: true` is optional.
 
-`~/.aihub/agents/sales-admin/agent.yaml`:
+`~/.yoplai/agents/sales-admin/agent.yaml`:
 
 ```yaml
 id: sales-admin
@@ -48,7 +56,7 @@ extensions:
 
 Agent-local `.env` files next to `agent.yaml` can provide those variables:
 
-`~/.aihub/agents/sales-admin/.env`:
+`~/.yoplai/agents/sales-admin/.env`:
 
 ```bash
 PIPEDRIVE_API_TOKEN=...
@@ -59,7 +67,7 @@ GOOGLE_SERVICE_ACCOUNT_JSON={...}
 
 You can still put shared defaults at the root and override or add secrets per agent.
 
-`~/.aihub/aihub.json`:
+`~/.yoplai/yoplai.json`:
 
 ```json
 {
@@ -76,7 +84,7 @@ You can still put shared defaults at the root and override or add secrets per ag
 }
 ```
 
-`~/.aihub/agents/billing/agent.yaml`:
+`~/.yoplai/agents/billing/agent.yaml`:
 
 ```yaml
 id: billing

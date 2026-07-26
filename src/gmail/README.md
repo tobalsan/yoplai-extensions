@@ -19,7 +19,7 @@ Every successful result includes `account`, the connected mailbox identity.
 
 ## How OAuth works
 
-Same model as the Google Drive extension: **no credential goes in the extension config**. The Google app credentials live host-side in AIHub's OAuth framework; the agent config only *opts in*. Setup is two parts: **operator** (register a Google OAuth client + configure AIHub once) and **user** (click Connect).
+Same model as the Google Drive extension: **no credential goes in the extension config**. The Google app credentials live host-side in Yoplai's OAuth framework; the agent config only *opts in*. Setup is two parts: **operator** (register a Google OAuth client + configure Yoplai once) and **user** (click Connect).
 
 At each tool call the host injects a fresh access token. Until connected — or when the grant expires, lacks scope, or is rate limited — tools return a documented not-connected signal (never a raw 401):
 
@@ -36,14 +36,14 @@ At each tool call the host injects a fresh access token. Until connected — or 
 ```bash
 pnpm install
 pnpm build
-ln -sfn "$PWD/dist/gmail" ~/.aihub/extensions/gmail
+ln -sfn "$PWD/dist/gmail" ~/.yoplai/extensions/gmail
 ```
 
 ## 2. Enable it for an agent
 
 Opt in under `extensions` in the agent's `agent.yaml`. Config is empty — the token is injected by the host, not read from here.
 
-`~/.aihub/agents/<agent>/agent.yaml`:
+`~/.yoplai/agents/<agent>/agent.yaml`:
 
 ```yaml
 extensions:
@@ -78,18 +78,18 @@ In the [Google Cloud Console](https://console.cloud.google.com/):
 
 Already set up Google OAuth for the Google Drive extension? Reuse the same client — just add the Gmail API + scopes to it; steps 4–5 below are then already done.
 
-## 4. Operator: configure AIHub (host `aihub.json`)
+## 4. Operator: configure Yoplai (host `yoplai.json`)
 
-Google credentials go under a top-level `oauth` key in `aihub.json` (BYO — bring-your-own client). `$env:` refs are supported and recommended.
+Google credentials go under a top-level `oauth` key in `yoplai.json` (BYO — bring-your-own client). `$env:` refs are supported and recommended.
 
-`~/.aihub/aihub.json`:
+`~/.yoplai/yoplai.json`:
 
 ```jsonc
 {
   "version": 3,
   "agents": "./agents/*",
   "oauth": {
-    "redirectBaseUrl": "https://aihub.example.com",
+    "redirectBaseUrl": "https://yoplai.example.com",
     "providers": {
       "google": {
         "clientId": "$env:GOOGLE_CLIENT_ID",
@@ -101,7 +101,7 @@ Google credentials go under a top-level `oauth` key in `aihub.json` (BYO — bri
 }
 ```
 
-Actual secrets in `$AIHUB_HOME/.env`:
+Actual secrets in `$YOPLAI_HOME/.env`:
 
 ```bash
 GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
@@ -115,7 +115,7 @@ Notes:
 
 ## 5. User: connect
 
-In the AIHub web UI, open **`/connections`** for the agent and click **Connect Google**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
+In the Yoplai web UI, open **`/connections`** for the agent and click **Connect Google**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
 
 - **Needs reconnect** (grant revoked/expired-beyond-refresh) → click **Reconnect**.
 - **Disconnect** revokes and clears the grant.
@@ -127,4 +127,4 @@ In the AIHub web UI, open **`/connections`** for the agent and click **Connect G
 - `list_drafts` normally returns Gmail Draft resource IDs. Gmail's REST drafts endpoint cannot filter by query; when `query` is provided, the extension searches `in:draft` messages with Gmail query syntax instead. In that response, `draftIdKind` is `"message"` and each `id` is a Gmail message ID.
 - `list_labels` returns user-defined labels only, as the Gmail MCP contract does. Gmail system label IDs such as `INBOX`, `TRASH`, `SPAM`, `STARRED`, `UNREAD`, and `IMPORTANT` remain valid inputs for label mutation tools.
 
-Operator reference (host repo): `aihub/docs/oauth-google-drive-setup.md` (same Google OAuth framework).
+Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md` (same Google OAuth framework).

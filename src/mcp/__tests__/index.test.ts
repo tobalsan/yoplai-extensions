@@ -5,10 +5,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import extension, { createMcpExtension } from "../index.js";
 
+/** Re-imports the module so its module-level "warned once" flag starts fresh. */
+async function loadFreshModule(): Promise<typeof import("../index.js")> {
+  vi.resetModules();
+  return import("../index.js");
+}
+
 describe("mcp extension", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.MCP_CONFIG_PATH;
+    delete process.env.YOPLAI_HOME;
+    delete process.env.AIHUB_HOME;
   });
 
   it("ignores mcp.json unless the agent opts in", async () => {
@@ -183,6 +191,124 @@ describe("mcp extension", () => {
 
     expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "node" });
     expect(tools).toHaveLength(1);
+    await mockedExtension.stop();
+  });
+
+  it("prefers YOPLAI_HOME over AIHUB_HOME and does not warn", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: { local: { command: "${MCP_CMD}" } } })
+    );
+    const newHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-yoplai-home-"));
+    fs.writeFileSync(path.join(newHomeDir, ".env"), "MCP_CMD=from-yoplai-home\n");
+    const legacyHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-aihub-home-"));
+    fs.writeFileSync(path.join(legacyHomeDir, ".env"), "MCP_CMD=from-aihub-home\n");
+    process.env.YOPLAI_HOME = newHomeDir;
+    process.env.AIHUB_HOME = legacyHomeDir;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connect = vi.fn();
+    const mockedExtension = createMcpExtension(async (server) => {
+      connect(server);
+      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+    });
+
+    await mockedExtension.getAgentTools(
+      { id: "casey", workspaceDir: agentDir, extensions: { mcp: { enabled: true } } },
+      { config: { extensions: {} } }
+    );
+
+    expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "from-yoplai-home" });
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("AIHUB_HOME"));
+    await mockedExtension.stop();
+  });
+
+  it("falls back to legacy AIHUB_HOME and warns at most once", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: { local: { command: "${MCP_CMD}" } } })
+    );
+    const legacyHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-aihub-home-"));
+    fs.writeFileSync(path.join(legacyHomeDir, ".env"), "MCP_CMD=from-aihub-home\n");
+    process.env.AIHUB_HOME = legacyHomeDir;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connect = vi.fn();
+    const { createMcpExtension: createFreshExtension } = await loadFreshModule();
+    const mockedExtension = createFreshExtension(async (server) => {
+      connect(server);
+      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+    });
+    const agent = { id: "casey", workspaceDir: agentDir, extensions: { mcp: { enabled: true } } };
+    const context = { config: { extensions: {} } };
+
+    await mockedExtension.getAgentTools(agent, context);
+    await mockedExtension.getAgentTools({ ...agent, id: "morgan" }, context);
+
+    expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "from-aihub-home" });
+    const legacyWarnings = warnSpy.mock.calls.filter(([message]) =>
+      typeof message === "string" && message.includes("AIHUB_HOME")
+    );
+    expect(legacyWarnings).toHaveLength(1);
+    await mockedExtension.stop();
+  });
+
+  it("falls back to legacy AIHUB_HOME and warns when YOPLAI_HOME is empty", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: { local: { command: "${MCP_CMD}" } } })
+    );
+    const legacyHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-aihub-home-"));
+    fs.writeFileSync(path.join(legacyHomeDir, ".env"), "MCP_CMD=from-aihub-home\n");
+    process.env.YOPLAI_HOME = "";
+    process.env.AIHUB_HOME = legacyHomeDir;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connect = vi.fn();
+    const { createMcpExtension: createFreshExtension } = await loadFreshModule();
+    const mockedExtension = createFreshExtension(async (server) => {
+      connect(server);
+      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+    });
+
+    await mockedExtension.getAgentTools(
+      { id: "casey", workspaceDir: agentDir, extensions: { mcp: { enabled: true } } },
+      { config: { extensions: {} } }
+    );
+
+    expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "from-aihub-home" });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("AIHUB_HOME"));
+    await mockedExtension.stop();
+  });
+
+  it("treats a whitespace-only AIHUB_HOME as unset: no warning, no home dir", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: { local: { command: "${MCP_CMD}" } } })
+    );
+    // Whitespace-only, not "", so a non-trimming fallback would still see it as set.
+    process.env.AIHUB_HOME = "   ";
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connect = vi.fn();
+    const mockedExtension = createMcpExtension(async (server) => {
+      connect(server);
+      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+    });
+
+    await mockedExtension.getAgentTools(
+      { id: "casey", workspaceDir: agentDir, extensions: { mcp: { enabled: true } } },
+      { config: { extensions: {} } }
+    );
+
+    // No home dir means MCP_CMD is never defined, so the server fails to resolve.
+    expect(connect).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('server "local" unavailable'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("AIHUB_HOME"));
     await mockedExtension.stop();
   });
 

@@ -60,7 +60,7 @@ function rawMessage(params: CreateDraftParams, replyMessageId?: string): string 
     ...(replyMessageId ? [`In-Reply-To: ${replyMessageId}`, `References: ${replyMessageId}`] : []),
   ];
   if (params.htmlBody !== undefined) {
-    const boundary = "aihub-gmail-boundary";
+    const boundary = "yoplai-gmail-boundary";
     return [...headers, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary=${boundary}`, "", `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "", params.body ?? "", `--${boundary}`, "Content-Type: text/html; charset=UTF-8", "", params.htmlBody, `--${boundary}--`].join("\r\n");
   }
   return [...headers, "Content-Type: text/plain; charset=UTF-8", "", params.body ?? ""].join("\r\n");

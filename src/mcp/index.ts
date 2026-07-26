@@ -90,13 +90,25 @@ function resolveConfigPath(agent: AgentLike, config: ResolvedToolExtensionConfig
   return path.join(resolveAgentDir(agent, config), "mcp.json");
 }
 
+let warnedLegacyHomeEnv = false;
+
+function trimValue(value: string | undefined): string | undefined {
+  const next = value?.trim();
+  return next ? next : undefined;
+}
+
 function resolveInterpolationEnv(
   agent: AgentLike,
   rootConfig: { env?: Record<string, string> },
   resolved: ResolvedToolExtensionConfig
 ): Record<string, string> {
   const agentDir = resolveAgentDir(agent, resolved);
-  const homeDir = process.env.AIHUB_HOME;
+  const legacyHomeDir = trimValue(process.env.AIHUB_HOME);
+  const homeDir = trimValue(process.env.YOPLAI_HOME) ?? legacyHomeDir;
+  if (!trimValue(process.env.YOPLAI_HOME) && legacyHomeDir && !warnedLegacyHomeEnv) {
+    warnedLegacyHomeEnv = true;
+    console.warn("[mcp] AIHUB_HOME is deprecated; set YOPLAI_HOME instead.");
+  }
   return {
     ...processEnvRecord(),
     ...(rootConfig.env ?? {}),
@@ -145,7 +157,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   }
 
   function html(server: string, success: boolean, message: string): string {
-    return `<!doctype html><title>MCP OAuth</title><p>${message}</p><script>window.opener?.postMessage({type:"aihub-oauth",extension:"mcp",server:${JSON.stringify(server)},success:${success}},"*")</script>`;
+    return `<!doctype html><title>MCP OAuth</title><p>${message}</p><script>window.opener?.postMessage({type:"yoplai-oauth",extension:"mcp",server:${JSON.stringify(server)},success:${success}},"*")</script>`;
   }
 
   async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>): Promise<boolean> {

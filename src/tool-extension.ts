@@ -178,7 +178,7 @@ function renderMountedToolNames(
   resolved: ResolvedToolExtensionConfig
 ): string {
   return [
-    "AIHub exposes this extension's tools with these exact names:",
+    "Yoplai exposes this extension's tools with these exact names:",
     ...definition
       .createTools(resolved)
       .map((tool) => `- ${getMountedToolName(definition, tool.name)}: ${tool.description}`),

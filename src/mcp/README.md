@@ -1,20 +1,20 @@
 # MCP extension
 
-Connect an AIHub agent to standard MCP servers declared in its `mcp.json`. Exposed tools are named `mcp__<server>__<tool>` (non-alphanumeric characters become `_`).
+Connect an Yoplai agent to standard MCP servers declared in its `mcp.json`. Exposed tools are named `mcp__<server>__<tool>` (non-alphanumeric characters become `_`).
 
 ## Install
 
 ```bash
 pnpm install
 pnpm build
-ln -sfn "$PWD/dist/mcp" ~/.aihub/extensions/mcp
+ln -sfn "$PWD/dist/mcp" ~/.yoplai/extensions/mcp
 ```
 
 ## Enable an agent
 
 MCP requires explicit opt-in with `enabled: true`.
 
-`~/.aihub/agents/research/agent.yaml`:
+`~/.yoplai/agents/research/agent.yaml`:
 
 ```yaml
 id: research
@@ -28,7 +28,7 @@ By default, the extension loads `mcp.json` from the agent directory.
 
 ## Configure servers
 
-`~/.aihub/agents/research/mcp.json`:
+`~/.yoplai/agents/research/mcp.json`:
 
 ```json
 {
@@ -55,7 +55,7 @@ Environment variables in `mcp.json` use `${NAME}` syntax. Put agent-specific val
 DOCS_MCP_TOKEN=...
 ```
 
-The extension also reads process environment, root `env`, and `$AIHUB_HOME/.env` (agent `.env` takes precedence).
+The extension also reads process environment, root `env`, and `$YOPLAI_HOME/.env` (agent `.env` takes precedence).
 
 ## Custom location
 
@@ -65,7 +65,7 @@ Set `configPath` or `agentDir` when the defaults do not fit:
 extensions:
   mcp:
     enabled: true
-    configPath: /srv/aihub/mcp/research.json
+    configPath: /srv/yoplai/mcp/research.json
 ```
 
 Unavailable or invalid servers are logged and skipped; tools from healthy servers remain available.
@@ -80,12 +80,12 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 
 Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions.
 
-Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `aihub.json` is sufficient; do not include an `/api` suffix:
+Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `yoplai.json` is sufficient; do not include an `/api` suffix:
 
 ```json
 {
   "env": {
-    "BASE_URL": "https://aihub.example.com"
+    "BASE_URL": "https://yoplai.example.com"
   }
 }
 ```

@@ -1,7 +1,7 @@
 {
-  "name": "aihub-extensions",
+  "name": "yoplai-extensions",
   "version": "0.1.0",
-  "description": "AIHub extensions — self-contained agent tools for external APIs",
+  "description": "Yoplai extensions — self-contained agent tools for external APIs",
   "type": "module",
   "private": true,
   "scripts": {
@@ -10,7 +10,7 @@
     "check:jira": "node scripts/check-jira.mjs"
   },
   "keywords": [
-    "aihub",
+    "yoplai",
     "extensions"
   ],
   "author": "algodyn",

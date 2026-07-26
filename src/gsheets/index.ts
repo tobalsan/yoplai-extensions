@@ -15,7 +15,7 @@ const extension = defineToolExtension({
   description: "Read-only Google Sheets extension for spreadsheet discovery, metadata, tab reads, and range reads.",
   systemPrompt: `Use this extension for read-only Google Sheets access.
 
-Authentication is handled by AIHub extension config. Do not ask for or inspect Google service account environment variables.
+Authentication is handled by Yoplai extension config. Do not ask for or inspect Google service account environment variables.
 
 Tools:
 - gsheets_list_spreadsheets: list accessible spreadsheets, optionally filtered by name

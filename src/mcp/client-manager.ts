@@ -39,7 +39,7 @@ export class SdkMcpClientHandle implements McpClientHandle {
   ) {}
 
   static async connect(server: McpServerConfig, accessToken?: string): Promise<SdkMcpClientHandle> {
-    const client = new Client({ name: "aihub-mcp", version: "0.1.0" });
+    const client = new Client({ name: "yoplai-mcp", version: "0.1.0" });
     const transport = createTransport(server, accessToken);
     await client.connect(transport);
     return new SdkMcpClientHandle(server.name, client, transport);

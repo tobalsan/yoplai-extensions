@@ -1,19 +1,19 @@
-# AGENTS.md - AIHub Tool Extensions
+# AGENTS.md - Yoplai Tool Extensions
 
 ## Project
 
-This repo contains standalone AIHub tool extensions: self-contained agent tool packages that call external APIs. Each extension is a directory under `src/` that exports an AIHub `Extension` via the local `defineToolExtension()` helper.
+This repo contains standalone Yoplai tool extensions: self-contained agent tool packages that call external APIs. Each extension is a directory under `src/` that exports an Yoplai `Extension` via the local `defineToolExtension()` helper.
 
 ## Extension Contract
 
-See the AIHub unified extension model in `/Users/thinh/code/aihub/docs/llms.md`.
+See the Yoplai unified extension model in `/Users/thinh/code/yoplai/docs/llms.md`.
 
 Key points:
 - Each tool extension exports a default extension object from its `index.ts`
 - Tool `parameters` must be `z.object({})`
 - Root `extensions.<id>` holds shared defaults; `agents[].extensions.<id>` opts an agent in unless `enabled: false`
-- AIHub prefixes tool names with the extension id for model-facing tools
-- Secrets are configured with `$env:NAME` refs in AIHub config
+- Yoplai prefixes tool names with the extension id for model-facing tools
+- Secrets are configured with `$env:NAME` refs in Yoplai config
 
 ## Build & Test
 

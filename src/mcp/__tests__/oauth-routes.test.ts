@@ -45,8 +45,8 @@ describe("MCP OAuth routes", () => {
   it("runs authorize, callback, and status against an OAuth MCP server", async () => {
     const exchange = vi.fn().mockResolvedValue({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 });
     const discover = vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register" } });
-    const redirectUri = "https://aihub.example.com/api/mcp/oauth/callback";
-    vi.stubEnv("BASE_URL", "https://aihub.example.com/");
+    const redirectUri = "https://yoplai.example.com/api/mcp/oauth/callback";
+    vi.stubEnv("BASE_URL", "https://yoplai.example.com/");
     const register = vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: [redirectUri] });
     const authorize = vi.fn().mockImplementation((_url, options) => ({ authorizationUrl: new URL(`https://auth.test/authorize?code_challenge=challenge&state=${options.state}`), codeVerifier: "verifier" }));
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
