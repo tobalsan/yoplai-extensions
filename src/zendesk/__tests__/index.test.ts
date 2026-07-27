@@ -18,6 +18,20 @@ describe("zendesk extension", () => {
     ]);
   });
 
+  it("rejects subdomains that can redirect API credentials", () => {
+    expect(() =>
+      extension.createTools({
+        global: {},
+        agent: {},
+        merged: {
+          subdomain: "account@attacker.example/",
+          email: "agent@acme.com",
+          apiKey: "secret",
+        },
+      }),
+    ).toThrow();
+  });
+
   it("uses z.object parameter schemas", () => {
     const tools = extension.createTools({
       global: {},

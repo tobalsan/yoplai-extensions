@@ -6,7 +6,13 @@ const NullableBoolean = z.boolean().nullable().optional();
 const NullableStringArray = z.array(z.string()).nullable().optional();
 
 export const ZendeskConfigSchema = z.object({
-  subdomain: z.string().describe("Zendesk subdomain, e.g. \"acme\" for acme.zendesk.com."),
+  subdomain: z
+    .string()
+    .regex(
+      /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/,
+      "Zendesk subdomain must be a single valid DNS label",
+    )
+    .describe("Zendesk subdomain, e.g. \"acme\" for acme.zendesk.com."),
   email: z
     .string()
     .describe("Email address of the Zendesk account used to authenticate with the API token."),
