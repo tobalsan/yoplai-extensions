@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- Concurrent MCP OAuth token requests now share one refresh, preserving rotated refresh tokens and avoiding duplicate provider calls.
+- Zendesk configuration now rejects invalid subdomains that could redirect API credentials to another host.
+- Pipedrive concurrent field-registry cache misses now share one rebuild, preventing duplicate API fetches and cache-write races.
+- Pipedrive configuration now rejects invalid domains that could redirect API tokens to another host.
+- Pennylane creation requests are no longer automatically replayed after ambiguous server failures, preventing duplicate invoices or quotes; callers can reconcile by `external_reference` before retrying.
+- MCP OAuth routes now honor merged root/agent `configPath` settings, and clients that fail tool discovery are closed.
+- Jira configuration now rejects invalid subdomains that could redirect API credentials, structured searches enforce the configured project allowlist, and user search pagination is forwarded.
+- Hiveage configuration now rejects invalid subdomains that could redirect API credentials to another host.
+- Google Sheets requests now honor the configured timeout, and spreadsheet listings can consume their returned pagination token.
+- Firecrawl crawl creation now rejects malformed successful responses that omit the job id instead of returning an unusable monitoring instruction.
+- Exa research task creation now rejects malformed successful responses that omit the task id instead of returning an unusable polling instruction.
+- Scoped Confluence page listings now reject a numeric space id outside the configured space.
 - HTTP client errors now retain truncated upstream response bodies with status and endpoint details for actionable diagnostics.
 
 ### Added
