@@ -21,6 +21,7 @@ export const EmptyParamsSchema = z.object({});
 export const ListSpreadsheetsParamsSchema = z.object({
   query: z.string().optional(),
   pageSize: z.number().int().min(1).max(100).optional().default(50),
+  pageToken: z.string().min(1).optional(),
 });
 
 export const SpreadsheetRefSchema = z.object({

@@ -33,7 +33,7 @@ Tools:
     return [
       {
         name: "list_spreadsheets",
-        description: "List Google Sheets accessible to the configured service account. Optional query filters by spreadsheet name.",
+        description: "List one page of Google Sheets accessible to the configured service account. Optional query filters by spreadsheet name; pass pageToken from the previous result to continue.",
         parameters: ListSpreadsheetsParamsSchema,
         execute(params) {
           return client.listSpreadsheets(ListSpreadsheetsParamsSchema.parse(params));

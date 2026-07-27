@@ -62,13 +62,16 @@ describe("GSheetsClient", () => {
     const result = await makeClient().listSpreadsheets({
       query: "ARR",
       pageSize: 20,
+      pageToken: "next-page",
     });
 
     expect(driveFilesListMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pageSize: 20,
+        pageToken: "next-page",
         q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains 'ARR'",
       }),
+      { timeout: 30_000 },
     );
     expect(result).toEqual({
       spreadsheets: [
@@ -119,6 +122,7 @@ describe("GSheetsClient", () => {
         spreadsheetId: "sheet-1",
         range: "'2026-02'!1:10",
       }),
+      { timeout: 30_000 },
     );
     expect(result).toEqual({
       spreadsheetId: "sheet-1",
@@ -163,6 +167,7 @@ describe("GSheetsClient", () => {
         range: "'2026-02'",
         majorDimension: "ROWS",
       }),
+      { timeout: 30_000 },
     );
     expect(result).toMatchObject({
       spreadsheetId: "sheet-1",
@@ -223,6 +228,14 @@ describe("GSheetsClient", () => {
       majorDimension: "ROWS",
     });
 
+    expect(valuesGetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spreadsheetId: "sheet-1",
+        range: "Sheet1!A1:B2",
+        majorDimension: "ROWS",
+      }),
+      { timeout: 30_000 },
+    );
     expect(result).toEqual({
       spreadsheetId: "sheet-1",
       spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1",

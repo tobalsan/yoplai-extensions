@@ -135,6 +135,7 @@ function normalizeValues(values: unknown): SheetValues {
 export class GSheetsClient {
   private readonly drive: drive_v3.Drive;
   private readonly sheets: sheets_v4.Sheets;
+  private readonly requestOptions: { timeout: number };
 
   constructor(config: GSheetsConfig) {
     const credentials = parseServiceAccountJson(config.serviceAccountJson);
@@ -147,14 +148,18 @@ export class GSheetsClient {
     });
     this.drive = google.drive({ version: "v3", auth });
     this.sheets = google.sheets({ version: "v4", auth });
+    this.requestOptions = { timeout: config.timeoutMs };
   }
 
   async validate(): Promise<{ ok: true }> {
-    await this.drive.files.list({
-      pageSize: 1,
-      q: `mimeType='${SPREADSHEET_MIME_TYPE}' and trashed=false`,
-      fields: "files(id)",
-    });
+    await this.drive.files.list(
+      {
+        pageSize: 1,
+        q: `mimeType='${SPREADSHEET_MIME_TYPE}' and trashed=false`,
+        fields: "files(id)",
+      },
+      this.requestOptions,
+    );
     return { ok: true };
   }
 
@@ -163,12 +168,16 @@ export class GSheetsClient {
     if (params.query?.trim()) {
       filters.push(`name contains '${escapeDriveQueryValue(params.query.trim())}'`);
     }
-    const response = await this.drive.files.list({
-      pageSize: params.pageSize,
-      q: filters.join(" and "),
-      fields: "files(id,name,modifiedTime,webViewLink),nextPageToken",
-      orderBy: "modifiedTime desc",
-    });
+    const response = await this.drive.files.list(
+      {
+        pageSize: params.pageSize,
+        pageToken: params.pageToken,
+        q: filters.join(" and "),
+        fields: "files(id,name,modifiedTime,webViewLink),nextPageToken",
+        orderBy: "modifiedTime desc",
+      },
+      this.requestOptions,
+    );
     const files = response.data.files ?? [];
     return {
       spreadsheets: files.map((file) => ({
@@ -183,22 +192,28 @@ export class GSheetsClient {
 
   async inspectSpreadsheet(params: InspectSpreadsheetParams): Promise<Record<string, unknown>> {
     const spreadsheetId = extractSpreadsheetId(params);
-    const spreadsheet = await this.sheets.spreadsheets.get({
-      spreadsheetId,
-      includeGridData: false,
-      fields: "spreadsheetId,properties.title,sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)))",
-    });
+    const spreadsheet = await this.sheets.spreadsheets.get(
+      {
+        spreadsheetId,
+        includeGridData: false,
+        fields: "spreadsheetId,properties.title,sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)))",
+      },
+      this.requestOptions,
+    );
 
     const tabs = await Promise.all(
       (spreadsheet.data.sheets ?? []).map(async (sheet) => {
         const props = sheet.properties;
         const title = props?.title ?? "";
         const valuesResponse = title
-          ? await this.sheets.spreadsheets.values.get({
-              spreadsheetId,
-              range: `${quoteSheetName(title)}!1:${params.maxHeaderScanRows}`,
-              majorDimension: "ROWS",
-            })
+          ? await this.sheets.spreadsheets.values.get(
+              {
+                spreadsheetId,
+                range: `${quoteSheetName(title)}!1:${params.maxHeaderScanRows}`,
+                majorDimension: "ROWS",
+              },
+              this.requestOptions,
+            )
           : undefined;
         const values = normalizeValues(valuesResponse?.data.values);
         const detected = detectHeaderRow(values, params.maxHeaderScanRows);
@@ -225,11 +240,14 @@ export class GSheetsClient {
 
   async readSheet(params: ReadSheetParams): Promise<Record<string, unknown>> {
     const spreadsheetId = extractSpreadsheetId(params);
-    const valuesResponse = await this.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: quoteSheetName(params.tabName),
-      majorDimension: "ROWS",
-    });
+    const valuesResponse = await this.sheets.spreadsheets.values.get(
+      {
+        spreadsheetId,
+        range: quoteSheetName(params.tabName),
+        majorDimension: "ROWS",
+      },
+      this.requestOptions,
+    );
     const values = normalizeValues(valuesResponse.data.values);
     if (values.length === 0) {
       return {
@@ -276,11 +294,14 @@ export class GSheetsClient {
 
   async readRange(params: ReadRangeParams): Promise<Record<string, unknown>> {
     const spreadsheetId = extractSpreadsheetId(params);
-    const valuesResponse = await this.sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: params.range,
-      majorDimension: params.majorDimension,
-    });
+    const valuesResponse = await this.sheets.spreadsheets.values.get(
+      {
+        spreadsheetId,
+        range: params.range,
+        majorDimension: params.majorDimension,
+      },
+      this.requestOptions,
+    );
     return {
       spreadsheetId,
       spreadsheetUrl: spreadsheetUrl(spreadsheetId),
