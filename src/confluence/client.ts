@@ -141,11 +141,17 @@ export class ConfluenceClient {
     limit?: number;
     cursor?: string;
   }): Promise<Record<string, unknown>> {
-    const spaceId =
-      input.spaceId ?? (this.space ? await this.getScopedSpaceId() : undefined);
+    const scopedSpaceId = this.space ? await this.getScopedSpaceId() : undefined;
+    const spaceId = input.spaceId ?? scopedSpaceId;
     if (!spaceId) {
       throw new ConfluenceValidationError(
         "spaceId is required when confluenceSpace is not configured",
+        { endpoint: "/api/v2/spaces/{id}/pages" },
+      );
+    }
+    if (scopedSpaceId && input.spaceId && input.spaceId !== scopedSpaceId) {
+      throw new ConfluenceValidationError(
+        "spaceId does not match configured confluenceSpace",
         { endpoint: "/api/v2/spaces/{id}/pages" },
       );
     }

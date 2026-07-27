@@ -6,7 +6,6 @@ import {
   ConfluenceConflictError,
   ConfluenceNotFoundError,
   ConfluenceRateLimitError,
-  ConfluenceServerError,
   ConfluenceValidationError,
 } from "../errors.js";
 
@@ -370,6 +369,18 @@ describe("ConfluenceClient", () => {
     expect(calls.some((url) => url.includes("/api/v2/spaces/55/pages"))).toBe(true);
   });
 
+  it("rejects a listSpacePages spaceId outside the configured scope", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ results: [{ id: "55", key: "ENG" }] }),
+    );
+    const client = new ConfluenceClient({ ...baseConfig, confluenceSpace: "ENG" });
+
+    await expect(client.listSpacePages({ spaceId: "99" })).rejects.toBeInstanceOf(
+      ConfluenceValidationError,
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("throws when listSpacePages called with no spaceId and no scope", async () => {
     const client = new ConfluenceClient(baseConfig);
     await expect(client.listSpacePages({})).rejects.toBeInstanceOf(ConfluenceValidationError);
@@ -432,7 +443,7 @@ describe("ConfluenceClient", () => {
   });
 
   it("replaces a page by fetching version and preserving current title", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
       if (init?.method === "GET") {
         return jsonResponse({ id: "42", title: "Current", version: { number: 7 } });
       }
