@@ -2,9 +2,31 @@
 
 Self-contained agent tool packages for external APIs, used with [Yoplai](https://github.com/algodyn/yoplai).
 
+## Extension catalog
+
+The source directory is the build/install directory name. The extension ID is the key used under `extensions` in Yoplai configuration; the two differ where noted.
+
+| Source directory | Extension ID | Purpose | Required setup |
+| --- | --- | --- | --- |
+| `confluence` | `confluence` | Confluence search, pages, labels, and attachments | Atlassian subdomain, email, and API token |
+| `exa` | `exa` | Exa search, content, and research tasks | API key |
+| `firecrawl` | `firecrawl` | Web scraping, crawling, mapping, and extraction | API key |
+| [`gmail`](src/gmail/README.md) | `gmail` | Gmail drafts, threads, and labels | Host-managed Google OAuth |
+| [`google-drive`](src/google-drive/README.md) | `googleDrive` | Read-only Drive search and text extraction | Host-managed Google OAuth |
+| `gsheets` | `gsheets` | Read-only spreadsheet discovery and values | Google service-account JSON |
+| `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
+| [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
+| [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Explicit `enabled: true` and `mcp.json` |
+| [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | Integration API key |
+| [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads and guarded draft/quote writes | API token |
+| `pipedrive` | `pipedrive` | Read-only Pipedrive CRM and custom-field normalization | Company domain and API token |
+| `zendesk` | `zendesk` | Read-only Zendesk ticket listing, search, and comments | Subdomain, email, and API key |
+
+Extension-specific operational documentation stays beside the owning slice or under `docs/specs/`. The authoritative host extension contract is maintained in the Yoplai repository rather than copied here.
+
 ## Usage
 
-Build and symlink (or copy) individual built extension directories into `$YOPLAI_HOME/extensions` (`~/.yoplai/extensions` by default), or set `extensionsPath` in `yoplai.json`.
+Build and symlink (or copy) individual built extension directories into `$YOPLAI_HOME/extensions` (`~/.yoplai/extensions` by default), or set `extensionsPath` in `yoplai.json`. `pnpm build` generates the ignored `dist/` tree and copies each available slice icon into its built directory; edit `src/`, not `dist/`.
 
 A pre-rename install under `~/.aihub` still works, with a one-time deprecation warning, but the two kinds of fallback trigger differently:
 

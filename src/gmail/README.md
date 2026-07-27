@@ -1,6 +1,6 @@
 # Gmail extension
 
-Gmail mailbox tools for an agent, via **per-agent OAuth** — no pasted secrets. The host supplies a fresh Google OAuth token at tool-run time; this extension stores neither tokens nor mailbox data.
+Gmail mailbox tools for an agent, via **per-agent OAuth** — no pasted secrets. The host supplies a fresh Google OAuth token when building the agent's tools; this extension stores neither tokens nor mailbox data.
 
 Tools (mounted as `gmail_<name>`), the Google Gmail MCP's current ten-tool surface:
 
@@ -21,7 +21,7 @@ Every successful result includes `account`, the connected mailbox identity.
 
 Same model as the Google Drive extension: **no credential goes in the extension config**. The Google app credentials live host-side in Yoplai's OAuth framework; the agent config only *opts in*. Setup is two parts: **operator** (register a Google OAuth client + configure Yoplai once) and **user** (click Connect).
 
-At each tool call the host injects a fresh access token. Until connected — or when the grant expires, lacks scope, or is rate limited — tools return a documented not-connected signal (never a raw 401):
+Each time the host builds the agent's tools, it injects a freshly resolved access token. Until connected — or when the grant expires, lacks scope, or is rate limited — tools return a documented not-connected signal (never a raw 401):
 
 | `reason` | Meaning | Fix |
 | --- | --- | --- |

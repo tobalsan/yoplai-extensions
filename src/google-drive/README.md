@@ -1,6 +1,6 @@
 # Google Drive extension
 
-Read-only Google Drive access for an agent, via **per-agent OAuth** — no pasted secrets. The agent gets an always-fresh access token at tool-run time, or a clean "not connected" signal.
+Read-only Google Drive access for an agent, via **per-agent OAuth** — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
 
 Tools (mounted as `googleDrive_<name>`):
 
