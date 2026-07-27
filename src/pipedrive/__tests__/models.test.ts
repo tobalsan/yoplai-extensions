@@ -40,6 +40,15 @@ describe("PipedriveConfigSchema", () => {
     const result = PipedriveConfigSchema.safeParse({ apiToken: "tok" });
     expect(result.success).toBe(false);
   });
+
+  it("rejects a domain that can redirect the API token", () => {
+    const result = PipedriveConfigSchema.safeParse({
+      apiToken: "tok",
+      domain: "account@attacker.example/",
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("ListDealsParamsSchema", () => {

@@ -26,7 +26,10 @@ export const PipedriveConfigSchema = z.object({
     ),
   domain: z
     .string()
-    .min(1, "PIPEDRIVE_DOMAIN is required")
+    .regex(
+      /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/,
+      "Pipedrive domain must be a single DNS label",
+    )
     .describe(
       'Your company\'s Pipedrive subdomain (the part before ".pipedrive.com" in your Pipedrive URL), e.g. "acme" for acme.pipedrive.com.',
     ),
