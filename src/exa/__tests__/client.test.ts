@@ -217,6 +217,16 @@ describe("Exa extension request handling", () => {
     expect(fetchSpy.mock.calls[1]?.[1]?.body).toBeUndefined();
   });
 
+  it("rejects a malformed research task response without an id", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ status: "running", model: "exa-research" }),
+    );
+
+    await expect(
+      createClient().researchStart({ instructions: "Compare vector DBs" }),
+    ).rejects.toBeInstanceOf(ExaValidationError);
+  });
+
   it.each([
     [401, ExaAuthError],
     [403, ExaAuthError],

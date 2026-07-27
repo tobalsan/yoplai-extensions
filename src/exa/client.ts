@@ -123,10 +123,16 @@ export class ExaClient {
   }
 
   async researchStart(input: ResearchStartParams): Promise<Record<string, unknown>> {
-    return await this.requestJson("POST", "/research/v0/tasks", {
+    const task = await this.requestJson("POST", "/research/v0/tasks", {
       instructions: input.instructions,
       model: input.model ?? "exa-research",
     });
+    if (typeof task.id !== "string" || task.id.length === 0) {
+      throw new ExaValidationError("Exa research task response is missing an id", {
+        endpoint: "/research/v0/tasks",
+      });
+    }
+    return task;
   }
 
   async researchCheck(input: ResearchCheckParams): Promise<Record<string, unknown>> {
