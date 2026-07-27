@@ -128,7 +128,7 @@ export class FirecrawlClient {
   }
 
   async crawl(params: CrawlParams): Promise<Record<string, unknown>> {
-    return await this.requestJson(
+    const response = await this.requestJson(
       "POST",
       "/crawl",
       compact({
@@ -149,6 +149,12 @@ export class FirecrawlClient {
         webhook: params.webhook,
       }),
     );
+    if (typeof response.id !== "string" || response.id.length === 0) {
+      throw new FirecrawlValidationError("Firecrawl crawl response did not include a job id", {
+        endpoint: "/v2/crawl",
+      });
+    }
+    return response;
   }
 
   async getCrawlStatus(params: MonitorParams): Promise<Record<string, unknown>> {

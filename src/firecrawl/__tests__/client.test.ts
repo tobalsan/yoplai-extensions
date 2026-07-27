@@ -155,6 +155,18 @@ describe("Firecrawl extension request handling", () => {
     expect(result.id).toBe("job-123");
   });
 
+  it("rejects a crawl response without a job id", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ success: true }),
+    );
+
+    const client = createClient();
+
+    await expect(
+      client.crawl({ url: "https://example.com", limit: 100 }),
+    ).rejects.toBeInstanceOf(FirecrawlValidationError);
+  });
+
   it("forwards webhook and merges scrapeOptions over scrapeFormats in crawl", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ success: true, id: "job-456" }),
