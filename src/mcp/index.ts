@@ -33,6 +33,21 @@ type AgentLike = {
   extensions?: Record<string, unknown>;
 };
 
+type RouteContext = {
+  req: { query(name: string): string | undefined };
+  json(body: unknown): unknown;
+  text(body: string, status?: number): unknown;
+  html(body: string, status?: number): unknown;
+  redirect(url: string): unknown;
+};
+
+type RouteHandler = (context: RouteContext) => unknown | Promise<unknown>;
+
+type RouteApp = {
+  get(path: string, handler: RouteHandler): unknown;
+  post(path: string, handler: RouteHandler): unknown;
+};
+
 function readEnvFile(filePath: string): Record<string, string> {
   if (!fs.existsSync(filePath)) return {};
   return Object.fromEntries(
@@ -88,6 +103,17 @@ function resolveConfigPath(agent: AgentLike, config: ResolvedToolExtensionConfig
   const configured = config.merged.configPath;
   if (typeof configured === "string") return configured;
   return path.join(resolveAgentDir(agent, config), "mcp.json");
+}
+
+function resolveExtensionConfig(
+  agent: AgentLike,
+  rootConfig: { extensions?: Record<string, unknown> }
+): ResolvedToolExtensionConfig {
+  const resolved = McpExtensionConfigSchema.parse({
+    ...resolveConfigRecord(rootConfig.extensions?.mcp),
+    ...resolveConfigRecord(agent.extensions?.mcp),
+  });
+  return { global: {}, root: {}, agent: resolved, merged: resolved };
 }
 
 let warnedLegacyHomeEnv = false;
@@ -150,7 +176,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const agent = runtime?.getAgent(agentId);
     if (!agent || !runtime) return undefined;
     const root = runtime.getConfig();
-    const resolved = { global: {}, root: {}, agent: {}, merged: {} };
+    const resolved = resolveExtensionConfig(agent, root);
     const configPath = resolveConfigPath(agent, resolved);
     if (!fs.existsSync(configPath)) return undefined;
     return loadMcpConfigFile(configPath, resolveInterpolationEnv(agent, root, resolved));
@@ -226,8 +252,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     runtime = ctx;
     oauth = new McpOAuthStore(ctx.getDataDir(), redirectUri);
   },
-  registerRoutes(app: any) {
-    app.get("/mcp/oauth/status", async (c: any) => {
+  registerRoutes(app: RouteApp) {
+    app.get("/mcp/oauth/status", async (c) => {
       const agent = c.req.query("agent");
       const loaded = agent ? loadedForAgent(agent) : undefined;
       if (!agent || !loaded || !oauth) return c.json({ servers: [] });
@@ -240,7 +266,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       }));
       return c.json({ servers });
     });
-    app.get("/mcp/oauth/authorize", async (c: any) => {
+    app.get("/mcp/oauth/authorize", async (c) => {
       const agent = c.req.query("agent");
       const name = c.req.query("server");
       const server = agent && name ? loadedForAgent(agent)?.servers.find((item): item is Extract<McpServerConfig, { type: "http" }> => item.type === "http" && item.name === name) : undefined;
@@ -248,13 +274,13 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       try { return c.redirect((await oauth.begin(agent, server.name, server.url)).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
-    app.get("/mcp/oauth/callback", async (c: any) => {
+    app.get("/mcp/oauth/callback", async (c) => {
       const code = c.req.query("code"); const state = c.req.query("state");
       if (!code || !state || !oauth) return c.html(html("", false, "OAuth connection failed"), 400);
       try { const flow = await oauth.finish(state, code); oauthServers.add(`${flow.agent}:${flow.server}`); await resetManagers(flow.agent); return c.html(html(flow.server, true, "MCP server connected")); }
       catch (error) { return c.html(html("", false, error instanceof Error ? error.message : "OAuth connection failed"), 400); }
     });
-    app.post("/mcp/oauth/disconnect", async (c: any) => {
+    app.post("/mcp/oauth/disconnect", async (c) => {
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
       await oauth.revoke(agent, name);
@@ -299,16 +325,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     if (!isRecord(agent.extensions?.mcp) || agent.extensions.mcp.enabled !== true) {
       return [];
     }
-    const resolved = McpExtensionConfigSchema.parse({
-      ...resolveConfigRecord(context.config.extensions?.mcp),
-      ...resolveConfigRecord(agent.extensions?.mcp),
-    });
-    const extensionConfig = {
-      global: {},
-      root: {},
-      agent: resolved,
-      merged: resolved,
-    };
+    const extensionConfig = resolveExtensionConfig(agent, context.config);
     const configPath = resolveConfigPath(agent, extensionConfig);
     if (!fs.existsSync(configPath)) return [];
 

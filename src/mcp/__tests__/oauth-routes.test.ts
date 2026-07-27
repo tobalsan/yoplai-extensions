@@ -35,6 +35,23 @@ describe("MCP OAuth routes", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("https://static.test/mcp", expect.any(Object));
   });
 
+  it("loads OAuth status from the merged root config path", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const configPath = path.join(work, "root-mcp.json");
+    await fs.writeFile(configPath, JSON.stringify({ mcpServers: { rooted: { url: "https://root.test/mcp", headers: { Authorization: "Bearer key" } } } }));
+    const extension = createMcpExtension();
+    await extension.start({
+      getDataDir: () => work,
+      getConfig: () => ({ extensions: { mcp: { configPath } } }),
+      getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }),
+    });
+    const routes = app(); extension.registerRoutes(routes);
+
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toEqual({ servers: [
+      { name: "rooted", url: "https://root.test/mcp", auth: "static", state: "static" },
+    ] });
+  });
+
   it("returns an HTML failure page for invalid callback state", async () => {
     const extension = createMcpExtension();
     await extension.start({ getDataDir: () => process.cwd(), getConfig: () => ({}), getAgent: () => undefined });
@@ -59,9 +76,16 @@ describe("MCP OAuth routes", () => {
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
     const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
-    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
+    const rootConfigPath = path.join(work, "root-mcp.json");
+    const agentConfigPath = path.join(work, "agent-mcp.json");
+    await fs.writeFile(rootConfigPath, JSON.stringify({ mcpServers: { wrong: { url: "https://wrong.test/mcp" } } }));
+    await fs.writeFile(agentConfigPath, JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     const extension = createExtension();
-    await extension.start({ getDataDir: () => work, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
+    await extension.start({
+      getDataDir: () => work,
+      getConfig: () => ({ extensions: { mcp: { configPath: rootConfigPath } } }),
+      getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true, configPath: agentConfigPath } } }),
+    });
     const routes = app(); extension.registerRoutes(routes);
 
     const authorization = await routes.routes.get("GET /mcp/oauth/authorize")!(context({ agent: "casey", server: "claap" }));

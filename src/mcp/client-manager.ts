@@ -146,7 +146,13 @@ export class McpClientManager {
           const config = this.servers.find((item) => item.name === server);
           if (config && isUnauthorized(error) && this.onAuthFailure) await this.onAuthFailure(config);
           this.recordError(server, error);
-          this.clients.delete(server);
+          try {
+            await client.close();
+          } catch (closeError) {
+            this.recordError(server, closeError);
+          } finally {
+            this.clients.delete(server);
+          }
           return [];
         }
       })

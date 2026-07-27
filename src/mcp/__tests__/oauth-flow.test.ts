@@ -31,6 +31,48 @@ describe("MCP OAuth flow", () => {
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ tokens: { access_token: "access" }, state: "connected" });
   });
 
+  it("coalesces concurrent refreshes for the same connection", async () => {
+    type RefreshedTokens = { access_token: string; refresh_token: string; token_type: string; expires_in: number };
+    const refreshResolvers: Array<(tokens: RefreshedTokens) => void> = [];
+    const refresh = vi.fn().mockImplementation(() => new Promise<RefreshedTokens>((resolve) => {
+      refreshResolvers.push(resolve);
+    }));
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverAuthorizationServerMetadata: vi.fn().mockResolvedValue({ token_endpoint: "https://auth.test/token" }),
+      refreshAuthorization: refresh,
+      discoverOAuthServerInfo: vi.fn(),
+      registerClient: vi.fn(),
+      startAuthorization: vi.fn(),
+      exchangeAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    await store.write("casey", "claap", {
+      client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
+      tokens: { access_token: "expired", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-07-22T00:00:00.000Z",
+      authorizationServerUrl: "https://auth.test",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      state: "connected",
+    });
+
+    const first = store.accessToken("casey", "claap");
+    const second = store.accessToken("casey", "claap");
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(refresh).toHaveBeenCalledTimes(1);
+    for (const resolve of refreshResolvers) {
+      resolve({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
+    }
+
+    await expect(Promise.all([first, second])).resolves.toEqual(["fresh", "fresh"]);
+    await expect(store.read("casey", "claap")).resolves.toMatchObject({
+      tokens: { access_token: "fresh", refresh_token: "refresh-2" },
+      state: "connected",
+    });
+  });
+
   it("rejects an expired pending authorization state", async () => {
     vi.useFakeTimers();
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({

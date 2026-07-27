@@ -49,6 +49,54 @@ describe("McpClientManager", () => {
     expect(manager.getErrors()).toEqual([{ server: "bad", message: "connection refused" }]);
   });
 
+  it("closes a client when tool discovery fails", async () => {
+    const close = vi.fn(async () => undefined);
+    const manager = new McpClientManager(
+      [{ type: "stdio", name: "broken", command: "node" }],
+      async (): Promise<McpClientHandle> => ({
+        async listTools() {
+          throw new Error("discovery failed");
+        },
+        async callTool() {
+          return undefined;
+        },
+        close,
+      })
+    );
+
+    await manager.connect();
+    await expect(manager.listTools()).resolves.toEqual([]);
+    expect(close).toHaveBeenCalledOnce();
+
+    await manager.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps discovery failure isolated when closing the failed client also fails", async () => {
+    const manager = new McpClientManager(
+      [{ type: "stdio", name: "broken", command: "node" }],
+      async (): Promise<McpClientHandle> => ({
+        async listTools() {
+          throw new Error("discovery failed");
+        },
+        async callTool() {
+          return undefined;
+        },
+        async close() {
+          throw new Error("close failed");
+        },
+      })
+    );
+
+    await manager.connect();
+    await expect(manager.listTools()).resolves.toEqual([]);
+    expect(manager.getErrors()).toEqual([
+      { server: "broken", message: "discovery failed" },
+      { server: "broken", message: "close failed" },
+    ]);
+    await expect(manager.close()).resolves.toBeUndefined();
+  });
+
   it("does not leak unrelated parent env vars to stdio servers with configured env", async () => {
     let stdioParams: { env?: Record<string, string> } | undefined;
 

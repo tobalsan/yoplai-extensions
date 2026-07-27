@@ -42,6 +42,7 @@ function expiry(tokens: OAuthTokens): string | undefined {
 
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
+  private readonly refreshes = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly dataDir: string, private readonly redirectUri: string) {}
 
@@ -128,6 +129,24 @@ export class McpOAuthStore {
     if (!connection) return undefined;
     if (connection.state === "needs_reconnect") return undefined;
     if (!connection.expiresAt || Date.parse(connection.expiresAt) - Date.now() > skewMs) return connection.tokens.access_token;
+    const key = `${agent}\0${server}`;
+    const activeRefresh = this.refreshes.get(key);
+    if (activeRefresh) return activeRefresh;
+
+    const refresh = this.refreshConnection(agent, server, connection);
+    this.refreshes.set(key, refresh);
+    try {
+      return await refresh;
+    } finally {
+      this.refreshes.delete(key);
+    }
+  }
+
+  private async refreshConnection(
+    agent: string,
+    server: string,
+    connection: OAuthConnection,
+  ): Promise<string | undefined> {
     if (!connection.tokens.refresh_token) {
       await this.markNeedsReconnect(agent, server);
       return undefined;
