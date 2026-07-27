@@ -3,10 +3,12 @@ import { z } from "zod";
 import { NotionClient } from "./client.js";
 import {
   AppendBlocksParamsSchema,
+  CreatePageParamsSchema,
   DeleteBlockParamsSchema,
   DownloadAndExtractFileParamsSchema,
   GetBlocksParamsSchema,
   GetDataSourceParamsSchema,
+  GetPageMarkdownParamsSchema,
   GetPageParamsSchema,
   ListDataSourcesParamsSchema,
   ListPagesParamsSchema,
@@ -15,6 +17,7 @@ import {
   SearchPagesParamsSchema,
   ReplaceChildBlocksParamsSchema,
   UpdateDataSourceParamsSchema,
+  UpdatePageMarkdownParamsSchema,
   UpdatePagePropertiesParamsSchema,
   ValidateParamsSchema,
 } from "./models.js";
@@ -28,19 +31,22 @@ export default defineToolExtension({
   systemPrompt: `Use this extension for generic Notion operations.
 
 Tools:
-- notion_list_data_sources: discover shared data sources by title
-- notion_list_pages: list shared pages, optionally filtered by title query
-- notion_search_pages: search shared pages by title
-- notion_get_data_source: inspect a data source schema and metadata
-- notion_update_data_source: patch a data source schema or metadata
-- notion_query_data_source: query rows from a data source
-- notion_get_page: fetch a page and its property values
-- notion_update_page_properties: patch page property values
-- notion_get_blocks: fetch block children with pagination
-- notion_append_blocks: append block children
-- notion_delete_block: delete/archive a block
-- notion_replace_child_blocks: replace direct child sections identified by heading text
-- notion_download_and_extract_file: download a Notion file URL and extract text from PDF or DOCX
+- notion_list_data_sources: find data source (database) IDs by title; omit query to list all
+- notion_list_pages: find page IDs by an optional title query; omit query to list all
+- notion_search_pages: same as list_pages but the title query is required — titles only, not full-text body search
+- notion_get_data_source: inspect a data source's schema/properties and metadata, not its rows
+- notion_update_data_source: patch a data source's schema, title, or description, not its rows
+- notion_query_data_source: query ALL rows from a data source, auto-paginated
+- notion_get_page: fetch a page's property values and metadata only — NO content; use get_page_markdown or get_blocks for content
+- notion_get_page_markdown: read page content as Markdown (cheap, no block IDs); call this before update_page_markdown to get exact old_str text
+- notion_create_page: create a data source row (dataSourceId) or a subpage (pageId), exactly one required; markdown and children are mutually exclusive
+- notion_update_page_properties: patch page PROPERTY VALUES only — never content/body
+- notion_update_page_markdown: edit page content via update_content (exact-string find/replace) or replace_content (overwrite everything)
+- notion_get_blocks: fetch raw block JSON with block IDs — use when you need to target a specific block
+- notion_append_blocks: append new raw blocks to the end of a page or block's children
+- notion_delete_block: delete/archive a single block by ID (get the ID from get_blocks)
+- notion_replace_child_blocks: swap direct child sections identified by heading text (appends then deletes matches)
+- notion_download_and_extract_file: download a file URL and extract text from PDF or DOCX
 - notion_validate: verify auth and API reachability
 
 Return and consume JSON-serializable data only.`,
@@ -54,7 +60,8 @@ Return and consume JSON-serializable data only.`,
     return [
       {
         name: "list_data_sources",
-        description: "List or search shared data sources by title.",
+        description:
+          "List or search shared data sources (Notion databases) by title, returning their IDs and schemas. Use to discover a dataSourceId for get_data_source or query_data_source; omit query to list all.",
         parameters: ListDataSourcesParamsSchema,
         execute: async (params) => {
           const parsed = ListDataSourcesParamsSchema.parse(params);
@@ -63,7 +70,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "list_pages",
-        description: "List shared pages, optionally filtered by title query.",
+        description:
+          "List shared pages by title, with an optional query. Use search_pages instead when you require a title match; use this to browse or list all pages when no query is needed.",
         parameters: ListPagesParamsSchema,
         execute: async (params) => {
           const parsed = ListPagesParamsSchema.parse(params);
@@ -72,7 +80,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "search_pages",
-        description: "Search shared pages by title.",
+        description:
+          "List shared pages matching a required title query. This is list_pages with a mandatory query — it matches page titles only, not body content, so it is not full-text search.",
         parameters: SearchPagesParamsSchema,
         execute: async (params) => {
           const parsed = SearchPagesParamsSchema.parse(params);
@@ -81,7 +90,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "get_data_source",
-        description: "Fetch a data source schema and metadata.",
+        description:
+          "Fetch a data source's schema (its properties/columns) and metadata. Does NOT return rows; use query_data_source to fetch rows.",
         parameters: GetDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = GetDataSourceParamsSchema.parse(params);
@@ -90,7 +100,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "update_data_source",
-        description: "Patch a data source schema or metadata.",
+        description:
+          "Patch a data source's title, description, or property schema. Does not modify rows; use update_page_properties or update_page_markdown to edit row/page content.",
         parameters: UpdateDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = UpdateDataSourceParamsSchema.parse(params);
@@ -100,7 +111,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "query_data_source",
         description:
-          "Query ALL rows from a data source. Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Do NOT pass a `filter` unless the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness. If a call fails, retry the SAME query or surface the error; never add a filter to force success.",
+          "Query ALL rows from a data source (given its dataSourceId). Auto-paginates internally and returns the complete result set in `results` (has_more is always false) — never assume a partial page. Do NOT pass a `filter` unless the user explicitly asked to narrow results — an unrequested filter silently drops rows and breaks completeness. If a call fails, retry the SAME query or surface the error; never add a filter to force success.",
         parameters: QueryDataSourceParamsSchema,
         execute: async (params) => {
           const parsed = QueryDataSourceParamsSchema.parse(params);
@@ -109,7 +120,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "get_page",
-        description: "Fetch a page and its property values.",
+        description:
+          "Fetch a page's property values and metadata (parent, icon, cover, timestamps) only — it returns NO page content. Use get_page_markdown for content as text, or get_blocks for raw block JSON with block IDs.",
         parameters: GetPageParamsSchema,
         execute: async (params) => {
           const parsed = GetPageParamsSchema.parse(params);
@@ -117,8 +129,29 @@ Return and consume JSON-serializable data only.`,
         },
       },
       {
+        name: "get_page_markdown",
+        description:
+          "Fetch a page's content rendered as enhanced Markdown — the cheapest way to read content. Call this FIRST before update_page_markdown's update_content mode, to get byte-exact text for old_str. Response includes `truncated` (true if content was cut off for exceeding the record limit) and up to 100 `unknown_block_ids` for blocks that couldn't be rendered (shown as `<unknown>` in the markdown); the markdown itself carries no block IDs — use get_blocks if you need to target a specific block.",
+        parameters: GetPageMarkdownParamsSchema,
+        execute: async (params) => {
+          const parsed = GetPageMarkdownParamsSchema.parse(params);
+          return await client.getPageMarkdown(parsed);
+        },
+      },
+      {
+        name: "create_page",
+        description:
+          "Create a new page: a data source row when given `dataSourceId`, or a subpage when given `pageId` — exactly one of the two is required. Provide content via `markdown` (Notion-flavored Markdown) or `children` (raw blocks), which are mutually exclusive; if no title is given, the first `# h1` heading in markdown becomes the page title.",
+        parameters: CreatePageParamsSchema,
+        execute: async (params) => {
+          const parsed = CreatePageParamsSchema.parse(params);
+          return await client.createPage(parsed);
+        },
+      },
+      {
         name: "update_page_properties",
-        description: "Patch page property values by property name or ID.",
+        description:
+          "Patch page PROPERTY VALUES (e.g. status, tags, dates) by property name or ID. This never touches page content/body — use update_page_markdown, append_blocks, or replace_child_blocks for content.",
         parameters: UpdatePagePropertiesParamsSchema,
         execute: async (params) => {
           const parsed = UpdatePagePropertiesParamsSchema.parse(params);
@@ -126,8 +159,19 @@ Return and consume JSON-serializable data only.`,
         },
       },
       {
+        name: "update_page_markdown",
+        description:
+          "Edit page content as Notion-flavored Markdown. Call get_page_markdown FIRST to get exact text for `old_str`, since mode `update_content` requires byte-exact string matches for its find/replace operations (max 100 updates, gated by `allowDeletingContent` for deletions); mode `replace_content` overwrites the entire page body instead. For raw-block edits, use append_blocks, replace_child_blocks, or delete_block instead.",
+        parameters: UpdatePageMarkdownParamsSchema,
+        execute: async (params) => {
+          const parsed = UpdatePageMarkdownParamsSchema.parse(params);
+          return await client.updatePageMarkdown(parsed);
+        },
+      },
+      {
         name: "get_blocks",
-        description: "Fetch block children with optional pagination.",
+        description:
+          "Fetch a page or block's direct children as raw block JSON, including each block's ID. Use this over get_page_markdown when you need to target a specific block (e.g. for delete_block), at the cost of being more verbose than markdown.",
         parameters: GetBlocksParamsSchema,
         execute: async (params) => {
           const parsed = GetBlocksParamsSchema.parse(params);
@@ -136,7 +180,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "append_blocks",
-        description: "Append block children to a page or block.",
+        description:
+          "Append new raw blocks to the end of a page or block's children, without touching existing content. Use replace_child_blocks instead to swap out an existing heading section.",
         parameters: AppendBlocksParamsSchema,
         execute: async (params) => {
           const parsed = AppendBlocksParamsSchema.parse(params);
@@ -145,7 +190,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "delete_block",
-        description: "Delete or archive a block.",
+        description:
+          "Delete (archive) a single block by its ID. Get the ID from get_blocks first — get_page_markdown does not expose block IDs.",
         parameters: DeleteBlockParamsSchema,
         execute: async (params) => {
           const parsed = DeleteBlockParamsSchema.parse(params);
@@ -155,7 +201,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "replace_child_blocks",
         description:
-          "Replace direct child sections identified by heading text; appends new blocks before deleting old matches.",
+          "Replace one or more direct child sections identified by heading text: appends the new blocks first, then deletes the matched heading-through-next-heading ranges. Use this over delete_block to swap a labeled section, or over update_page_markdown when you don't have exact text to find/replace.",
         parameters: ReplaceChildBlocksParamsSchema,
         execute: async (params) => {
           const parsed = ReplaceChildBlocksParamsSchema.parse(params);
@@ -164,7 +210,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "download_and_extract_file",
-        description: "Download a file URL and extract text from PDF or DOCX content.",
+        description:
+          "Download a file from a URL (e.g. a Notion file/attachment URL) and extract its text. Supports PDF and DOCX by content-sniffing; other types are returned as raw decoded text.",
         parameters: DownloadAndExtractFileParamsSchema,
         execute: async (params) => {
           const parsed = DownloadAndExtractFileParamsSchema.parse(params);
@@ -173,7 +220,8 @@ Return and consume JSON-serializable data only.`,
       },
       {
         name: "validate",
-        description: "Validate configuration and API reachability.",
+        description:
+          "Verify the configured API key and connectivity by fetching the current bot user. Use to diagnose auth/config issues; it does not read or write any Notion content.",
         parameters: ValidateParamsSchema,
         execute: async (params) => {
           ValidateParamsSchema.parse(params);

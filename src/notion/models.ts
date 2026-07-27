@@ -140,40 +140,40 @@ export const NotionConfigSchema = z.object({
 
 export const ListDataSourcesParamsSchema = z
   .object({
-    query: z.string().optional(),
-    pageSize: OptionalNumber,
-    startCursor: OptionalString,
+    query: z.string().optional().describe("Title text to filter results; omit to list all shared data sources."),
+    pageSize: OptionalNumber.describe("Max results per page (Notion default/max ~100)."),
+    startCursor: OptionalString.describe("Cursor from a previous response's next_cursor to fetch the next page."),
   })
   .strict();
 
 export const ListPagesParamsSchema = z
   .object({
-    query: z.string().optional(),
-    pageSize: OptionalNumber,
-    startCursor: OptionalString,
+    query: z.string().optional().describe("Title text to filter results; omit to list all shared pages."),
+    pageSize: OptionalNumber.describe("Max results per page (Notion default/max ~100)."),
+    startCursor: OptionalString.describe("Cursor from a previous response's next_cursor to fetch the next page."),
   })
   .strict();
 
 export const SearchPagesParamsSchema = z
   .object({
-    query: z.string().min(1),
-    pageSize: OptionalNumber,
-    startCursor: OptionalString,
+    query: z.string().min(1).describe("Required title text to match; this matches page titles only, not body content."),
+    pageSize: OptionalNumber.describe("Max results per page (Notion default/max ~100)."),
+    startCursor: OptionalString.describe("Cursor from a previous response's next_cursor to fetch the next page."),
   })
   .strict();
 
 export const GetDataSourceParamsSchema = z
   .object({
-    dataSourceId: StringInput,
+    dataSourceId: StringInput.describe("ID of the data source (Notion database) to fetch."),
   })
   .strict();
 
 export const UpdateDataSourceParamsSchema = z
   .object({
-    dataSourceId: StringInput,
-    title: z.union([z.string(), JsonArray]).optional(),
-    description: z.union([z.string(), JsonArray]).optional(),
-    properties: JsonObjectInput.optional(),
+    dataSourceId: StringInput.describe("ID of the data source to update."),
+    title: z.union([z.string(), JsonArray]).optional().describe("New title as plain text or a Notion rich-text array."),
+    description: z.union([z.string(), JsonArray]).optional().describe("New description as plain text or a Notion rich-text array."),
+    properties: JsonObjectInput.optional().describe("Property schema definitions to add or modify, keyed by property name."),
   })
   .strict();
 
@@ -195,53 +195,135 @@ export const QueryDataSourceParamsSchema = z
 
 export const GetPageParamsSchema = z
   .object({
-    pageId: StringInput,
+    pageId: StringInput.describe("ID of the page to fetch."),
+  })
+  .strict();
+
+export const GetPageMarkdownParamsSchema = z
+  .object({
+    pageId: StringInput.describe("ID of the page to fetch content for."),
+    includeTranscript: z.boolean().optional().describe(
+      "Include meeting note transcripts in the markdown. Defaults to false.",
+    ),
+  })
+  .strict();
+
+export const CreatePageParamsSchema = z
+  .object({
+    dataSourceId: OptionalString.describe(
+      "Data source to add a new row to. Exactly one of dataSourceId or pageId is required.",
+    ),
+    pageId: OptionalString.describe(
+      "Parent page to create a subpage under. Exactly one of dataSourceId or pageId is required.",
+    ),
+    properties: JsonObjectInput.optional().describe(
+      "Property values keyed by property name. For a data source parent, keys must match the data source's properties; for a page parent, only `title` is valid.",
+    ),
+    children: JsonArrayInput.optional(),
+    markdown: OptionalString.describe(
+      "Page content as Notion-flavored Markdown. Mutually exclusive with children. If no title is given, the first `# h1` heading becomes the page title.",
+    ),
+    icon: JsonObjectInput.optional().describe("Page icon, e.g. { emoji: \"📄\" } or an external file object."),
+    cover: JsonObjectInput.optional().describe("Page cover image as an external file object."),
   })
   .strict();
 
 export const UpdatePagePropertiesParamsSchema = z
   .object({
-    pageId: StringInput,
-    properties: JsonObjectInput,
+    pageId: StringInput.describe("ID of the page whose property values will be updated."),
+    properties: JsonObjectInput.describe(
+      "Property values to set, keyed by property name or ID. Updates property values only — never page content/body.",
+    ),
+  })
+  .strict();
+
+const ContentUpdateItemSchema = z.object({
+  oldStr: z.string().min(1),
+  newStr: z.string(),
+  replaceAllMatches: z.boolean().optional(),
+});
+
+const ContentUpdatesArrayString = z.string().transform((value, ctx) => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const result = z.array(ContentUpdateItemSchema).safeParse(parsed);
+    if (!result.success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Expected JSON array of content updates",
+      });
+      return z.NEVER;
+    }
+    return result.data;
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid JSON content updates array",
+    });
+    return z.NEVER;
+  }
+});
+
+const ContentUpdatesInput = z.union([z.array(ContentUpdateItemSchema), ContentUpdatesArrayString]);
+
+export const UpdatePageMarkdownParamsSchema = z
+  .object({
+    pageId: StringInput.describe("ID of the page whose content will be edited."),
+    mode: z
+      .enum(["update_content", "replace_content"])
+      .describe("update_content for targeted find/replace; replace_content to overwrite all page content."),
+    contentUpdates: ContentUpdatesInput.optional().describe(
+      "Required for mode update_content. Array (max 100) of { oldStr, newStr, replaceAllMatches? } find/replace operations.",
+    ),
+    newStr: OptionalString.describe(
+      "Required for mode replace_content. Full Notion-flavored Markdown replacing all existing page content.",
+    ),
+    allowDeletingContent: z.boolean().optional().describe(
+      "Allow operations that delete existing content. Defaults to false.",
+    ),
   })
   .strict();
 
 export const GetBlocksParamsSchema = z
   .object({
-    blockId: StringInput,
-    pageSize: OptionalNumber,
-    startCursor: OptionalString,
+    blockId: StringInput.describe("ID of the page or block whose direct children to fetch."),
+    pageSize: OptionalNumber.describe("Max results per page (Notion default/max ~100)."),
+    startCursor: OptionalString.describe("Cursor from a previous response's next_cursor to fetch the next page."),
   })
   .strict();
 
 export const AppendBlocksParamsSchema = z
   .object({
-    blockId: StringInput,
-    children: JsonArrayInput,
+    blockId: StringInput.describe("ID of the page or block to append children to."),
+    children: JsonArrayInput.describe("Array of raw Notion block objects to append."),
   })
   .strict();
 
 export const DeleteBlockParamsSchema = z
   .object({
-    blockId: StringInput,
+    blockId: StringInput.describe("ID of the block to delete/archive. Get this from get_blocks."),
   })
   .strict();
 
 export const ReplaceChildBlocksParamsSchema = z
   .object({
-    blockId: StringInput,
-    headingTexts: StringArrayInput,
-    headingTypes: HeadingTypeArrayInput.optional(),
-    children: JsonArrayInput,
-    pageSize: OptionalNumber,
+    blockId: StringInput.describe("ID of the parent page or block whose direct children are scanned for matching headings."),
+    headingTexts: StringArrayInput.describe(
+      "Heading text(s) to match (case-insensitive, trimmed). Each match and its following non-heading siblings are deleted after the new blocks are appended.",
+    ),
+    headingTypes: HeadingTypeArrayInput.optional().describe(
+      "Restrict matching to these heading levels only. Omit to match heading_1/heading_2/heading_3 blocks with matching text.",
+    ),
+    children: JsonArrayInput.describe("Raw Notion blocks to append before deleting the matched sections."),
+    pageSize: OptionalNumber.describe("Page size used when internally fetching all children to scan for headings."),
   })
   .strict();
 
 export const DownloadAndExtractFileParamsSchema = z
   .object({
-    url: StringInput,
-    filename: z.string().optional(),
-    contentType: z.string().optional(),
+    url: StringInput.describe("URL of the file to download, e.g. a Notion file/attachment URL."),
+    filename: z.string().optional().describe("Filename hint used to detect PDF/DOCX when the URL/content-type is ambiguous."),
+    contentType: z.string().optional().describe("Content-type hint used to detect PDF/DOCX when the URL/filename is ambiguous."),
   })
   .strict();
 

@@ -6,6 +6,7 @@ import {
   NotionNotFoundError,
   NotionRateLimitError,
   NotionServerError,
+  NotionValidationError,
 } from "../errors.js";
 
 const { pdfGetDocumentMock, mammothExtractRawTextMock } = vi.hoisted(() => ({
@@ -126,6 +127,75 @@ describe("Notion extension request handling", () => {
     );
   });
 
+  it("fetches page markdown with no query params when includeTranscript is omitted", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          object: "page_markdown",
+          id: "page-123",
+          markdown: "# Title\n\nBody",
+          truncated: false,
+          unknown_block_ids: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2026-03-11",
+      timeoutMs: 12_345,
+    });
+
+    const result = await client.getPageMarkdown({ pageId: "page-123" });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.notion.com/v1/pages/page-123/markdown");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    expect(result).toEqual({
+      object: "page_markdown",
+      id: "page-123",
+      markdown: "# Title\n\nBody",
+      truncated: false,
+      unknown_block_ids: [],
+    });
+  });
+
+  it("fetches page markdown with include_transcript=true in the query string", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          object: "page_markdown",
+          id: "page-123",
+          markdown: "Transcript included",
+          truncated: true,
+          unknown_block_ids: ["block-1"],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2026-03-11",
+      timeoutMs: 12_345,
+    });
+
+    const result = await client.getPageMarkdown({ pageId: "page-123", includeTranscript: true });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://api.notion.com/v1/pages/page-123/markdown?include_transcript=true",
+    );
+    expect(result).toEqual({
+      object: "page_markdown",
+      id: "page-123",
+      markdown: "Transcript included",
+      truncated: true,
+      unknown_block_ids: ["block-1"],
+    });
+  });
+
   it("patches data sources and pages with snake-cased bodies", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -223,6 +293,227 @@ describe("Notion extension request handling", () => {
         },
       }),
     );
+  });
+
+  it("creates a data source row", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ object: "page", id: "page-new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await client.createPage({
+      dataSourceId: "db-123",
+      properties: {
+        Name: { title: [{ text: { content: "New row" } }] },
+      },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.notion.com/v1/pages");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        parent: { type: "data_source_id", data_source_id: "db-123" },
+        properties: {
+          Name: { title: [{ text: { content: "New row" } }] },
+        },
+      }),
+    );
+  });
+
+  it("creates a subpage under a page parent", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ object: "page", id: "page-new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await client.createPage({
+      pageId: "parent-page-123",
+      properties: {
+        title: [{ text: { content: "New subpage" } }],
+      },
+      children: [{ type: "paragraph", paragraph: { richText: ["Body"] } }],
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.notion.com/v1/pages");
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        parent: { type: "page_id", page_id: "parent-page-123" },
+        properties: {
+          title: [{ text: { content: "New subpage" } }],
+        },
+        children: [{ type: "paragraph", paragraph: { rich_text: ["Body"] } }],
+      }),
+    );
+  });
+
+  it("rejects creating a page when neither or both parent ids are given", async () => {
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(client.createPage({})).rejects.toBeInstanceOf(NotionValidationError);
+    await expect(
+      client.createPage({ dataSourceId: "db-123", pageId: "page-123" }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+  });
+
+  it("creates a page from markdown", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ object: "page", id: "page-new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await client.createPage({
+      pageId: "parent-page-123",
+      markdown: "# Title\n\nSome **body** text.",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.notion.com/v1/pages");
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        parent: { type: "page_id", page_id: "parent-page-123" },
+        markdown: "# Title\n\nSome **body** text.",
+      }),
+    );
+  });
+
+  it("rejects creating a page when both markdown and children are given", async () => {
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.createPage({
+        pageId: "parent-page-123",
+        markdown: "# Title",
+        children: [{ type: "paragraph", paragraph: { rich_text: [] } }],
+      }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+  });
+
+  it("updates page markdown with update_content", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ object: "page", id: "page-123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await client.updatePageMarkdown({
+      pageId: "page-123",
+      mode: "update_content",
+      contentUpdates: [{ oldStr: "old", newStr: "new", replaceAllMatches: true }],
+      allowDeletingContent: true,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.notion.com/v1/pages/page-123/markdown");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("PATCH");
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        type: "update_content",
+        update_content: {
+          content_updates: [{ old_str: "old", new_str: "new", replace_all_matches: true }],
+        },
+        allow_deleting_content: true,
+      }),
+    );
+  });
+
+  it("updates page markdown with replace_content", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ object: "page", id: "page-123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await client.updatePageMarkdown({
+      pageId: "page-123",
+      mode: "replace_content",
+      newStr: "# New content",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://api.notion.com/v1/pages/page-123/markdown");
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({
+        type: "replace_content",
+        replace_content: { new_str: "# New content" },
+      }),
+    );
+  });
+
+  it("rejects update_content with more than 100 content updates", async () => {
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    const contentUpdates = Array.from({ length: 101 }, (_, index) => ({
+      oldStr: `old-${index}`,
+      newStr: `new-${index}`,
+    }));
+
+    await expect(
+      client.updatePageMarkdown({ pageId: "page-123", mode: "update_content", contentUpdates }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+  });
+
+  it("rejects replace_content without newStr", async () => {
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.updatePageMarkdown({ pageId: "page-123", mode: "replace_content" }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
   });
 
   it("replaces matching direct child heading sections after appending new blocks", async () => {

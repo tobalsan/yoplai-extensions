@@ -40,7 +40,7 @@ describe("notion extension", () => {
   it("creates the expected tools with object parameter schemas", () => {
     const tools = createTools();
 
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(17);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_data_sources",
       "list_pages",
@@ -49,7 +49,10 @@ describe("notion extension", () => {
       "update_data_source",
       "query_data_source",
       "get_page",
+      "get_page_markdown",
+      "create_page",
       "update_page_properties",
+      "update_page_markdown",
       "get_blocks",
       "append_blocks",
       "delete_block",

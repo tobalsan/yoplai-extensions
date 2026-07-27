@@ -280,6 +280,44 @@ export class NotionClient {
     return await this.requestJson("GET", `/pages/${pageId}`);
   }
 
+  async getPageMarkdown(input: {
+    pageId: string;
+    includeTranscript?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return await this.requestJson("GET", `/pages/${input.pageId}/markdown`, undefined, {
+      include_transcript: input.includeTranscript,
+    });
+  }
+
+  async createPage(input: {
+    dataSourceId?: string;
+    pageId?: string;
+    properties?: Record<string, unknown>;
+    children?: unknown[];
+    markdown?: string;
+    icon?: Record<string, unknown>;
+    cover?: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    if (Boolean(input.dataSourceId) === Boolean(input.pageId)) {
+      throw new NotionValidationError("Exactly one of dataSourceId or pageId is required to create a page.");
+    }
+    if (input.markdown && input.children) {
+      throw new NotionValidationError("markdown and children are mutually exclusive; provide only one.");
+    }
+    const parent = input.dataSourceId
+      ? { type: "data_source_id", data_source_id: input.dataSourceId }
+      : { type: "page_id", page_id: input.pageId };
+    const body = compact({
+      parent,
+      properties: input.properties ? withPropertyValues(input.properties) : undefined,
+      children: input.children ? withBlocks(input.children) : undefined,
+      markdown: input.markdown,
+      icon: input.icon ? mapKeysDeep(input.icon, toSnakeCase) : undefined,
+      cover: input.cover ? mapKeysDeep(input.cover, toSnakeCase) : undefined,
+    });
+    return await this.requestJson("POST", "/pages", body);
+  }
+
   async updatePageProperties(input: {
     pageId: string;
     properties: Record<string, unknown>;
@@ -295,6 +333,49 @@ export class NotionClient {
     return await this.requestJson("PATCH", `/pages/${input.pageId}`, {
       properties: mappedProperties,
     });
+  }
+
+  async updatePageMarkdown(input: {
+    pageId: string;
+    mode: "update_content" | "replace_content";
+    contentUpdates?: Array<{ oldStr: string; newStr: string; replaceAllMatches?: boolean }>;
+    newStr?: string;
+    allowDeletingContent?: boolean;
+  }): Promise<Record<string, unknown>> {
+    if (input.mode === "update_content") {
+      if (!input.contentUpdates || input.contentUpdates.length === 0) {
+        throw new NotionValidationError("contentUpdates is required and must be non-empty for mode update_content.");
+      }
+      if (input.contentUpdates.length > 100) {
+        throw new NotionValidationError("contentUpdates supports at most 100 items.");
+      }
+      const body = compact({
+        type: "update_content",
+        update_content: {
+          content_updates: input.contentUpdates.map((update) =>
+            compact({
+              old_str: update.oldStr,
+              new_str: update.newStr,
+              replace_all_matches: update.replaceAllMatches,
+            }),
+          ),
+        },
+        allow_deleting_content: input.allowDeletingContent,
+      });
+      return await this.requestJson("PATCH", `/pages/${input.pageId}/markdown`, body);
+    }
+
+    if (!input.newStr) {
+      throw new NotionValidationError("newStr is required for mode replace_content.");
+    }
+    const body = compact({
+      type: "replace_content",
+      replace_content: {
+        new_str: input.newStr,
+      },
+      allow_deleting_content: input.allowDeletingContent,
+    });
+    return await this.requestJson("PATCH", `/pages/${input.pageId}/markdown`, body);
   }
 
   async getBlocks(input: {
