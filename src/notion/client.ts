@@ -304,6 +304,15 @@ export class NotionClient {
     if (input.markdown && input.children) {
       throw new NotionValidationError("markdown and children are mutually exclusive; provide only one.");
     }
+    if (
+      (!input.properties || Object.keys(input.properties).length === 0) &&
+      !input.markdown &&
+      (!input.children || input.children.length === 0)
+    ) {
+      throw new NotionValidationError(
+        "create_page would create a blank page. Provide properties (call get_data_source first to learn the property names), or markdown/children for content.",
+      );
+    }
     const parent = input.dataSourceId
       ? { type: "data_source_id", data_source_id: input.dataSourceId }
       : { type: "page_id", page_id: input.pageId };
@@ -322,6 +331,11 @@ export class NotionClient {
     pageId: string;
     properties: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
+    if (!input.properties || Object.keys(input.properties).length === 0) {
+      throw new NotionValidationError(
+        "properties is empty; nothing would be updated. Provide property values keyed by property name, or use update_page_markdown to edit page content.",
+      );
+    }
     const page = (await this.getPage(input.pageId)) as Record<string, unknown>;
     const pageProperties = isPlainObject(page.properties) ? page.properties : {};
     const mappedProperties = Object.fromEntries(
@@ -393,6 +407,11 @@ export class NotionClient {
     blockId: string;
     children: unknown[];
   }): Promise<Record<string, unknown>> {
+    if (!input.children || input.children.length === 0) {
+      throw new NotionValidationError(
+        "children is empty; nothing would be appended. Provide block objects, or use update_page_markdown to write content as Markdown.",
+      );
+    }
     return await this.requestJson("PATCH", `/blocks/${input.blockId}/children`, {
       children: withBlocks(input.children),
     });
@@ -441,7 +460,9 @@ export class NotionClient {
       }
     }
 
-    await this.appendBlocks({ blockId: input.blockId, children: input.children });
+    if (input.children.length > 0) {
+      await this.appendBlocks({ blockId: input.blockId, children: input.children });
+    }
     for (const blockId of idsToDelete) {
       await this.deleteBlock(blockId);
     }

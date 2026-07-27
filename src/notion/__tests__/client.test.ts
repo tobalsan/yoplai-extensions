@@ -295,6 +295,21 @@ describe("Notion extension request handling", () => {
     );
   });
 
+  it("rejects updating page properties with an empty properties object without calling fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.updatePageProperties({ pageId: "page-123", properties: {} }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("creates a data source row", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ object: "page", id: "page-new" }), {
@@ -375,6 +390,21 @@ describe("Notion extension request handling", () => {
     await expect(
       client.createPage({ dataSourceId: "db-123", pageId: "page-123" }),
     ).rejects.toBeInstanceOf(NotionValidationError);
+  });
+
+  it("rejects creating a blank page with empty properties and no markdown/children, without calling fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.createPage({ dataSourceId: "db-123", properties: {} }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("creates a page from markdown", async () => {
@@ -514,6 +544,21 @@ describe("Notion extension request handling", () => {
     await expect(
       client.updatePageMarkdown({ pageId: "page-123", mode: "replace_content" }),
     ).rejects.toBeInstanceOf(NotionValidationError);
+  });
+
+  it("rejects appending blocks with an empty children array without calling fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.appendBlocks({ blockId: "block-123", children: [] }),
+    ).rejects.toBeInstanceOf(NotionValidationError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("replaces matching direct child heading sections after appending new blocks", async () => {
@@ -688,6 +733,64 @@ describe("Notion extension request handling", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[1]?.[1]?.method).toBe("PATCH");
+  });
+
+  it("deletes matched heading sections without appending when children is empty", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                object: "block",
+                id: "summary-heading",
+                type: "heading_3",
+                heading_3: { rich_text: [{ plain_text: "Resume Summary" }] },
+              },
+              {
+                object: "block",
+                id: "summary-bullet",
+                type: "bulleted_list_item",
+                bulleted_list_item: { rich_text: [{ plain_text: "Old summary" }] },
+              },
+            ],
+            next_cursor: null,
+            has_more: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockImplementation(async () => new Response(JSON.stringify({ object: "block" }), { status: 200 }));
+
+    const client = new NotionClient({
+      apiKey: "secret",
+      notionVersion: "2025-09-03",
+      timeoutMs: 12_345,
+    });
+
+    await expect(
+      client.replaceChildBlocks({
+        blockId: "page-123",
+        headingTexts: ["Resume Summary"],
+        children: [],
+      }),
+    ).resolves.toEqual({
+      object: "replace_child_blocks_result",
+      blockId: "page-123",
+      matchedHeadingTexts: ["Resume Summary"],
+      deletedBlockCount: 2,
+      appendedBlockCount: 0,
+      deletedBlockIds: ["summary-heading", "summary-bullet"],
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.notion.com/v1/blocks/page-123/children");
+    expect(fetchSpy.mock.calls.slice(1).map((call) => call[0])).toEqual([
+      "https://api.notion.com/v1/blocks/summary-heading",
+      "https://api.notion.com/v1/blocks/summary-bullet",
+    ]);
+    expect(fetchSpy.mock.calls.slice(1).map((call) => call[1]?.method)).toEqual(["DELETE", "DELETE"]);
   });
 
   it.each([

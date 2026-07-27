@@ -141,7 +141,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "create_page",
         description:
-          "Create a new page: a data source row when given `dataSourceId`, or a subpage when given `pageId` — exactly one of the two is required. Provide content via `markdown` (Notion-flavored Markdown) or `children` (raw blocks), which are mutually exclusive; if no title is given, the first `# h1` heading in markdown becomes the page title.",
+          "Create a new page: a data source row when given `dataSourceId`, or a subpage when given `pageId` — exactly one of the two is required. Provide content via `markdown` (Notion-flavored Markdown) or `children` (raw blocks), which are mutually exclusive; if no title is given, the first `# h1` heading in markdown becomes the page title. Rejected if it would create a completely blank page (no properties, markdown, or children).",
         parameters: CreatePageParamsSchema,
         execute: async (params) => {
           const parsed = CreatePageParamsSchema.parse(params);
@@ -151,7 +151,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "update_page_properties",
         description:
-          "Patch page PROPERTY VALUES (e.g. status, tags, dates) by property name or ID. This never touches page content/body — use update_page_markdown, append_blocks, or replace_child_blocks for content.",
+          "Patch page PROPERTY VALUES (e.g. status, tags, dates) by property name or ID. This never touches page content/body — use update_page_markdown, append_blocks, or replace_child_blocks for content. Rejected if `properties` is empty.",
         parameters: UpdatePagePropertiesParamsSchema,
         execute: async (params) => {
           const parsed = UpdatePagePropertiesParamsSchema.parse(params);
@@ -181,7 +181,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "append_blocks",
         description:
-          "Append new raw blocks to the end of a page or block's children, without touching existing content. Use replace_child_blocks instead to swap out an existing heading section.",
+          "Append new raw blocks to the end of a page or block's children, without touching existing content. Use replace_child_blocks instead to swap out an existing heading section. Rejected if `children` is empty.",
         parameters: AppendBlocksParamsSchema,
         execute: async (params) => {
           const parsed = AppendBlocksParamsSchema.parse(params);
