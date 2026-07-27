@@ -38,6 +38,16 @@ describe("hiveage extension", () => {
     ]);
   });
 
+  it("rejects subdomains that can redirect API credentials", () => {
+    expect(() =>
+      extension.createTools({
+        global: {},
+        agent: {},
+        merged: { apiKey: "secret", subdomain: "account@attacker.example/" },
+      }),
+    ).toThrow();
+  });
+
   it("uses z.object parameter schemas", () => {
     const tools = extension.createTools({
       global: {},

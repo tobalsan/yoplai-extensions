@@ -34,6 +34,10 @@ export const HiveageConfigSchema = z.object({
     .describe("Hiveage API key used as the Basic auth username. Find it under Settings > API in your Hiveage account."),
   subdomain: z
     .string()
+    .regex(
+      /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/,
+      "Hiveage subdomain must be a single valid DNS label",
+    )
     .describe("Your Hiveage account subdomain, e.g. \"acme\" for https://acme.hiveage.com."),
   timeoutMs: z
     .number()
