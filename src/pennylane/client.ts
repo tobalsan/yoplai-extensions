@@ -54,7 +54,7 @@ const BASE_URL = "https://app.pennylane.com/api/external/v2";
 const RATE_LIMIT_MAX = 25;
 const RATE_LIMIT_WINDOW_MS = 5000;
 
-/** Total attempts per request before giving up (initial try + retries). */
+/** Total attempts for retryable reads and updates (initial try + retries). */
 const MAX_ATTEMPTS = 4;
 
 interface CursorPage {
@@ -145,8 +145,11 @@ export class PennylaneClient {
     }
 
     const payload = body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
+    // Pennylane has no idempotency keys. A failed POST may have created the
+    // resource, so callers must reconcile by external_reference before retrying.
+    const maxAttempts = method === "POST" ? 1 : MAX_ATTEMPTS;
 
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       await this.throttle();
       try {
         const response = await fetch(url.toString(), {
@@ -163,7 +166,7 @@ export class PennylaneClient {
         const requestId = response.headers.get("x-request-id") ?? undefined;
 
         if (response.status === 429) {
-          if (attempt < MAX_ATTEMPTS - 1) {
+          if (attempt < maxAttempts - 1) {
             await sleep(this.retryDelayMs(response, attempt));
             continue;
           }
@@ -205,7 +208,7 @@ export class PennylaneClient {
         }
 
         if (response.status >= 500) {
-          if (attempt < MAX_ATTEMPTS - 1) {
+          if (attempt < maxAttempts - 1) {
             await sleep((attempt + 1) * 250);
             continue;
           }

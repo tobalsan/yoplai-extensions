@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PennylaneClient } from "../client.js";
 import {
   PennylaneAuthError,
+  PennylaneError,
   PennylaneGuardRefusedError,
   PennylaneNotFoundError,
   PennylaneRateLimitError,
@@ -121,6 +122,21 @@ describe("PennylaneClient", () => {
     const result = await client.listInvoices({});
 
     expect(result.invoices).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries transient server errors for GET reads", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("temporary failure", { status: 503 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [{ id: 9, amount: "1.00" }], has_more: false, next_cursor: null }),
+      );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await expect(client.listInvoices({})).resolves.toMatchObject({
+      invoices: [{ id: "9" }],
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -552,6 +568,33 @@ describe("PennylaneClient", () => {
         raw_currency_unit_price: "100.00",
         vat_rate: "FR_200",
       });
+    });
+
+    it("does not replay creation after an ambiguous server error", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ error: "temporary failure" }), { status: 503 }),
+      );
+      const client = new PennylaneClient({ apiToken: "t" });
+
+      await expect(
+        client.createInvoiceDraft({
+          customerId: 123,
+          date: "2026-06-15",
+          deadline: "2026-07-15",
+          externalReference: "pipedrive-deal-4567",
+          invoiceLines: [
+            {
+              label: "Consulting",
+              quantity: 1,
+              unit: "hour",
+              rawCurrencyUnitPrice: "100.00",
+              vatRate: "FR_200",
+            },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(PennylaneError);
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
     });
 
     it("accepts legacy loose invoice line values", async () => {
