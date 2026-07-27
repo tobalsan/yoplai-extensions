@@ -11,8 +11,6 @@ import {
 } from "./errors.js";
 import { type NotionConfig } from "./models.js";
 
-type JsonPrimitive = null | boolean | number | string;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 const HEADING_TYPES = new Set(["heading_1", "heading_2", "heading_3"]);
 
 function sleep(ms: number): Promise<void> {

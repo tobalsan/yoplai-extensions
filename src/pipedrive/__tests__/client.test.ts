@@ -5,7 +5,6 @@ import {
   PipedriveAuthError,
   PipedriveNotFoundError,
   PipedriveRateLimitError,
-  PipedriveServerError,
   PipedriveValidationError,
 } from "../errors.js";
 
