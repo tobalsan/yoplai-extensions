@@ -7,6 +7,14 @@ describe("jira extension", () => {
     expect(JiraConfigSchema.parse({ subdomain: "acme", email: "u@example.com", apiToken: "x" })).toMatchObject({ timeoutMs: 30_000, readOnly: false });
   });
 
+  it("rejects subdomains that could redirect API credentials", () => {
+    expect(() => JiraConfigSchema.parse({
+      subdomain: "account@attacker.example/",
+      email: "u@example.com",
+      apiToken: "x",
+    })).toThrow();
+  });
+
   it("parses project keys from env-friendly strings", () => {
     expect(JiraConfigSchema.parse({ subdomain: "acme", email: "u@example.com", apiToken: "x", jiraProjectKeys: "CFS,CFP" }).jiraProjectKeys).toEqual(["CFS", "CFP"]);
     expect(JiraConfigSchema.parse({ subdomain: "acme", email: "u@example.com", apiToken: "x", jiraProjectKeys: '["CFS","CFP"]' }).jiraProjectKeys).toEqual(["CFS", "CFP"]);

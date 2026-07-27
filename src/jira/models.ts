@@ -14,7 +14,10 @@ const ProjectKeysSchema = z.preprocess((value) => {
 );
 
 export const JiraConfigSchema = z.object({
-  subdomain: z.string().min(1).describe("Jira Cloud subdomain, e.g. \"acme\" for acme.atlassian.net."),
+  subdomain: z.string().regex(
+    /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/,
+    "Jira subdomain must be a single DNS label",
+  ).describe("Jira Cloud subdomain, e.g. \"acme\" for acme.atlassian.net."),
   email: z.string().email().describe("Email address of the Jira account used to authenticate with the API token."),
   apiToken: z.string().min(1).describe("Jira API token for the account email. Create one at id.atlassian.com/manage-profile/security/api-tokens."),
   jiraProjectKeys: ProjectKeysSchema,

@@ -30,6 +30,25 @@ describe("JiraClient", () => {
     });
   });
 
+  it("rejects structured project keys outside the configured allowlist", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ issues: [] }));
+    const client = new JiraClient(config);
+
+    await expect(client.search({ projectKeys: ["OTHER"] })).rejects.toThrow("Project OTHER is not allowed");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards pagination when searching users", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+    const client = new JiraClient(config);
+
+    await client.searchUsers({ query: "Ada", startAt: 20, maxResults: 10 });
+    await client.searchUsers({ projectKey: "CFS", query: "Ada", startAt: 30, maxResults: 15 });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.atlassian.net/rest/api/3/user/search?query=Ada&startAt=20&maxResults=10");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.atlassian.net/rest/api/3/user/assignable/search?project=CFS&query=Ada&startAt=30&maxResults=15");
+  });
+
   it("dry-runs create_issue with remote metadata validation", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ projects: [] }));
