@@ -137,6 +137,7 @@ export class FieldRegistryStore {
   private readonly ttlMs: number;
   private readonly graceMs: number;
   private readonly now: () => number;
+  private rebuildInFlight: Promise<FieldRegistry> | null = null;
 
   constructor(
     private readonly fetchFields: DealFieldsFetcher,
@@ -178,6 +179,18 @@ export class FieldRegistryStore {
   }
 
   private async rebuild(): Promise<FieldRegistry> {
+    if (this.rebuildInFlight) return this.rebuildInFlight;
+
+    const rebuild = this.performRebuild();
+    this.rebuildInFlight = rebuild;
+    try {
+      return await rebuild;
+    } finally {
+      if (this.rebuildInFlight === rebuild) this.rebuildInFlight = null;
+    }
+  }
+
+  private async performRebuild(): Promise<FieldRegistry> {
     const fields = await this.fetchFields();
     const registry = buildRegistry(fields, this.now);
     await this.writeCache({ fetchedAt: this.now(), registry });

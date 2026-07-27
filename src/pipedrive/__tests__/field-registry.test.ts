@@ -74,6 +74,29 @@ describe("FieldRegistryStore", () => {
     expect(written.fetchedAt).toBe(clock);
   });
 
+  it("coalesces concurrent cold-cache reads into one rebuild", async () => {
+    const clock = 1_000_000;
+    let releaseFetch: ((fields: DealField[]) => void) | undefined;
+    const fetchResult = new Promise<DealField[]>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetcher = vi.fn(() => fetchResult);
+    const store = new FieldRegistryStore(fetcher, { cachePath, now: () => clock });
+
+    const first = store.get();
+    const second = store.get();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseFetch?.([field({ key: "hash1", name: "Priority" })]);
+
+    const [firstRegistry, secondRegistry] = await Promise.all([first, second]);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(firstRegistry).toBe(secondRegistry);
+    const written = JSON.parse(await readFile(cachePath, "utf8"));
+    expect(written.registry.by_key.hash1.name).toBe("Priority");
+  });
+
   it("serves the cache within TTL without re-fetching", async () => {
     let clock = 1_000_000;
     const fetcher = vi.fn(async () => [field({ key: "hash1", name: "Priority" })]);
