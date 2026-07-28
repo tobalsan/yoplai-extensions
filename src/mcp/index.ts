@@ -228,11 +228,15 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         async (server) => {
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
-            await oauth?.markNeedsReconnect(agentId, server.name);
+            return Boolean(await oauth?.refreshAccessToken(agentId, server.name));
           }
+          return false;
         },
         async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
-        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Ask an admin to connect it in the agent settings.`, authorizeUrl: `/agents/${agentId}/extensions/mcp` })
+        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Ask an admin to connect it in the agent settings.`, authorizeUrl: `/agents/${agentId}/extensions/mcp` }),
+        async (server) => {
+          if (server.type === "http" && !server.headers) await oauth?.markNeedsReconnect(agentId, server.name);
+        }
       );
       await manager.connect();
       return manager;

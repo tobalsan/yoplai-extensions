@@ -73,6 +73,28 @@ describe("MCP OAuth flow", () => {
     });
   });
 
+  it("forces a refresh even when the access token has not expired", async () => {
+    const refresh = vi.fn().mockResolvedValue({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverAuthorizationServerMetadata: vi.fn().mockResolvedValue({ token_endpoint: "https://auth.test/token" }),
+      refreshAuthorization: refresh,
+      discoverOAuthServerInfo: vi.fn(), registerClient: vi.fn(), startAuthorization: vi.fn(), exchangeAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    await store.write("casey", "claap", {
+      client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
+      tokens: { access_token: "still-valid", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-07-22T00:00:00.000Z", authorizationServerUrl: "https://auth.test",
+      expiresAt: "2099-01-01T00:00:00.000Z", state: "connected",
+    });
+
+    await expect(store.refreshAccessToken("casey", "claap")).resolves.toBe("fresh");
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it("rejects an expired pending authorization state", async () => {
     vi.useFakeTimers();
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
