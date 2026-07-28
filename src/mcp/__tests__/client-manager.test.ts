@@ -270,4 +270,32 @@ describe("McpClientManager", () => {
     await expect(manager.listTools()).resolves.toEqual([]);
     expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
   });
+
+  it("marks a refreshed transport that 401s while reconnecting as needing reconnect", async () => {
+    const terminal = vi.fn(async () => undefined);
+    let connections = 0;
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async (): Promise<McpClientHandle> => {
+        connections += 1;
+        if (connections === 2) throw new Error("401 Unauthorized");
+        return {
+          async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+          async callTool() { throw new Error("401 Unauthorized"); },
+          async close() {},
+        };
+      },
+      undefined,
+      async () => true,
+      undefined,
+      (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+      terminal
+    );
+
+    await manager.connect();
+    await manager.listTools();
+
+    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
+    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+  });
 });

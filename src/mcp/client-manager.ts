@@ -169,6 +169,7 @@ export class McpClientManager {
       await this.connectServer(server);
       return true;
     } catch (error) {
+      if (isUnauthorized(error)) await this.onUnrecoverableAuthFailure?.(server);
       this.recordError(server.name, error);
       return false;
     }
