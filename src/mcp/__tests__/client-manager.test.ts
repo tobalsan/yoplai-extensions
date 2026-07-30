@@ -147,7 +147,7 @@ describe("McpClientManager", () => {
         throw new Error("401 Unauthorized");
       },
       async () => "fresh-token",
-      async (server) => { marked.push(server.name); }
+      async (server) => { marked.push(server.name); return false; }
     );
 
     await manager.connect();
@@ -161,12 +161,141 @@ describe("McpClientManager", () => {
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
       async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
       undefined,
-      async () => undefined,
+      async () => false,
       undefined,
       (server) => ({ connected: false, server, reason: "needs_reconnect" })
     );
     await manager.connect();
     await manager.listTools();
     await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
+  });
+
+  it("refreshes and reconnects an expired OAuth transport after a tool 401", async () => {
+    const tokens = ["expired-token", "fresh-token"];
+    const factory = vi.fn(async (_server, token): Promise<McpClientHandle> => ({
+      async listTools() {
+        return [{ server: "claap", name: "search", description: "", inputSchema: {} }];
+      },
+      async callTool() {
+        if (token === "expired-token") throw new Error("401 Unauthorized");
+        return { token };
+      },
+      async close() {},
+    }));
+    const refresh = vi.fn(async () => {
+      tokens.shift();
+      return true;
+    });
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      factory,
+      async () => tokens[0],
+      refresh
+    );
+
+    await manager.connect();
+    await manager.listTools();
+
+    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ token: "fresh-token" });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenNthCalledWith(1, expect.anything(), "expired-token");
+    expect(factory).toHaveBeenNthCalledWith(2, expect.anything(), "fresh-token");
+  });
+
+  it("shares reconnect work across concurrent 401s", async () => {
+    let token = "expired-token";
+    const factory = vi.fn(async (_server, currentToken): Promise<McpClientHandle> => ({
+      async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+      async callTool() {
+        if (currentToken === "expired-token") throw new Error("401 Unauthorized");
+        return { token: currentToken };
+      },
+      async close() {},
+    }));
+    const refresh = vi.fn(async () => { token = "fresh-token"; return true; });
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }], factory, async () => token, refresh
+    );
+    await manager.connect();
+    await manager.listTools();
+
+    await expect(Promise.all([manager.invoke("claap__search", {}), manager.invoke("claap__search", {})])).resolves.toEqual([
+      { token: "fresh-token" }, { token: "fresh-token" },
+    ]);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a still-unauthorized refreshed transport as needing reconnect", async () => {
+    const terminal = vi.fn(async () => undefined);
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async (): Promise<McpClientHandle> => ({
+        async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+        async callTool() { throw new Error("401 Unauthorized"); },
+        async close() {},
+      }),
+      undefined,
+      async () => true,
+      undefined,
+      (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+      terminal
+    );
+
+    await manager.connect();
+    await manager.listTools();
+
+    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
+    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+  });
+
+  it("marks a still-unauthorized refreshed transport during discovery as needing reconnect", async () => {
+    const terminal = vi.fn(async () => undefined);
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async (): Promise<McpClientHandle> => ({
+        async listTools() { throw new Error("401 Unauthorized"); },
+        async callTool() { return undefined; },
+        async close() {},
+      }),
+      undefined,
+      async () => true,
+      undefined,
+      undefined,
+      terminal
+    );
+
+    await manager.connect();
+
+    await expect(manager.listTools()).resolves.toEqual([]);
+    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+  });
+
+  it("marks a refreshed transport that 401s while reconnecting as needing reconnect", async () => {
+    const terminal = vi.fn(async () => undefined);
+    let connections = 0;
+    const manager = new McpClientManager(
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      async (): Promise<McpClientHandle> => {
+        connections += 1;
+        if (connections === 2) throw new Error("401 Unauthorized");
+        return {
+          async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+          async callTool() { throw new Error("401 Unauthorized"); },
+          async close() {},
+        };
+      },
+      undefined,
+      async () => true,
+      undefined,
+      (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+      terminal
+    );
+
+    await manager.connect();
+    await manager.listTools();
+
+    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
+    expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
   });
 });

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- MCP OAuth transports now force-refresh and reconnect after a 401, so cached agents keep their MCP tools through token expiry.
 - Concurrent MCP OAuth token requests now share one refresh, preserving rotated refresh tokens and avoiding duplicate provider calls.
 - Zendesk configuration now rejects invalid subdomains that could redirect API credentials to another host.
 - Pipedrive concurrent field-registry cache misses now share one rebuild, preventing duplicate API fetches and cache-write races.

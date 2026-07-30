@@ -142,6 +142,22 @@ export class McpOAuthStore {
     }
   }
 
+  async refreshAccessToken(agent: string, server: string): Promise<string | undefined> {
+    const connection = await this.read(agent, server);
+    if (!connection) return undefined;
+    const key = `${agent}\0${server}`;
+    const activeRefresh = this.refreshes.get(key);
+    if (activeRefresh) return activeRefresh;
+
+    const refresh = this.refreshConnection(agent, server, connection);
+    this.refreshes.set(key, refresh);
+    try {
+      return await refresh;
+    } finally {
+      this.refreshes.delete(key);
+    }
+  }
+
   private async refreshConnection(
     agent: string,
     server: string,
@@ -156,7 +172,8 @@ export class McpOAuthStore {
       const tokens = await refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token });
       await this.write(agent, server, { ...connection, tokens, expiresAt: expiry(tokens), state: "connected" });
       return tokens.access_token;
-    } catch {
+    } catch (error) {
+      console.error(`[mcp] OAuth refresh failed for server "${server}":`, error);
       await this.markNeedsReconnect(agent, server);
       return undefined;
     }
