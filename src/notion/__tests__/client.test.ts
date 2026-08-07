@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotionClient } from "../client.js";
 import {
   NotionAuthError,
+  NotionFileExtractionError,
   NotionNotFoundError,
   NotionRateLimitError,
   NotionServerError,
@@ -926,6 +927,48 @@ describe("Notion extension request handling", () => {
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         bytes: 4,
       },
+    });
+  });
+
+  it("preserves signed URL query parameters while downloading a PDF", async () => {
+    pdfGetDocumentMock.mockReturnValue({
+      promise: Promise.resolve({ numPages: 1, getPage: async () => ({ getTextContent: async () => ({ items: [{ str: "CV" }] }) }) }),
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { "content-type": "application/pdf" } }),
+    );
+    const url = "https://prod-files-secure.s3.us-west-2.amazonaws.com/cv.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc%2Fdef&X-Amz-Security-Token=token";
+    const client = new NotionClient({ apiKey: "secret", notionVersion: "2025-09-03", timeoutMs: 12_345 });
+
+    await expect(client.downloadAndExtractFile({ url })).resolves.toMatchObject({ text: "CV", source: { url } });
+    expect(fetchSpy).toHaveBeenCalledWith(url, expect.any(Object));
+  });
+
+  it("reports expired signed links and PDF worker mismatches with actionable codes", async () => {
+    const client = new NotionClient({ apiKey: "secret", notionVersion: "2025-09-03", timeoutMs: 12_345 });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("ExpiredToken", { status: 403 }));
+    await expect(client.downloadAndExtractFile({ url: "https://example.com/cv.pdf?signature=expired" })).rejects.toMatchObject({
+      code: "SIGNED_URL_EXPIRED",
+    } satisfies Partial<NotionFileExtractionError>);
+
+    pdfGetDocumentMock.mockReturnValue({ promise: Promise.reject(new Error('The API version "5.6.205" does not match the Worker version "5.5.0".')) });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { "content-type": "application/pdf" } }),
+    );
+    await expect(client.downloadAndExtractFile({ url: "https://example.com/cv.pdf" })).rejects.toMatchObject({
+      code: "PDFJS_VERSION_MISMATCH",
+      message: expect.stringContaining("Reinstall"),
+    });
+  });
+
+  it("returns a structured error when the signed URL cannot be reached", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network timeout"));
+    const client = new NotionClient({ apiKey: "secret", notionVersion: "2025-09-03", timeoutMs: 12_345 });
+
+    await expect(client.downloadAndExtractFile({ url: "https://example.com/cv.pdf?signature=valid" })).rejects.toMatchObject({
+      code: "FILE_DOWNLOAD_FAILED",
+      retryable: true,
+      message: expect.stringContaining("network timeout"),
     });
   });
 });

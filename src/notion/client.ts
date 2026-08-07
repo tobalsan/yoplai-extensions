@@ -4,6 +4,7 @@ import {
   NotionAuthError,
   NotionConnectionError,
   NotionError,
+  NotionFileExtractionError,
   NotionNotFoundError,
   NotionRateLimitError,
   NotionServerError,
@@ -480,13 +481,25 @@ export class NotionClient {
     filename?: string;
     contentType?: string;
   }): Promise<Record<string, unknown>> {
-    const response = await fetch(input.url, {
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    let response: Response;
+    try {
+      response = await fetch(input.url, {
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new NotionFileExtractionError(`File download could not be completed: ${message}`, {
+        code: "FILE_DOWNLOAD_FAILED",
+        retryable: true,
+        endpoint: input.url,
+      });
+    }
 
     if (!response.ok) {
       const responseBody = await this.readResponseBody(response);
-      throw new NotionError(`File download failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
+      throw new NotionFileExtractionError(`File download failed with status ${response.status}${responseBody ? `: ${responseBody}` : ""}`, {
+        code: response.status === 401 || response.status === 403 ? "SIGNED_URL_EXPIRED" : "FILE_DOWNLOAD_FAILED",
+        retryable: response.status >= 500,
         endpoint: input.url,
         status: response.status,
         responseBody,
@@ -494,8 +507,34 @@ export class NotionClient {
     }
 
     const contentType = input.contentType ?? response.headers.get("content-type") ?? undefined;
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const text = await this.extractText(buffer, input.url, input.filename, contentType);
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new NotionFileExtractionError(`File download body could not be read: ${message}`, {
+        code: "FILE_DOWNLOAD_FAILED",
+        retryable: true,
+        endpoint: input.url,
+      });
+    }
+    let text: string;
+    try {
+      text = await this.extractText(buffer, input.url, input.filename, contentType);
+    } catch (error) {
+      if (error instanceof NotionFileExtractionError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const versionMismatch = /API version .*Worker version/i.test(message);
+      throw new NotionFileExtractionError(
+        versionMismatch
+          ? "PDF extraction cannot start because the bundled PDF.js API and worker versions differ. Reinstall the extension dependencies and redeploy the matching build."
+          : `File text extraction failed: ${message}`,
+        {
+          code: versionMismatch ? "PDFJS_VERSION_MISMATCH" : "FILE_EXTRACTION_FAILED",
+          endpoint: input.url,
+        },
+      );
+    }
 
     return {
       text,

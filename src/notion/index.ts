@@ -1,4 +1,5 @@
 import { NotionClient } from "./client.js";
+import { NotionFileExtractionError } from "./errors.js";
 import {
   AppendBlocksParamsSchema,
   CreatePageParamsSchema,
@@ -213,7 +214,14 @@ Return and consume JSON-serializable data only.`,
         parameters: DownloadAndExtractFileParamsSchema,
         execute: async (params) => {
           const parsed = DownloadAndExtractFileParamsSchema.parse(params);
-          return await client.downloadAndExtractFile(parsed);
+          try {
+            return await client.downloadAndExtractFile(parsed);
+          } catch (error) {
+            if (error instanceof NotionFileExtractionError) {
+              return { ok: false, error: error.toJSON() };
+            }
+            throw error;
+          }
         },
       },
       {

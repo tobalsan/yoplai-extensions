@@ -32,3 +32,24 @@ export class NotionServerError extends NotionError {}
 export class NotionConnectionError extends NotionError {}
 
 export class NotionValidationError extends NotionError {}
+
+export class NotionFileExtractionError extends NotionError {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(message: string, options: NotionErrorOptions & { code: string; retryable?: boolean }) {
+    super(message, options);
+    this.code = options.code;
+    this.retryable = options.retryable ?? false;
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      code: this.code,
+      message: this.message,
+      retryable: this.retryable,
+      status: this.status ?? null,
+      endpoint: this.endpoint ?? null,
+    };
+  }
+}

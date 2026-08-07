@@ -66,4 +66,14 @@ describe("notion extension", () => {
     }
   });
 
+  it("returns structured extraction errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ExpiredToken", { status: 403 }));
+    const tool = createTools().find(({ name }) => name === "download_and_extract_file");
+
+    await expect(tool?.execute({ url: "https://example.com/cv.pdf?signature=expired" })).resolves.toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "SIGNED_URL_EXPIRED", status: 403, retryable: false }),
+    });
+  });
+
 });
