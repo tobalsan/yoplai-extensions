@@ -21,6 +21,8 @@
 
 ### Added
 
+- Pennylane `create_customer` tool for company and individual customers (ALG-421).
+
 - MCP OAuth connection routes and per-agent token persistence (ALG-392).
 
 - `gmail` extension with Gmail MCP parity for drafts, threads, labels, and Gmail query search via host-managed Google OAuth.

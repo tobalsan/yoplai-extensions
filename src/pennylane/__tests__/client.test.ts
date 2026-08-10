@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PennylaneClient } from "../client.js";
+import { CreateCustomerParamsSchema } from "../models.js";
 import {
   PennylaneAuthError,
   PennylaneError,
@@ -19,6 +20,115 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
 describe("PennylaneClient", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("creates a company customer with a snake_case body and Bearer auth", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ id: 42, name: "Acme", customer_type: "company" }, { status: 201 }),
+    );
+    const client = new PennylaneClient({ apiToken: "secret-token" });
+
+    const result = await client.createCustomer({
+      customerType: "company",
+      name: "Acme",
+      externalReference: "pipedrive-org-1",
+      vatNumber: "FR123",
+      billingAddress: {
+        address: "1 Rue de Paris",
+        postalCode: "75001",
+        city: "Paris",
+        countryAlpha2: "FR",
+      },
+      ledgerAccount: { number: "411000" },
+    });
+
+    expect(result.customer.id).toBe("42");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/company_customers",
+    );
+    const request = fetchSpy.mock.calls[0]?.[1];
+    expect(request?.headers).toMatchObject({ Authorization: "Bearer secret-token" });
+    expect(JSON.parse(String(request?.body))).toEqual({
+      name: "Acme",
+      external_reference: "pipedrive-org-1",
+      vat_number: "FR123",
+      billing_address: {
+        address: "1 Rue de Paris",
+        postal_code: "75001",
+        city: "Paris",
+        country_alpha2: "FR",
+      },
+      ledger_account: { number: "411000" },
+    });
+  });
+
+  it("creates an individual customer through the individual endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ id: 43, first_name: "Ada", last_name: "Lovelace" }, { status: 201 }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await client.createCustomer({
+      customerType: "individual",
+      firstName: "Ada",
+      lastName: "Lovelace",
+      billingAddress: {
+        address: "12 St James's Square",
+        postalCode: "SW1Y 4LB",
+        city: "London",
+        countryAlpha2: "GB",
+      },
+    });
+
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      "https://app.pennylane.com/api/external/v2/individual_customers",
+    );
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toMatchObject({
+      first_name: "Ada",
+      last_name: "Lovelace",
+    });
+  });
+
+  it("rejects cross-variant fields, unknown fields, and incomplete addresses", () => {
+    const individual = {
+        customerType: "individual",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        billingAddress: { address: "x", postalCode: "1", city: "Paris", countryAlpha2: "FR" },
+      };
+
+    expect(CreateCustomerParamsSchema.safeParse({ ...individual, vatNumber: "FR123" }).success).toBe(false);
+    expect(
+      CreateCustomerParamsSchema.safeParse({
+        customerType: "company",
+        name: "Acme",
+        firstName: "Ada",
+        billingAddress: individual.billingAddress,
+      }).success,
+    ).toBe(false);
+    expect(CreateCustomerParamsSchema.safeParse({ ...individual, unknown: true }).success).toBe(false);
+    expect(
+      CreateCustomerParamsSchema.safeParse({
+        ...individual,
+        billingAddress: { address: "x", postalCode: "1", city: "Paris" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("surfaces duplicate customer external_reference validation errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ error: "external_reference has already been taken" }, { status: 422 }),
+    );
+    const client = new PennylaneClient({ apiToken: "t" });
+
+    await expect(
+      client.createCustomer({
+        customerType: "company",
+        name: "Acme",
+        externalReference: "duplicate",
+        billingAddress: { address: "1 Rue", postalCode: "75001", city: "Paris", countryAlpha2: "FR" },
+      }),
+    ).rejects.toThrow("external_reference has already been taken");
   });
 
   it("sends Bearer auth against API v2 and returns a page of invoices", async () => {

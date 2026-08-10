@@ -242,6 +242,64 @@ export const CustomerSchema = z
   .passthrough();
 export type Customer = z.infer<typeof CustomerSchema>;
 
+const CreateCustomerAddressSchema = z
+  .object({
+    address: z.string(),
+    postalCode: z.string(),
+    city: z.string(),
+    countryAlpha2: z.string(),
+  })
+  .strict();
+
+const CustomerSharedFieldsSchema = {
+  phone: z.string().optional(),
+  emails: z.array(z.string()).optional(),
+  externalReference: z.string().optional(),
+  paymentConditions: z
+    .enum([
+      "upon_receipt",
+      "custom",
+      "7_days",
+      "15_days",
+      "30_days",
+      "30_days_end_of_month",
+      "45_days",
+      "45_days_end_of_month",
+      "60_days",
+    ])
+    .optional(),
+  billingLanguage: z.enum(["fr_FR", "en_GB", "de_DE"]).optional(),
+  billingIban: z.string().optional(),
+  recipient: z.string().optional(),
+  reference: z.string().optional(),
+  notes: z.string().optional(),
+  billingAddress: CreateCustomerAddressSchema,
+  deliveryAddress: CreateCustomerAddressSchema.optional(),
+  ledgerAccount: z.object({ number: z.string() }).strict().optional(),
+};
+
+/** Params for `create_customer`; select the Pennylane endpoint by customer type. */
+export const CreateCustomerParamsSchema = z.discriminatedUnion("customerType", [
+  z
+    .object({
+      customerType: z.literal("company"),
+      name: z.string(),
+      vatNumber: z.string().optional(),
+      regNo: z.string().optional(),
+      ...CustomerSharedFieldsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      customerType: z.literal("individual"),
+      firstName: z.string(),
+      lastName: z.string(),
+      ...CustomerSharedFieldsSchema,
+    })
+    .strict(),
+]);
+export type CreateCustomerParams = z.infer<typeof CreateCustomerParamsSchema>;
+
 /**
  * Product as returned by API v2 (§4.2). Money fields are decimal strings and
  * `vatRate` is an enum code. Extra fields preserved.

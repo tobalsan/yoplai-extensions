@@ -1,5 +1,6 @@
 import {
   CreateInvoiceDraftParamsSchema,
+  CreateCustomerParamsSchema,
   CreateQuoteParamsSchema,
   CustomerInvoiceSchema,
   CustomerSchema,
@@ -604,6 +605,15 @@ export class PennylaneClient {
       );
     }
     return { customer };
+  }
+
+  /** Create a company or individual customer, returning its Pennylane id. */
+  async createCustomer(input: unknown): Promise<{ customer: Customer }> {
+    const params = CreateCustomerParamsSchema.parse(input);
+    const { customerType, ...body } = params;
+    const path = customerType === "company" ? "company_customers" : "individual_customers";
+    const raw = await this.request("POST", path, undefined, body);
+    return { customer: CustomerSchema.parse(raw) };
   }
 
   /** List products, walking the cursor transparently. */

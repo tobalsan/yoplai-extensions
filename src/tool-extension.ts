@@ -53,7 +53,7 @@ export interface ResolvedToolExtensionConfig {
 export interface ToolExtensionTool {
   name: string;
   description: string;
-  parameters: z.AnyZodObject;
+  parameters: z.ZodTypeAny;
   jsonSchemaParameters?: Record<string, unknown>;
   execute(params: unknown): Promise<unknown>;
 }

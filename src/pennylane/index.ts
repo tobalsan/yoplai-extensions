@@ -2,6 +2,7 @@ import { z } from "zod";
 import { PennylaneClient } from "./client.js";
 import {
   CreateInvoiceDraftParamsSchema,
+  CreateCustomerParamsSchema,
   CreateQuoteParamsSchema,
   GetCustomerParamsSchema,
   GetInvoiceParamsSchema,
@@ -44,6 +45,7 @@ Available tools:
 - pennylane_get_invoice: fetch a single customer invoice by id
 - pennylane_list_quotes / pennylane_search_quotes / pennylane_get_quote: read quotes (devis)
 - pennylane_list_customers / pennylane_search_customers / pennylane_get_customer: read customers
+- pennylane_create_customer: create a company or individual customer
 - pennylane_list_products / pennylane_search_products / pennylane_get_product: read products
 - pennylane_list_vat_rates: discover valid vat_rate codes (e.g. FR_200 = 20%)
 - pennylane_validate: verify auth and API reachability
@@ -64,6 +66,7 @@ Key concepts:
 - quotes are NOT server-side filterable on external_reference: search_quotes filters by customer_id (and status) server-side, then matches external_reference client-side
 - update_quote's invoice_lines is a diff object { create, update, delete } (not a flat array like invoice drafts); each updated/deleted line is addressed by its id
 - customers can be fetched by internal id OR external_reference via get_customer
+- before creating a customer, search_customers by name and/or external_reference; prefer customerType "company" unless it is clearly a private person. The returned customer id is the customerId for create_quote or create_invoice_draft
 - vat_rate is a fixed enum (no list endpoint); use list_vat_rates to discover valid codes like FR_200 (20%), FR_100 (10%), FR_55 (5.5%), exempt (0%)
 - the client self-throttles to Pennylane's rate limit (25 requests / 5 s per token) and retries on 429`,
   configSchema: PennylaneConfigSchema,
@@ -140,6 +143,13 @@ Key concepts:
           "Get a single customer by its internal id or by external_reference (the Pipedrive org/person id). Provide exactly one.",
         parameters: GetCustomerParamsSchema,
         execute: (params) => client.getCustomer(params),
+      },
+      {
+        name: "create_customer",
+        description:
+          "Create a Pennylane customer. First use search_customers by name and/or external_reference to avoid duplicates. Prefer customerType 'company' unless the customer is clearly a private person. Returns the created id, usable as customerId for create_quote or create_invoice_draft.",
+        parameters: CreateCustomerParamsSchema,
+        execute: (params) => client.createCustomer(params),
       },
       {
         name: "list_products",
