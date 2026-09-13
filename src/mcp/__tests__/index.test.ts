@@ -151,6 +151,40 @@ describe("mcp extension", () => {
     await mockedExtension.stop();
   });
 
+  it("uses a valid object schema for disconnected OAuth MCP placeholders", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } })
+    );
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() {
+        return [];
+      },
+      async callTool(_name, args) {
+        return args;
+      },
+      async close() {},
+    }));
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
+    const tools = await mockedExtension.getAgentTools(
+      {
+        id: "casey",
+        workspaceDir: agentDir,
+        extensions: { mcp: { enabled: true } },
+      },
+      { config: { extensions: {} } }
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({
+      name: "mcp__claap__not_connected",
+      parameters: { type: "object", additionalProperties: false },
+    });
+    await mockedExtension.stop();
+  });
+
   it("resolves $env references in mcp extension config paths", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-config-"));
     const configPath = path.join(configDir, "custom-mcp.json");

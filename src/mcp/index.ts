@@ -362,7 +362,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       return {
         name: `mcp__${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__not_connected`,
         description: `Connect ${server.name} in the MCP extension settings before using its tools.`,
-        parameters: {},
+        parameters: { type: "object", properties: {}, additionalProperties: false },
         execute: async () => ({ connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Ask an admin to connect it in the agent settings.`, authorizeUrl: `/agents/${agent.id}/extensions/mcp` }),
       };
     }));
