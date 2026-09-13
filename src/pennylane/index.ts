@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { PennylaneClient } from "./client.js";
 import {
   CreateInvoiceDraftParamsSchema,
@@ -32,6 +33,10 @@ export const PennylaneConfigSchema = z.object({
 });
 
 const ValidateParamsSchema = z.object({}).strict();
+const CreateCustomerToolJsonSchema = {
+  ...zodToJsonSchema(CreateCustomerParamsSchema, { $refStrategy: "none" }),
+  type: "object",
+};
 
 export default defineToolExtension({
   id: "pennylane",
@@ -149,6 +154,7 @@ Key concepts:
         description:
           "Create a Pennylane customer. First use search_customers by name and/or external_reference to avoid duplicates. Prefer customerType 'company' unless the customer is clearly a private person. Returns the created id, usable as customerId for create_quote or create_invoice_draft.",
         parameters: CreateCustomerParamsSchema,
+        jsonSchemaParameters: CreateCustomerToolJsonSchema,
         execute: (params) => client.createCustomer(params),
       },
       {

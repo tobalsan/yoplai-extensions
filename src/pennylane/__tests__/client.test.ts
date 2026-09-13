@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PennylaneClient } from "../client.js";
 import { CreateCustomerParamsSchema } from "../models.js";
+import pennylaneExtension from "../index.js";
 import {
   PennylaneAuthError,
   PennylaneError,
@@ -20,6 +21,19 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
 describe("PennylaneClient", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("exposes create_customer with an object-root JSON schema", async () => {
+    const tools = await pennylaneExtension.getAgentTools?.(
+      { id: "sally", extensions: { pennylane: { enabled: true } } },
+      { config: { extensions: { pennylane: { apiToken: "t" } } } },
+    );
+    const tool = tools?.find((candidate) => candidate.name === "pennylane_create_customer");
+
+    expect(tool?.parameters).toMatchObject({
+      type: "object",
+      anyOf: expect.any(Array),
+    });
   });
 
   it("creates a company customer with a snake_case body and Bearer auth", async () => {
