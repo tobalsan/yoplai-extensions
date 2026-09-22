@@ -90,7 +90,9 @@ Set `BASE_URL` to the public gateway origin so the OAuth provider can return to 
 }
 ```
 
-The callback becomes `${BASE_URL}/api/mcp/oauth/callback`. Without this variable, it defaults to `http://localhost:4000`, which is suitable only for a gateway available there. Restart the gateway after changing it.
+The callback becomes `${BASE_URL}/api/mcp/oauth/callback`. Without this variable, the extension falls back to `server.baseUrl` from `yoplai.json`, then to `http://localhost:4000`. Restart the gateway after changing it.
+
+Use a public (non-localhost) origin whenever possible: some providers sit behind a WAF that rejects `localhost` / `127.0.0.1` redirect URIs outright (TradingView's CloudFront returns a 403 on the sign-in page), so the default only works for providers that tolerate loopback callbacks.
 
 Claap can instead use a workspace API key, which remains the unchanged static-header path:
 

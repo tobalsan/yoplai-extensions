@@ -137,3 +137,15 @@ describe("MCP OAuth routes", () => {
     await expect(store.read("casey", "claap")).resolves.toBeUndefined();
   });
 });
+
+describe("resolveOAuthRedirectUri", () => {
+  it("prefers BASE_URL, then server.baseUrl, then localhost", async () => {
+    const { resolveOAuthRedirectUri } = await import("../index.js");
+    vi.stubEnv("BASE_URL", "");
+    expect(resolveOAuthRedirectUri({})).toBe("http://localhost:4000/api/mcp/oauth/callback");
+    expect(resolveOAuthRedirectUri({ server: { baseUrl: "https://host.ts.net/" } })).toBe("https://host.ts.net/api/mcp/oauth/callback");
+    expect(resolveOAuthRedirectUri({ env: { BASE_URL: "https://env.test" }, server: { baseUrl: "https://host.ts.net" } })).toBe("https://env.test/api/mcp/oauth/callback");
+    vi.stubEnv("BASE_URL", "https://public.test/");
+    expect(resolveOAuthRedirectUri({ server: { baseUrl: "https://host.ts.net" } })).toBe("https://public.test/api/mcp/oauth/callback");
+  });
+});
