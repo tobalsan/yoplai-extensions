@@ -165,11 +165,22 @@ const baseExtension = defineToolExtension({
   },
 });
 
+type McpRuntimeConfig = { extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
+type McpRuntime = { getDataDir(): string; getConfig(): McpRuntimeConfig; getAgent(id: string): AgentLike | undefined };
+
+/**
+ * OAuth providers behind a WAF (e.g. TradingView/CloudFront) reject localhost redirect URIs outright,
+ * so prefer a public origin: explicit BASE_URL, then the gateway's configured server.baseUrl, then localhost.
+ */
+export function resolveOAuthRedirectUri(config: McpRuntimeConfig): string {
+  const origin = process.env.BASE_URL?.trim() || config.env?.BASE_URL?.trim() || config.server?.baseUrl?.trim() || "http://localhost:4000";
+  return `${origin.replace(/\/+$/, "")}/api/mcp/oauth/callback`;
+}
+
 export function createMcpExtension(clientFactory?: McpClientFactory) {
   const managers = new Map<string, Promise<McpClientManager>>();
   const oauthServers = new Set<string>();
-  let runtime: { getDataDir(): string; getConfig(): { extensions?: Record<string, unknown>; env?: Record<string, string> }; getAgent(id: string): AgentLike | undefined } | undefined;
-  const redirectUri = `${(process.env.BASE_URL ?? "http://localhost:4000").replace(/\/$/, "")}/api/mcp/oauth/callback`;
+  let runtime: McpRuntime | undefined;
   let oauth: McpOAuthStore | undefined;
 
   function loadedForAgent(agentId: string): LoadedMcpConfig | undefined {
@@ -252,9 +263,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
 
   return {
   ...baseExtension,
-  async start(ctx: { getDataDir(): string; getConfig(): { extensions?: Record<string, unknown>; env?: Record<string, string> }; getAgent(id: string): AgentLike | undefined }) {
+  async start(ctx: McpRuntime) {
     runtime = ctx;
-    oauth = new McpOAuthStore(ctx.getDataDir(), redirectUri);
+    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()));
   },
   registerRoutes(app: RouteApp) {
     app.get("/mcp/oauth/status", async (c) => {
