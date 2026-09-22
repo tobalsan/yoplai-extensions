@@ -104,10 +104,11 @@ export const ListDealsResultSchema = z.object({
 });
 export type ListDealsResult = z.infer<typeof ListDealsResultSchema>;
 
-/** A deal note with author and timestamps. */
+/** A deal (or lead) note with author and timestamps. */
 export const NoteSchema = z.object({
   id: z.number(),
   deal_id: z.number().nullable(),
+  lead_id: z.string().nullable(),
   content: z.string().nullable(),
   user_id: z.number().nullable(),
   user_name: z.string().nullable(),
@@ -620,3 +621,190 @@ export const PersonSchema = z.object({
   person_url: z.string(),
 });
 export type Person = z.infer<typeof PersonSchema>;
+
+// ---------------------------------------------------------------------------
+// Leads (v1 leads / leads/search / leadLabels / leadSources) — read-only
+// support for the Leads inbox UI.
+// ---------------------------------------------------------------------------
+
+export const LeadArchivedStatusSchema = z.enum(["archived", "not_archived", "all"]);
+export type LeadArchivedStatus = z.infer<typeof LeadArchivedStatusSchema>;
+
+export const ListLeadsParamsSchema = z
+  .object({
+    limit: PositiveIntFromInput.optional().describe("Max leads per page, 1-500 (default 100)."),
+    cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
+    archived_status: LeadArchivedStatusSchema.optional().describe(
+      'Archived filter (server-side). Defaults to "not_archived".',
+    ),
+    owner_id: PositiveIntFromInput.optional().describe("Filter by owner user ID (server-side)."),
+    person_id: PositiveIntFromInput.optional().describe("Filter by linked person ID (server-side)."),
+    organization_id: PositiveIntFromInput.optional().describe(
+      "Filter by linked organization ID (server-side).",
+    ),
+    filter_id: PositiveIntFromInput.optional().describe("Filter by a saved Pipedrive filter ID (server-side)."),
+    sort: z.string().min(1).optional().describe('Field(s) to sort by, e.g. "update_time DESC" (server-side).'),
+  })
+  .strict();
+export type ListLeadsParams = z.infer<typeof ListLeadsParamsSchema>;
+
+/** A lead's monetary value, or null when unset. */
+export const LeadValueSchema = z.object({
+  amount: z.number(),
+  currency: z.string(),
+});
+export type LeadValue = z.infer<typeof LeadValueSchema>;
+
+/** Lean per-lead projection returned by list_leads / get_lead for the Leads inbox. */
+export const LeadSummarySchema = z.object({
+  id: z.string().describe("Lead UUID."),
+  title: z.string(),
+  owner_id: z.number().nullable(),
+  creator_id: z.number().nullable(),
+  label_ids: z.array(z.string()),
+  person_id: z.number().nullable(),
+  organization_id: z.number().nullable(),
+  source_name: z.string().nullable(),
+  origin: z.string().nullable(),
+  origin_id: z.string().nullable(),
+  channel: z.number().nullable(),
+  channel_id: z.string().nullable(),
+  is_archived: z.boolean().nullable(),
+  was_seen: z.boolean().nullable(),
+  value: LeadValueSchema.nullable(),
+  expected_close_date: z.string().nullable(),
+  next_activity_id: z.number().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
+  visible_to: z.string().nullable(),
+  cc_email: z.string().nullable(),
+  lead_url: z.string().describe("Leads inbox URL for this lead."),
+});
+export type LeadSummary = z.infer<typeof LeadSummarySchema>;
+
+export const ListLeadsResultSchema = z.object({
+  leads: z.array(LeadSummarySchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type ListLeadsResult = z.infer<typeof ListLeadsResultSchema>;
+
+export const GetLeadParamsSchema = z
+  .object({
+    id: z.string().min(1).describe("UUID of the lead to retrieve."),
+    output_type: DealOutputModeSchema.optional().describe(
+      'Output mode: "full" (default) returns normalized custom fields + metadata; "lean" strips them.',
+    ),
+  })
+  .strict();
+export type GetLeadParams = z.infer<typeof GetLeadParamsSchema>;
+
+/**
+ * Full single-lead read: the lean projection plus normalized custom fields.
+ * Leads share the deal custom-field schema, so custom fields resolve through
+ * the same field registry / normalizer as get_deal.
+ */
+export const LeadDetailSchema = LeadSummarySchema.extend({
+  normalized_extra_fields: z.record(z.unknown()).optional(),
+  normalized_field_metadata: z.record(NormalizedFieldMetadataSchema).optional(),
+});
+export type LeadDetail = z.infer<typeof LeadDetailSchema>;
+
+export const SearchLeadsParamsSchema = z
+  .object({
+    term: z
+      .string()
+      .min(2, "Search term must be at least 2 characters")
+      .describe("Free-text term matched against the fields in `fields` (min 2 chars)."),
+    fields: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Comma list of fields to search: "title", "notes", "custom_fields" (server-side).'),
+    exact_match: z
+      .boolean()
+      .optional()
+      .describe("When true, only exact matches are returned (server-side)."),
+    person_id: PositiveIntFromInput.optional().describe("Filter by linked person ID (server-side)."),
+    organization_id: PositiveIntFromInput.optional().describe(
+      "Filter by linked organization ID (server-side).",
+    ),
+    include_fields: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Comma list of extra fields to include on each match, e.g. "lead.was_seen" (server-side).'),
+    limit: PositiveIntFromInput.optional().describe("Max matches per page, 1-500 (default 100)."),
+    cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
+  })
+  .strict();
+export type SearchLeadsParams = z.infer<typeof SearchLeadsParamsSchema>;
+
+/** A referenced entity's id + name (owner/person/organization on a lead search match). */
+const LeadRefSchema = z.object({ id: z.number(), name: z.string().nullable() }).nullable();
+
+/** Lean per-match projection returned by search_leads. */
+export const LeadSearchMatchSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  owner: LeadRefSchema,
+  person: LeadRefSchema,
+  organization: LeadRefSchema,
+  is_archived: z.boolean().nullable(),
+  value: LeadValueSchema.nullable(),
+  currency: z.string().nullable(),
+  expected_close_date: z.string().nullable(),
+  result_score: z.number().nullable(),
+});
+export type LeadSearchMatch = z.infer<typeof LeadSearchMatchSchema>;
+
+export const SearchLeadsResultSchema = z.object({
+  leads: z.array(LeadSearchMatchSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type SearchLeadsResult = z.infer<typeof SearchLeadsResultSchema>;
+
+export const LeadLabelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: z.string().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
+});
+export type LeadLabel = z.infer<typeof LeadLabelSchema>;
+
+export const ListLeadLabelsResultSchema = z.object({
+  labels: z.array(LeadLabelSchema),
+  count: z.number(),
+});
+export type ListLeadLabelsResult = z.infer<typeof ListLeadLabelsResultSchema>;
+
+export const LeadSourceSchema = z.object({ name: z.string() });
+export type LeadSource = z.infer<typeof LeadSourceSchema>;
+
+export const ListLeadSourcesResultSchema = z.object({
+  sources: z.array(LeadSourceSchema),
+  count: z.number(),
+});
+export type ListLeadSourcesResult = z.infer<typeof ListLeadSourcesResultSchema>;
+
+export const ListLeadNotesParamsSchema = z
+  .object({
+    lead_id: z.string().min(1).describe("UUID of the lead whose notes to read."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type ListLeadNotesParams = z.infer<typeof ListLeadNotesParamsSchema>;
+
+export const ListLeadActivitiesParamsSchema = z
+  .object({
+    lead_id: z.string().min(1).describe("UUID of the lead whose activity history to read."),
+    done: z
+      .boolean()
+      .optional()
+      .describe("Filter by completion: true = done only, false = planned only (server-side)."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type ListLeadActivitiesParams = z.infer<typeof ListLeadActivitiesParamsSchema>;

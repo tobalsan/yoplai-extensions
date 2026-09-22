@@ -6,6 +6,7 @@ import {
   EntityByIdParamsSchema,
   GetDealFieldParamsSchema,
   GetDealParamsSchema,
+  GetLeadParamsSchema,
   GetPipelineParamsSchema,
   GetStageParamsSchema,
   ListDealActivitiesParamsSchema,
@@ -15,15 +16,21 @@ import {
   ListDealNotesParamsSchema,
   ListDealProductsParamsSchema,
   ListDealsParamsSchema,
+  ListLeadActivitiesParamsSchema,
+  ListLeadNotesParamsSchema,
+  ListLeadsParamsSchema,
   ListPipelinesParamsSchema,
   ListStagesParamsSchema,
   PipedriveConfigSchema,
   SearchDealsParamsSchema,
+  SearchLeadsParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
 const RefreshFieldRegistryParamsSchema = z.object({}).strict();
 const ValidateParamsSchema = z.object({}).strict();
+const ListLeadLabelsParamsSchema = z.object({}).strict();
+const ListLeadSourcesParamsSchema = z.object({}).strict();
 
 export default defineToolExtension({
   id: "pipedrive",
@@ -41,6 +48,8 @@ Pipeline & stage metadata: pipedrive_list_pipelines / pipedrive_get_pipeline and
 To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds the sale info): call pipedrive_list_deal_files with a deal_id to see each file's name, type, and size, pick the right file, then call pipedrive_download_file with its file_id. download_file returns the RAW bytes base64-encoded (content_base64) — the extension never parses or transforms the file. Decode and parse it downstream in your workflow. A file with a non-null remote_location (e.g. "googledocs") is hosted externally — download_file returns a typed error with the external link instead of bytes; surface that link to the user rather than retrying.
 
 pipedrive_get_deal reads one deal in full detail: all standard fields plus custom fields resolved to human-readable labels and typed values (never raw hash keys). output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata; "lean" strips them. Custom-field schema is available via pipedrive_list_deal_fields / pipedrive_get_deal_field (key → label/options/type, v1 offset pagination via start/limit) — use these for invoice mapping and required-field logic. Field metadata is cached locally; pipedrive_refresh_field_registry forces a rebuild if the schema changed.
+
+For the Leads inbox (separate from the deals pipeline): pipedrive_list_leads lists leads with a lean projection, filterable by archived_status (default "not_archived"), owner_id, person_id, organization_id, and filter_id — page with next_cursor until it is null. pipedrive_get_lead reads one lead in full detail by its UUID id, with custom fields normalized the same way as get_deal (leads share the deal custom-field schema); output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata, "lean" strips them. pipedrive_search_leads does free-text search across title/notes/custom_fields (set via the fields param). Use pipedrive_list_lead_labels and pipedrive_list_lead_sources to resolve a lead's label_ids and source_name to human-readable names. pipedrive_list_lead_notes and pipedrive_list_lead_activities read a lead's notes and activity history (activities via the v2 API) — same next_cursor pagination as the deal ops. A lead's person_id / organization_id resolve via the existing pipedrive_get_person / pipedrive_get_organization. Note: Pipedrive's API exposes no email threads or changelog for leads — history is limited to notes and activities.
 
 pipedrive_validate verifies auth and API reachability.`,
   configSchema: PipedriveConfigSchema,
@@ -234,6 +243,74 @@ pipedrive_validate verifies auth and API reachability.`,
         execute: async (params) => {
           const parsed = ListDealActivitiesParamsSchema.parse(params);
           return await client.listDealActivities(parsed);
+        },
+      },
+      {
+        name: "list_leads",
+        description:
+          'List leads from the Pipedrive Leads inbox with a lean per-lead projection. Supports server-side filters (archived_status ["archived" | "not_archived" | "all"], default "not_archived", owner_id, person_id, organization_id, filter_id) and sort. Returns { leads, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.',
+        parameters: ListLeadsParamsSchema,
+        execute: async (params) => {
+          const parsed = ListLeadsParamsSchema.parse(params);
+          return await client.listLeads(parsed);
+        },
+      },
+      {
+        name: "get_lead",
+        description:
+          "Read a single lead in full detail by its UUID id. Returns all standard fields (title, owner, labels, person/org, source, value, expected close date, timestamps, visibility) plus a leads-inbox URL. Custom fields resolve to human-readable labels and typed values, same as get_deal (leads share the deal custom-field schema). output_type 'full' (default) includes normalized_extra_fields + normalized_field_metadata; 'lean' strips them.",
+        parameters: GetLeadParamsSchema,
+        execute: async (params) => {
+          const parsed = GetLeadParamsSchema.parse(params);
+          return await client.getLead(parsed);
+        },
+      },
+      {
+        name: "search_leads",
+        description:
+          'Free-text search over leads. Pass a term (min 2 chars) plus optional fields (comma list: "title", "notes", "custom_fields"), exact_match, person_id, organization_id, and include_fields. Returns { leads, next_cursor, count } with a lean per-match projection (owner/person/organization as {id, name}); pass next_cursor back as cursor to page the full match set.',
+        parameters: SearchLeadsParamsSchema,
+        execute: async (params) => {
+          const parsed = SearchLeadsParamsSchema.parse(params);
+          return await client.searchLeads(parsed);
+        },
+      },
+      {
+        name: "list_lead_labels",
+        description:
+          "List all lead labels ({ id, name, color, add_time, update_time }) — use to resolve a lead's label_ids to human-readable names. Returns { labels, count }. No pagination.",
+        parameters: ListLeadLabelsParamsSchema,
+        execute: async () => {
+          return await client.listLeadLabels();
+        },
+      },
+      {
+        name: "list_lead_sources",
+        description:
+          "List all lead sources ({ name }) — use to cross-check a lead's source_name. Returns { sources, count }. No pagination.",
+        parameters: ListLeadSourcesParamsSchema,
+        execute: async () => {
+          return await client.listLeadSources();
+        },
+      },
+      {
+        name: "list_lead_notes",
+        description:
+          "Read a lead's notes (content, author, add/update timestamps) for a given lead_id (UUID). Returns { notes, next_cursor, count }; pass next_cursor back as cursor to page through all notes.",
+        parameters: ListLeadNotesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListLeadNotesParamsSchema.parse(params);
+          return await client.listLeadNotes(parsed);
+        },
+      },
+      {
+        name: "list_lead_activities",
+        description:
+          "Read a lead's activity history (type, subject, done, due/completion timestamps, owner) for a given lead_id (UUID), via the v2 activities API. Optional done filter. Returns { activities, next_cursor, count }; pass next_cursor back as cursor to page through the full history.",
+        parameters: ListLeadActivitiesParamsSchema,
+        execute: async (params) => {
+          const parsed = ListLeadActivitiesParamsSchema.parse(params);
+          return await client.listLeadActivities(parsed);
         },
       },
     ];

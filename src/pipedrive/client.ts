@@ -48,13 +48,25 @@ import {
   type Stage,
   type Activity,
   type DealSearchMatch,
+  type GetLeadParams,
+  type LeadDetail,
+  type LeadSearchMatch,
+  type LeadSummary,
   type ListDealActivitiesParams,
   type ListDealActivitiesResult,
   type ListDealNotesParams,
   type ListDealNotesResult,
+  type ListLeadActivitiesParams,
+  type ListLeadLabelsResult,
+  type ListLeadNotesParams,
+  type ListLeadsParams,
+  type ListLeadsResult,
+  type ListLeadSourcesResult,
   type Note,
   type SearchDealsParams,
   type SearchDealsResult,
+  type SearchLeadsParams,
+  type SearchLeadsResult,
 } from "./models.js";
 import { normalizeCustomFields } from "./normalizer.js";
 
@@ -92,6 +104,32 @@ function fileExtension(name: string): string | null {
 
 function toBooleanOrNull(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+/** Like toStringOrNull but also accepts a finite number, stringified (Pipedrive is inconsistent about it for e.g. visible_to). */
+function toStringLikeOrNull(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+/** A lead's monetary value ({amount, currency}), or null when either part is missing. */
+function toLeadValue(value: unknown): { amount: number; currency: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const amount = toNumberOrNull(record.amount);
+  const currency = toStringOrNull(record.currency);
+  if (amount === null || currency === null) return null;
+  return { amount, currency };
+}
+
+/** An {id, name} reference (owner/person/organization on a lead search match), or null. */
+function toRef(value: unknown): { id: number; name: string | null } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const id = toNumberOrNull(record.id);
+  if (id === null) return null;
+  return { id, name: toStringOrNull(record.name) };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -168,6 +206,7 @@ const SIREN_NAME_PATTERNS = ["siren", "siret"];
 interface RawNote {
   id: number;
   deal_id?: unknown;
+  lead_id?: unknown;
   content?: unknown;
   user_id?: unknown;
   person_id?: unknown;
@@ -191,6 +230,52 @@ interface RawActivity {
   user_id?: unknown;
   add_time?: unknown;
   update_time?: unknown;
+  [key: string]: unknown;
+}
+
+/** v2 /activities payload shape — owner_id in place of v1's user_id. */
+interface RawActivityV2 {
+  id?: unknown;
+  lead_id?: unknown;
+  deal_id?: unknown;
+  person_id?: unknown;
+  org_id?: unknown;
+  owner_id?: unknown;
+  subject?: unknown;
+  type?: unknown;
+  done?: unknown;
+  due_date?: unknown;
+  due_time?: unknown;
+  marked_as_done_time?: unknown;
+  note?: unknown;
+  add_time?: unknown;
+  update_time?: unknown;
+  [key: string]: unknown;
+}
+
+interface RawLead {
+  id: string;
+  title?: unknown;
+  owner_id?: unknown;
+  creator_id?: unknown;
+  label_ids?: unknown;
+  person_id?: unknown;
+  organization_id?: unknown;
+  source_name?: unknown;
+  origin?: unknown;
+  origin_id?: unknown;
+  channel?: unknown;
+  channel_id?: unknown;
+  is_archived?: unknown;
+  was_seen?: unknown;
+  value?: unknown;
+  expected_close_date?: unknown;
+  next_activity_id?: unknown;
+  add_time?: unknown;
+  update_time?: unknown;
+  visible_to?: unknown;
+  cc_email?: unknown;
+  custom_fields?: unknown;
   [key: string]: unknown;
 }
 
@@ -1040,6 +1125,201 @@ export class PipedriveClient {
     };
   }
 
+  /** List leads for the Leads inbox (v1 /leads) with a lean projection. */
+  async listLeads(params: ListLeadsParams): Promise<ListLeadsResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      limit,
+      start: decodeStartCursor(params.cursor),
+      archived_status: params.archived_status ?? "not_archived",
+    };
+    if (params.owner_id !== undefined) query.owner_id = params.owner_id;
+    if (params.person_id !== undefined) query.person_id = params.person_id;
+    if (params.organization_id !== undefined) query.organization_id = params.organization_id;
+    if (params.filter_id !== undefined) query.filter_id = params.filter_id;
+    if (params.sort !== undefined) query.sort = params.sort;
+
+    const data = await this.requestJson("GET", "v1", "leads", query);
+    const rows = Array.isArray(data.data) ? (data.data as RawLead[]) : [];
+    const leads = rows.map((raw) => this.toLeadSummary(raw));
+    return {
+      leads,
+      next_cursor: nextStartCursor(data.additional_data),
+      count: leads.length,
+    };
+  }
+
+  /**
+   * Full single-lead read (v1 /leads/{id}). Leads share the deal
+   * custom-field schema, so hash-key custom fields on the lead payload
+   * resolve through the same field registry + normalizer as getDeal. `full`
+   * mode (default) returns normalized custom fields + metadata; `lean`
+   * strips them.
+   */
+  async getLead(params: GetLeadParams): Promise<LeadDetail> {
+    const mode = params.output_type ?? "full";
+    const data = await this.requestJson("GET", "v1", `leads/${params.id}`);
+    const raw = (data.data ?? {}) as RawLead;
+    const detail: LeadDetail = this.toLeadSummary({ ...raw, id: raw.id ?? params.id });
+
+    if (mode === "lean") {
+      return detail;
+    }
+
+    const extraFields = flattenLeadCustomFields(raw);
+    let registry = null;
+    try {
+      registry = await this.registry.get();
+    } catch {
+      // Registry unavailable (fetch failed, no cache): return standard fields
+      // rather than fail the whole read. Custom fields simply stay unresolved.
+      registry = null;
+    }
+
+    const normalized = normalizeCustomFields(extraFields, registry);
+    detail.normalized_extra_fields = normalized.normalized_extra_fields;
+    detail.normalized_field_metadata = normalized.normalized_field_metadata;
+    return detail;
+  }
+
+  private toLeadSummary(raw: RawLead): LeadSummary {
+    const id = typeof raw.id === "string" ? raw.id : String(raw.id ?? "");
+    return {
+      id,
+      title: typeof raw.title === "string" ? raw.title : "",
+      owner_id: toNumberOrNull(raw.owner_id),
+      creator_id: toNumberOrNull(raw.creator_id),
+      label_ids: Array.isArray(raw.label_ids)
+        ? raw.label_ids.filter((v): v is string => typeof v === "string")
+        : [],
+      person_id: toNumberOrNull(raw.person_id),
+      organization_id: toNumberOrNull(raw.organization_id),
+      source_name: toStringOrNull(raw.source_name),
+      origin: toStringOrNull(raw.origin),
+      origin_id: toStringOrNull(raw.origin_id),
+      channel: toNumberOrNull(raw.channel),
+      channel_id: toStringLikeOrNull(raw.channel_id),
+      is_archived: toBooleanOrNull(raw.is_archived),
+      was_seen: toBooleanOrNull(raw.was_seen),
+      value: toLeadValue(raw.value),
+      expected_close_date: toStringOrNull(raw.expected_close_date),
+      next_activity_id: toNumberOrNull(raw.next_activity_id),
+      add_time: toStringOrNull(raw.add_time),
+      update_time: toStringOrNull(raw.update_time),
+      visible_to: toStringLikeOrNull(raw.visible_to),
+      cc_email: toStringOrNull(raw.cc_email),
+      lead_url: `https://${this.domain}.pipedrive.com/leads/inbox/${id}`,
+    };
+  }
+
+  /**
+   * Free-text search over lead title/notes/custom fields (v1 /leads/search),
+   * with optional server-side person/org filters.
+   */
+  async searchLeads(params: SearchLeadsParams): Promise<SearchLeadsResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      term: params.term,
+      limit,
+      start: decodeStartCursor(params.cursor),
+    };
+    if (params.fields !== undefined) query.fields = params.fields;
+    if (params.exact_match) query.exact_match = "true";
+    if (params.person_id !== undefined) query.person_id = params.person_id;
+    if (params.organization_id !== undefined) query.organization_id = params.organization_id;
+    if (params.include_fields !== undefined) query.include_fields = params.include_fields;
+
+    const data = await this.requestJson("GET", "v1", "leads/search", query);
+    const container = (data.data ?? {}) as Record<string, unknown>;
+    const items = Array.isArray(container.items) ? (container.items as Record<string, unknown>[]) : [];
+    const leads = items.map((entry) => this.toLeadSearchMatch(entry));
+    return {
+      leads,
+      next_cursor: nextStartCursor(data.additional_data),
+      count: leads.length,
+    };
+  }
+
+  private toLeadSearchMatch(entry: Record<string, unknown>): LeadSearchMatch {
+    const item = (entry.item ?? entry) as Record<string, unknown>;
+    const value = toLeadValue(item.value);
+    return {
+      id: typeof item.id === "string" ? item.id : String(item.id ?? ""),
+      title: typeof item.title === "string" ? item.title : "",
+      owner: toRef(item.owner),
+      person: toRef(item.person),
+      organization: toRef(item.organization),
+      is_archived: toBooleanOrNull(item.is_archived),
+      value,
+      currency: value?.currency ?? toStringOrNull(item.currency),
+      expected_close_date: toStringOrNull(item.expected_close_date),
+      result_score: toNumberOrNull(entry.result_score),
+    };
+  }
+
+  /** List lead labels (v1 /leadLabels). No pagination. */
+  async listLeadLabels(): Promise<ListLeadLabelsResult> {
+    const data = await this.requestJson("GET", "v1", "leadLabels");
+    const rows = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+    const labels = rows.map((raw) => ({
+      id: String(raw.id),
+      name: typeof raw.name === "string" ? raw.name : "",
+      color: toStringOrNull(raw.color),
+      add_time: toStringOrNull(raw.add_time),
+      update_time: toStringOrNull(raw.update_time),
+    }));
+    return { labels, count: labels.length };
+  }
+
+  /** List lead sources (v1 /leadSources). No pagination. */
+  async listLeadSources(): Promise<ListLeadSourcesResult> {
+    const data = await this.requestJson("GET", "v1", "leadSources");
+    const rows = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+    const sources = rows.map((raw) => ({ name: typeof raw.name === "string" ? raw.name : "" }));
+    return { sources, count: sources.length };
+  }
+
+  /** Read a lead's notes (author + timestamps) via the v1 /notes endpoint. */
+  async listLeadNotes(params: ListLeadNotesParams): Promise<ListDealNotesResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      lead_id: params.lead_id,
+      limit,
+      start: decodeStartCursor(params.cursor),
+      sort: "add_time DESC",
+    };
+
+    const data = await this.requestJson("GET", "v1", "notes", query);
+    const rows = Array.isArray(data.data) ? (data.data as RawNote[]) : [];
+    const notes = rows.map((raw) => toNote(raw));
+    return {
+      notes,
+      next_cursor: nextStartCursor(data.additional_data),
+      count: notes.length,
+    };
+  }
+
+  /** Read a lead's activity history via the v2 /activities endpoint. */
+  async listLeadActivities(params: ListLeadActivitiesParams): Promise<ListDealActivitiesResult> {
+    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
+    const query: Record<string, string | number> = {
+      lead_id: params.lead_id,
+      limit,
+    };
+    if (params.cursor !== undefined) query.cursor = params.cursor;
+    if (params.done !== undefined) query.done = params.done ? "true" : "false";
+
+    const data = await this.requestJson("GET", "v2", "activities", query);
+    const rows = Array.isArray(data.data) ? (data.data as RawActivityV2[]) : [];
+    const activities = rows.map((raw) => toActivityV2(raw));
+    const additional = data.additional_data as Record<string, unknown> | undefined;
+    return {
+      activities,
+      next_cursor: toStringOrNull(additional?.next_cursor),
+      count: activities.length,
+    };
+  }
+
   private toSearchMatch(entry: Record<string, unknown>): DealSearchMatch {
     const item = (entry.item ?? entry) as Record<string, unknown>;
     const stage = item.stage as Record<string, unknown> | undefined;
@@ -1099,6 +1379,54 @@ export function flattenCustomFields(raw: RawDeal): Record<string, unknown> {
   }
 
   // v2-style: nested `custom_fields` container.
+  const nested = raw.custom_fields;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    for (const [key, value] of Object.entries(nested as Record<string, unknown>)) {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
+/** Lead-standard keys that are never treated as custom fields. */
+const STANDARD_LEAD_KEYS = new Set([
+  "id",
+  "title",
+  "owner_id",
+  "creator_id",
+  "label_ids",
+  "person_id",
+  "organization_id",
+  "source_name",
+  "origin",
+  "origin_id",
+  "channel",
+  "channel_id",
+  "is_archived",
+  "was_seen",
+  "value",
+  "expected_close_date",
+  "next_activity_id",
+  "add_time",
+  "update_time",
+  "visible_to",
+  "cc_email",
+  "custom_fields",
+]);
+
+/**
+ * Flatten a raw lead's custom fields into a single hash-key map, mirroring
+ * flattenCustomFields for deals. Leads share the deal custom-field schema:
+ * hash-key custom fields are spread at the top level of the lead payload.
+ */
+export function flattenLeadCustomFields(raw: RawLead): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (!STANDARD_LEAD_KEYS.has(key)) out[key] = value;
+  }
+
   const nested = raw.custom_fields;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
     for (const [key, value] of Object.entries(nested as Record<string, unknown>)) {
@@ -1191,6 +1519,7 @@ function toNote(raw: RawNote): Note {
   return {
     id: raw.id,
     deal_id: toNumberOrNull(raw.deal_id),
+    lead_id: toStringOrNull(raw.lead_id),
     content: toStringOrNull(raw.content),
     user_id: toNumberOrNull(raw.user_id),
     user_name: toStringOrNull(raw.user?.name),
@@ -1213,6 +1542,27 @@ function toActivity(raw: RawActivity): Activity {
     due_time: toStringOrNull(raw.due_time),
     marked_as_done_time: toStringOrNull(raw.marked_as_done_time),
     user_id: toNumberOrNull(raw.user_id),
+    add_time: toStringOrNull(raw.add_time),
+    update_time: toStringOrNull(raw.update_time),
+  };
+}
+
+/**
+ * Maps a v2 /activities payload (owner_id in place of v1's user_id) onto the
+ * same lean Activity projection as toActivity.
+ */
+function toActivityV2(raw: RawActivityV2): Activity {
+  return {
+    id: toNumberOrNull(raw.id) ?? 0,
+    deal_id: toNumberOrNull(raw.deal_id),
+    type: toStringOrNull(raw.type),
+    subject: toStringOrNull(raw.subject),
+    note: toStringOrNull(raw.note),
+    done: toBooleanOrNull(raw.done),
+    due_date: toStringOrNull(raw.due_date),
+    due_time: toStringOrNull(raw.due_time),
+    marked_as_done_time: toStringOrNull(raw.marked_as_done_time),
+    user_id: toNumberOrNull(raw.owner_id),
     add_time: toStringOrNull(raw.add_time),
     update_time: toStringOrNull(raw.update_time),
   };

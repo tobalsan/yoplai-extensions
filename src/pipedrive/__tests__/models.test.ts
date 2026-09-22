@@ -288,6 +288,7 @@ describe("NoteSchema / ActivitySchema", () => {
       NoteSchema.parse({
         id: 1,
         deal_id: 3776,
+        lead_id: null,
         content: "PO ok",
         user_id: 15,
         user_name: "Eric",

@@ -754,6 +754,7 @@ describe("PipedriveClient.listDealNotes", () => {
     expect(result.notes[0]).toEqual({
       id: 22585,
       deal_id: 3776,
+      lead_id: null,
       content: "PO to validate by Floriane",
       user_id: 15057258,
       user_name: "Eric",
