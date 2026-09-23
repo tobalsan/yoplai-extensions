@@ -9,7 +9,7 @@ describe("gsheets extension", () => {
     expect(extension.requiredSecrets).toEqual(["serviceAccountJson"]);
   });
 
-  it("creates 5 tools with object parameter schemas", () => {
+  it("creates 7 tools with object parameter schemas", () => {
     const tools = extension.createTools({
       global: {},
       agent: {},
@@ -26,6 +26,8 @@ describe("gsheets extension", () => {
       "inspect_spreadsheet",
       "read_sheet",
       "read_range",
+      "append_rows",
+      "update_range",
       "validate",
     ]);
 

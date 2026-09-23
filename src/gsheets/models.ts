@@ -46,7 +46,30 @@ export const ReadRangeParamsSchema = SpreadsheetRefSchema.extend({
   majorDimension: z.enum(["ROWS", "COLUMNS"]).optional().default("ROWS"),
 });
 
+export const AppendRowsParamsSchema = SpreadsheetRefSchema.extend({
+  range: z
+    .string()
+    .min(1)
+    .describe("A1 notation of the table range to append after, e.g. 'Sheet1!A:D'."),
+  values: z
+    .array(z.array(z.string()))
+    .min(1)
+    .describe("Rows to append, each row an array of cell strings."),
+  valueInputOption: z.enum(["USER_ENTERED", "RAW"]).optional().default("USER_ENTERED"),
+});
+
+export const UpdateRangeParamsSchema = SpreadsheetRefSchema.extend({
+  range: z.string().min(1).describe("A1 notation of the exact target range to overwrite."),
+  values: z
+    .array(z.array(z.string()))
+    .min(1)
+    .describe("Rows to write, each row an array of cell strings."),
+  valueInputOption: z.enum(["USER_ENTERED", "RAW"]).optional().default("USER_ENTERED"),
+});
+
 export type ListSpreadsheetsParams = z.infer<typeof ListSpreadsheetsParamsSchema>;
 export type InspectSpreadsheetParams = z.infer<typeof InspectSpreadsheetParamsSchema>;
 export type ReadSheetParams = z.infer<typeof ReadSheetParamsSchema>;
 export type ReadRangeParams = z.infer<typeof ReadRangeParamsSchema>;
+export type AppendRowsParams = z.infer<typeof AppendRowsParamsSchema>;
+export type UpdateRangeParams = z.infer<typeof UpdateRangeParamsSchema>;

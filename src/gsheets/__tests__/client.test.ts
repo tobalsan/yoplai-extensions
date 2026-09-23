@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GSheetsClient } from "../client.js";
 
-const { driveFilesListMock, sheetsGetMock, valuesGetMock, googleAuthMock } = vi.hoisted(() => ({
-  driveFilesListMock: vi.fn(),
-  sheetsGetMock: vi.fn(),
-  valuesGetMock: vi.fn(),
-  googleAuthMock: vi.fn(),
-}));
+const { driveFilesListMock, sheetsGetMock, valuesGetMock, valuesAppendMock, valuesUpdateMock, googleAuthMock } =
+  vi.hoisted(() => ({
+    driveFilesListMock: vi.fn(),
+    sheetsGetMock: vi.fn(),
+    valuesGetMock: vi.fn(),
+    valuesAppendMock: vi.fn(),
+    valuesUpdateMock: vi.fn(),
+    googleAuthMock: vi.fn(),
+  }));
 
 vi.mock("googleapis", () => ({
   google: {
@@ -24,6 +27,8 @@ vi.mock("googleapis", () => ({
         get: sheetsGetMock,
         values: {
           get: valuesGetMock,
+          append: valuesAppendMock,
+          update: valuesUpdateMock,
         },
       },
     })),
@@ -242,6 +247,81 @@ describe("GSheetsClient", () => {
       range: "Sheet1!A1:B2",
       majorDimension: "ROWS",
       values: [["A", "B"]],
+    });
+  });
+
+  it("appends rows after existing table data", async () => {
+    valuesAppendMock.mockResolvedValue({
+      data: {
+        updates: {
+          updatedRange: "Sheet1!A4:B4",
+          updatedRows: 1,
+          updatedColumns: 2,
+          updatedCells: 2,
+        },
+      },
+    });
+
+    const result = await makeClient().appendRows({
+      spreadsheetId: "sheet-1",
+      range: "Sheet1!A:B",
+      values: [["Acme", "10"]],
+      valueInputOption: "USER_ENTERED",
+    });
+
+    expect(valuesAppendMock).toHaveBeenCalledWith(
+      {
+        spreadsheetId: "sheet-1",
+        range: "Sheet1!A:B",
+        valueInputOption: "USER_ENTERED",
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: [["Acme", "10"]] },
+      },
+      { timeout: 30_000 },
+    );
+    expect(result).toEqual({
+      spreadsheetId: "sheet-1",
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1",
+      updatedRange: "Sheet1!A4:B4",
+      updatedRows: 1,
+      updatedColumns: 2,
+      updatedCells: 2,
+    });
+  });
+
+  it("updates an exact range", async () => {
+    valuesUpdateMock.mockResolvedValue({
+      data: {
+        updatedRange: "Sheet1!A1:B1",
+        updatedRows: 1,
+        updatedColumns: 2,
+        updatedCells: 2,
+      },
+    });
+
+    const result = await makeClient().updateRange({
+      spreadsheetId: "sheet-1",
+      range: "Sheet1!A1:B1",
+      values: [["Company", "MRR"]],
+      valueInputOption: "RAW",
+    });
+
+    expect(valuesUpdateMock).toHaveBeenCalledWith(
+      {
+        spreadsheetId: "sheet-1",
+        range: "Sheet1!A1:B1",
+        valueInputOption: "RAW",
+        requestBody: { values: [["Company", "MRR"]] },
+      },
+      { timeout: 30_000 },
+    );
+    expect(result).toEqual({
+      spreadsheetId: "sheet-1",
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1",
+      updatedRange: "Sheet1!A1:B1",
+      updatedRows: 1,
+      updatedColumns: 2,
+      updatedCells: 2,
     });
   });
 

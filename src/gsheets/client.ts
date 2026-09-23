@@ -1,11 +1,13 @@
 import { google, type drive_v3, type sheets_v4 } from "googleapis";
 
 import type {
+  AppendRowsParams,
   GSheetsConfig,
   InspectSpreadsheetParams,
   ListSpreadsheetsParams,
   ReadRangeParams,
   ReadSheetParams,
+  UpdateRangeParams,
 } from "./models.js";
 
 const SPREADSHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet";
@@ -143,7 +145,7 @@ export class GSheetsClient {
       credentials,
       scopes: [
         "https://www.googleapis.com/auth/drive.metadata.readonly",
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/spreadsheets",
       ],
     });
     this.drive = google.drive({ version: "v3", auth });
@@ -308,6 +310,50 @@ export class GSheetsClient {
       range: valuesResponse.data.range ?? params.range,
       majorDimension: valuesResponse.data.majorDimension ?? params.majorDimension,
       values: normalizeValues(valuesResponse.data.values),
+    };
+  }
+
+  async appendRows(params: AppendRowsParams): Promise<Record<string, unknown>> {
+    const spreadsheetId = extractSpreadsheetId(params);
+    const response = await this.sheets.spreadsheets.values.append(
+      {
+        spreadsheetId,
+        range: params.range,
+        valueInputOption: params.valueInputOption,
+        insertDataOption: "INSERT_ROWS",
+        requestBody: { values: params.values },
+      },
+      this.requestOptions,
+    );
+    const updates = response.data.updates;
+    return {
+      spreadsheetId,
+      spreadsheetUrl: spreadsheetUrl(spreadsheetId),
+      updatedRange: updates?.updatedRange ?? null,
+      updatedRows: updates?.updatedRows ?? 0,
+      updatedColumns: updates?.updatedColumns ?? 0,
+      updatedCells: updates?.updatedCells ?? 0,
+    };
+  }
+
+  async updateRange(params: UpdateRangeParams): Promise<Record<string, unknown>> {
+    const spreadsheetId = extractSpreadsheetId(params);
+    const response = await this.sheets.spreadsheets.values.update(
+      {
+        spreadsheetId,
+        range: params.range,
+        valueInputOption: params.valueInputOption,
+        requestBody: { values: params.values },
+      },
+      this.requestOptions,
+    );
+    return {
+      spreadsheetId,
+      spreadsheetUrl: spreadsheetUrl(spreadsheetId),
+      updatedRange: response.data.updatedRange ?? null,
+      updatedRows: response.data.updatedRows ?? 0,
+      updatedColumns: response.data.updatedColumns ?? 0,
+      updatedCells: response.data.updatedCells ?? 0,
     };
   }
 }
