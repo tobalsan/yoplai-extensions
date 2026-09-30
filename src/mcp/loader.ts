@@ -14,7 +14,14 @@ export type McpServerConfig =
       name: string;
       url: string;
       headers?: Record<string, string>;
+      oauth?: McpStaticOAuthClient;
     };
+
+export interface McpStaticOAuthClient {
+  clientId: string;
+  clientSecret?: string;
+  scopes?: string[];
+}
 
 export interface LoadedMcpConfig {
   servers: McpServerConfig[];
@@ -33,6 +40,13 @@ const HttpServerSchema = z
   .object({
     url: z.string().url(),
     headers: z.record(z.string()).optional(),
+    oauth: z
+      .object({
+        clientId: z.string().min(1),
+        clientSecret: z.string().min(1).optional(),
+        scopes: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
@@ -74,6 +88,7 @@ function parseServer(
       name,
       url: http.data.url,
       headers: http.data.headers,
+      ...(http.data.oauth ? { oauth: http.data.oauth } : {}),
     };
   }
 

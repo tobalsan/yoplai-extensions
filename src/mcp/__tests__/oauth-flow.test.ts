@@ -31,6 +31,32 @@ describe("MCP OAuth flow", () => {
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ tokens: { access_token: "access" }, state: "connected" });
   });
 
+  it("uses a pre-registered client when the server lacks dynamic registration", async () => {
+    const register = vi.fn();
+    const start = vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://accounts.test/auth"), codeVerifier: "verifier" });
+    const exchange = vi.fn().mockResolvedValue({ access_token: "access", refresh_token: "refresh", token_type: "Bearer" });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://accounts.test", authorizationServerMetadata: { authorization_endpoint: "https://accounts.test/auth", token_endpoint: "https://accounts.test/token" } }),
+      registerClient: register,
+      startAuthorization: start,
+      exchangeAuthorization: exchange,
+      refreshAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    const started = await store.begin("connie", "gmail", "https://gmail.test/mcp", { clientId: "cid", clientSecret: "secret", scopes: ["a", "b"] });
+    await store.finish(started.state, "code");
+
+    expect(register).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledWith("https://accounts.test", expect.objectContaining({ scope: "a b", clientInformation: expect.objectContaining({ client_id: "cid", client_secret: "secret" }) }));
+    const url = new URL(started.authorizationUrl);
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+    expect(exchange).toHaveBeenCalledWith("https://accounts.test", expect.objectContaining({ clientInformation: expect.objectContaining({ client_id: "cid" }) }));
+  });
+
   it("coalesces concurrent refreshes for the same connection", async () => {
     type RefreshedTokens = { access_token: string; refresh_token: string; token_type: string; expires_in: number };
     const refreshResolvers: Array<(tokens: RefreshedTokens) => void> = [];

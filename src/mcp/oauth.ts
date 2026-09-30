@@ -12,6 +12,8 @@ import {
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 
+import type { McpStaticOAuthClient } from "./loader.js";
+
 export type OAuthState = "connected" | "disconnected" | "needs_reconnect";
 
 export interface OAuthConnection {
@@ -92,16 +94,18 @@ export class McpOAuthStore {
     if (connection) await this.write(agent, server, { ...connection, state: "needs_reconnect" });
   }
 
-  async begin(agent: string, server: string, url: string): Promise<{ state: string; authorizationUrl: string }> {
+  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient): Promise<{ state: string; authorizationUrl: string }> {
     const info = await discoverOAuthServerInfo(url);
-    if (!info.authorizationServerMetadata?.registration_endpoint) {
-      throw new Error("OAuth server does not support dynamic client registration");
+    if (!staticClient && !info.authorizationServerMetadata?.registration_endpoint) {
+      throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json");
     }
     const existing = await this.read(agent, server);
-    const client = existing?.client ?? await registerClient(info.authorizationServerUrl, {
-      metadata: info.authorizationServerMetadata,
-      clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
-    });
+    const client: OAuthClientInformationFull = staticClient
+      ? { client_id: staticClient.clientId, ...(staticClient.clientSecret ? { client_secret: staticClient.clientSecret } : {}), redirect_uris: [this.redirectUri] }
+      : existing?.client ?? await registerClient(info.authorizationServerUrl, {
+        metadata: info.authorizationServerMetadata,
+        clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
+      });
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,
@@ -109,7 +113,13 @@ export class McpOAuthStore {
       redirectUrl: this.redirectUri,
       state,
       resource: new URL(url),
+      ...(staticClient?.scopes?.length ? { scope: staticClient.scopes.join(" ") } : {}),
     });
+    if (staticClient) {
+      // Pre-registered clients (e.g. Google) only issue refresh tokens for offline access with explicit consent.
+      auth.authorizationUrl.searchParams.set("access_type", "offline");
+      auth.authorizationUrl.searchParams.set("prompt", "consent");
+    }
     this.pending.set(state, { agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }

@@ -199,6 +199,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
 
   async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>): Promise<boolean> {
     const key = `${agent}:${server.name}`;
+    if (server.oauth) return true;
     if (oauthServers.has(key) || await oauth?.read(agent, server.name)) return true;
     try {
       const response = await fetch(server.url, {
@@ -286,7 +287,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const name = c.req.query("server");
       const server = agent && name ? loadedForAgent(agent)?.servers.find((item): item is Extract<McpServerConfig, { type: "http" }> => item.type === "http" && item.name === name) : undefined;
       if (!agent || !server || server.headers || !oauth) return c.text("Unknown OAuth MCP server", 404);
-      try { return c.redirect((await oauth.begin(agent, server.name, server.url)).authorizationUrl); }
+      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth)).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
     app.get("/mcp/oauth/callback", async (c) => {
