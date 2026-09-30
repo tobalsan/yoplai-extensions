@@ -30,7 +30,6 @@ export default defineToolExtension({
   description: "Gmail mailbox tools via per-agent Google OAuth.",
   systemPrompt: "Use Gmail-compatible query syntax. Gmail content is returned only for this tool call; never repeat it unnecessarily.",
   configSchema: GmailConfigSchema,
-  configRoute: { path: "/agents/:agentId/extensions/gmail" },
   requiredSecrets: [],
   oauth: {
     provider: "google",
