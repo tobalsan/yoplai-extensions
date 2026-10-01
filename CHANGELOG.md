@@ -21,6 +21,8 @@
 
 ### Added
 
+- MCP OAuth connections support personal or team credentials in the host encrypted store, with requester-specific resolution and legacy team migration (ALG-455).
+
 - Pipedrive Leads inbox read support: `list_leads` (lean projection, `archived_status`/`owner_id`/`person_id`/`organization_id`/`filter_id`/`sort` filters), `get_lead` (full detail with custom fields normalized through the same deal-field schema/registry as `get_deal`), `search_leads`, `list_lead_labels`, `list_lead_sources`, `list_lead_notes`, and `list_lead_activities` (v2 API). A lead's `person_id`/`organization_id` resolve via the existing `get_person`/`get_organization`.
 
 - Pennylane `create_customer` tool for company and individual customers (ALG-421).

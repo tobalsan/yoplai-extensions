@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parseEnv } from "node:util";
@@ -6,7 +7,7 @@ import { z } from "zod";
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { loadMcpConfigFile, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
-import { McpOAuthStore } from "./oauth.js";
+import { McpOAuthStore, type ScopedCredentials, type CredentialScope } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
@@ -34,6 +35,7 @@ type AgentLike = {
 };
 
 type RouteContext = {
+  get?(name: string): unknown;
   req: { query(name: string): string | undefined };
   json(body: unknown): unknown;
   text(body: string, status?: number): unknown;
@@ -166,7 +168,7 @@ const baseExtension = defineToolExtension({
 });
 
 type McpRuntimeConfig = { extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
-type McpRuntime = { getDataDir(): string; getConfig(): McpRuntimeConfig; getAgent(id: string): AgentLike | undefined };
+export type McpRuntime = { credentials?: ScopedCredentials; getDataDir(): string; getConfig(): McpRuntimeConfig; getAgent(id: string): AgentLike | undefined };
 
 /**
  * OAuth providers behind a WAF (e.g. TradingView/CloudFront) reject localhost redirect URIs outright,
@@ -205,6 +207,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const response = await fetch(server.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-detection", method: "initialize", params: {} }),
       });
       if (response.status === 401) oauthServers.add(key);
@@ -226,28 +229,38 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   async function getManager(
     key: string,
     agentId: string,
-    servers: LoadedMcpConfig["servers"]
+    servers: LoadedMcpConfig["servers"],
+    requesterUserId?: string
   ): Promise<McpClientManager> {
     const cached = managers.get(key);
     if (cached) return cached;
     const managerPromise = (async () => {
+      const selectedScopes = new Map<string, CredentialScope>();
       const manager = new McpClientManager(
         servers,
         clientFactory,
-        async (server) => server.type === "http" && !server.headers && oauth && await isOAuthServer(agentId, server)
-          ? oauth.accessToken(agentId, server.name)
-          : undefined,
+        async (server) => {
+          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server)) return undefined;
+          const selected = await oauth.resolve(agentId, server.name, requesterUserId);
+          if (!selected) return undefined;
+          selectedScopes.set(server.name, selected.scope);
+          return oauth.accessToken(agentId, server.name, 60_000, requesterUserId, selected.scope);
+        },
         async (server) => {
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
-            return Boolean(await oauth?.refreshAccessToken(agentId, server.name));
+            const scope = selectedScopes.get(server.name);
+            return scope ? Boolean(await oauth?.refreshAccessToken(agentId, server.name, requesterUserId, scope)) : false;
           }
           return false;
         },
         async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
-        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Ask an admin to connect it in the agent settings.`, authorizeUrl: `/agents/${agentId}/extensions/mcp` }),
+        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it using your own MCP connection settings.`, authorizeUrl: `/agents/${encodeURIComponent(agentId)}/extensions/mcp?scope=personal&server=${encodeURIComponent(server)}` }),
         async (server) => {
-          if (server.type === "http" && !server.headers) await oauth?.markNeedsReconnect(agentId, server.name);
+          if (server.type === "http" && !server.headers) {
+            const scope = selectedScopes.get(server.name);
+            if (scope) await oauth?.markNeedsReconnect(agentId, server.name, scope);
+          }
         }
       );
       await manager.connect();
@@ -266,10 +279,27 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   ...baseExtension,
   async start(ctx: McpRuntime) {
     runtime = ctx;
-    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()));
+    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials);
   },
   registerRoutes(app: RouteApp) {
+    function multiUserEnabled(): boolean {
+      const config = runtime?.getConfig().extensions?.multiUser;
+      return isRecord(config) && config.enabled === true;
+    }
+    function userId(c: RouteContext): string | undefined {
+      const auth = c.get?.("multiUserAuthContext");
+      return isRecord(auth) && isRecord(auth.user) && typeof auth.user.id === "string" ? auth.user.id : undefined;
+    }
+    function requestedScope(c: RouteContext): CredentialScope | undefined {
+      const id = userId(c);
+      if (c.req.query("scope") === "team" && (id || !multiUserEnabled())) return { type: "team" };
+      if (!id) return undefined;
+      if (c.req.query("scope") === "personal") return { type: "personal", userId: id };
+      return undefined;
+    }
     app.get("/mcp/oauth/status", async (c) => {
+      const scope = requestedScope(c);
+      if (!scope) return c.text("Authenticated credential scope required", 400);
       const agent = c.req.query("agent");
       const loaded = agent ? loadedForAgent(agent) : undefined;
       if (!agent || !loaded || !oauth) return c.json({ servers: [] });
@@ -277,7 +307,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const servers = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http").map(async (server) => {
         if (server.headers) return { name: server.name, url: server.url, auth: "static", state: "static" };
         if (!await isOAuthServer(agent, server)) return { name: server.name, url: server.url, auth: "static", state: "static" };
-        const connection = await store.read(agent, server.name);
+        const connection = await store.read(agent, server.name, scope);
         return { name: server.name, url: server.url, auth: "oauth", state: connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected", ...(connection ? { connectedAt: connection.connectedAt, expiresAt: connection.expiresAt } : {}) };
       }));
       return c.json({ servers });
@@ -287,7 +317,14 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const name = c.req.query("server");
       const server = agent && name ? loadedForAgent(agent)?.servers.find((item): item is Extract<McpServerConfig, { type: "http" }> => item.type === "http" && item.name === name) : undefined;
       if (!agent || !server || server.headers || !oauth) return c.text("Unknown OAuth MCP server", 404);
-      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth)).authorizationUrl); }
+      if (!userId(c) && multiUserEnabled()) return c.text("Authentication required", 401);
+      const scope = requestedScope(c);
+      if (!scope) {
+        if (c.req.query("scope")) return c.text("Invalid credential scope", 400);
+        const base = `/api/mcp/oauth/authorize?agent=${encodeURIComponent(agent)}&server=${encodeURIComponent(server.name)}`;
+        return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a> <a href="${base}&scope=team">Whole team</a>`);
+      }
+      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope)).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
     app.get("/mcp/oauth/callback", async (c) => {
@@ -297,10 +334,12 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       catch (error) { return c.html(html("", false, error instanceof Error ? error.message : "OAuth connection failed"), 400); }
     });
     app.post("/mcp/oauth/disconnect", async (c) => {
+      const scope = requestedScope(c);
+      if (!scope) return c.text("Authenticated credential scope required", 400);
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
-      await oauth.revoke(agent, name);
-      await oauth.delete(agent, name);
+      await oauth.revoke(agent, name, scope);
+      await oauth.delete(agent, name, scope);
       oauthServers.add(`${agent}:${name}`);
       await resetManagers(agent);
       return c.json({ ok: true });
@@ -336,7 +375,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     managers.clear();
     await baseExtension.stop();
   },
-  async getAgentTools(agent: AgentLike, context?: { config: { extensions?: Record<string, unknown>; env?: Record<string, string> } }) {
+  async getAgentTools(agent: AgentLike, context?: { userId?: string; config: { extensions?: Record<string, unknown>; env?: Record<string, string> } }) {
     if (!context) return [];
     if (!isRecord(agent.extensions?.mcp) || agent.extensions.mcp.enabled !== true) {
       return [];
@@ -350,21 +389,34 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       resolveInterpolationEnv(agent, context.config, extensionConfig)
     );
     logConfigErrors(loaded);
-    const manager = await getManager(`${agent.id}:${configPath}`, agent.id, loaded.servers);
-    const tools = adaptMcpTools(await manager.listTools(), manager);
-    const connectedTools = tools.map((tool) => ({
+    const manager = await getManager(`${agent.id}:${configPath}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, context.userId);
+    const definitions = await manager.listTools();
+    const tools = adaptMcpTools(definitions, manager);
+    const connectedTools = tools.map((tool, index) => ({
       name: tool.name,
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
-      execute: (params: unknown) => tool.execute(params),
+      execute: async (params: unknown, execution?: { userId?: string }) => {
+        const definition = definitions[index]!;
+        const target = loaded.servers.find((server) => server.name === definition.server)!;
+        if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target)) return tool.execute(params);
+        const requester = execution?.userId;
+        const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
+        const fresh = await getManager(key, agent.id, [target], requester);
+        try {
+          const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
+          if (current) return await fresh.invokeTool(current.server, current.name, params);
+          return { connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server using your own connection settings.", authorizeUrl: `/agents/${encodeURIComponent(agent.id)}/extensions/mcp?scope=personal` };
+        } finally { managers.delete(key); await fresh.close(); }
+      },
     }));
     const disconnected = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http" && !server.headers).map(async (server) => {
-      if (!await isOAuthServer(agent.id, server) || await oauth?.accessToken(agent.id, server.name)) return undefined;
+      if (!await isOAuthServer(agent.id, server) || await oauth?.accessToken(agent.id, server.name, 60_000, context.userId)) return undefined;
       return {
         name: `mcp__${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__not_connected`,
         description: `Connect ${server.name} in the MCP extension settings before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: async () => ({ connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Ask an admin to connect it in the agent settings.`, authorizeUrl: `/agents/${agent.id}/extensions/mcp` }),
+        execute: async () => ({ connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it using your own MCP connection settings.`, authorizeUrl: `/agents/${encodeURIComponent(agent.id)}/extensions/mcp?scope=personal` }),
       };
     }));
     return [...connectedTools, ...disconnected.filter((tool): tool is NonNullable<typeof tool> => Boolean(tool))];

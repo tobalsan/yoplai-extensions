@@ -78,7 +78,7 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
 ```
 
-Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions.
+Open the agent's MCP extension settings, choose **Just me** or **Whole team**, and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the connection in the host's shared encrypted credential store (`ctx.credentials`). Tool execution resolves the authenticated requester's personal connection first, then the team connection; unattended runs use team only. A personal connection needing reconnect never falls back to another account. Existing per-agent OAuth files migrate as team connections after encrypted persistence succeeds; files remain readable until encryption is configured. New authorizations require the host credential store. Status and disconnect target the selected scope, and refresh/reconnect are isolated per credential.
 
 Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `yoplai.json` is sufficient; do not include an `/api` suffix:
 
