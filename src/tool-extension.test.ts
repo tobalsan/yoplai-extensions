@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { defineToolExtension } from "./tool-extension.js";
+import { defineToolExtension, expandTypeArrays } from "./tool-extension.js";
 
 function createDefinition(overrides: Record<string, unknown> = {}) {
   const createTools = vi.fn((config) => [
@@ -197,7 +197,7 @@ describe("defineToolExtension", () => {
       { config: { extensions: { example: { apiKey: "secret" } } } }
     );
 
-    expect(tools[0]?.parameters).toBe(rawSchema);
+    expect(tools[0]?.parameters).toEqual(rawSchema);
     await expect(tools[0]?.execute({})).resolves.toEqual({
       connected: false,
       provider: "google",
@@ -205,5 +205,30 @@ describe("defineToolExtension", () => {
       message: 'OAuth provider "google" is not configured on this host.',
     });
     expect(createTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("expandTypeArrays", () => {
+  it("rewrites primitive type arrays to anyOf, keeping property names", () => {
+    expect(
+      expandTypeArrays({
+        type: "object",
+        properties: {
+          id: { type: ["string", "number"] },
+          type: { type: "string", enum: ["a"] },
+          lines: { type: "array", items: { type: "object", properties: { qty: { type: ["string", "number"] } } } },
+        },
+      })
+    ).toEqual({
+      type: "object",
+      properties: {
+        id: { anyOf: [{ type: "string" }, { type: "number" }] },
+        type: { type: "string", enum: ["a"] },
+        lines: {
+          type: "array",
+          items: { type: "object", properties: { qty: { anyOf: [{ type: "string" }, { type: "number" }] } } },
+        },
+      },
+    });
   });
 });

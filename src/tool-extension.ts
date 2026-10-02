@@ -248,13 +248,37 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       return definition.createTools(resolved).map((tool) => ({
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
-        parameters:
+        parameters: expandTypeArrays(
           tool.jsonSchemaParameters ??
-          zodToJsonSchema(tool.parameters, {
-            $refStrategy: "none",
-          }),
+            zodToJsonSchema(tool.parameters, {
+              $refStrategy: "none",
+            })
+        ) as Record<string, unknown>,
         execute: (params: unknown) => tool.execute(params),
       }));
     },
   };
+}
+
+/**
+ * Rewrite `type: ["string", "number"]` (zod-to-json-schema's output for
+ * primitive unions) into `anyOf`. Some providers' tool parsers (e.g.
+ * opencode-go mimo) choke on type arrays: the call leaks as text XML and the
+ * structured tool call arrives with empty/nested garbage arguments.
+ */
+export function expandTypeArrays(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(expandTypeArrays);
+  if (!schema || typeof schema !== "object") return schema;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    out[key] = key === "properties" || key === "definitions"
+      ? Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, expandTypeArrays(v)]))
+      : expandTypeArrays(value);
+  }
+  if (Array.isArray(out.type)) {
+    const types = out.type as unknown[];
+    delete out.type;
+    out.anyOf = types.map((type) => ({ type }));
+  }
+  return out;
 }
