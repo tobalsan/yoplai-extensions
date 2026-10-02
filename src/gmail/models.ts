@@ -16,6 +16,8 @@ export const CreateDraftParamsSchema = z.object({
   htmlBody: z.string().optional(),
   replyToMessageId: z.string().min(1).optional(),
 }).strict();
+export const UpdateDraftParamsSchema = CreateDraftParamsSchema.omit({ replyToMessageId: true }).partial().extend({ draftId: z.string().min(1) }).strict();
+export const DeleteDraftParamsSchema = z.object({ draftId: z.string().min(1) }).strict();
 export const ListDraftsParamsSchema = PageSchema.extend({ query: z.string().optional() }).strict();
 export const GetThreadParamsSchema = z.object({
   threadId: z.string().min(1),
@@ -35,6 +37,7 @@ export const CreateLabelParamsSchema = z.object({
 }).strict();
 
 export type CreateDraftParams = z.infer<typeof CreateDraftParamsSchema>;
+export type UpdateDraftParams = z.infer<typeof UpdateDraftParamsSchema>;
 export type ListDraftsParams = z.infer<typeof ListDraftsParamsSchema>;
 export type GetThreadParams = z.infer<typeof GetThreadParamsSchema>;
 export type SearchThreadsParams = z.infer<typeof SearchThreadsParamsSchema>;

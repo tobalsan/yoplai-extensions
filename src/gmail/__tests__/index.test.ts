@@ -8,7 +8,7 @@ describe("gmail extension", () => {
     expect(extension.oauth).toEqual({ provider: "google", scopes: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/userinfo.email"] });
     const tools = await extension.getAgentTools({ id: "a1", extensions: { gmail: {} } }, { config: {}, resolveOAuth: vi.fn().mockResolvedValue(connected) });
     expect(tools.map((tool) => tool.name)).toEqual([
-      "gmail_create_draft", "gmail_list_drafts", "gmail_get_thread", "gmail_search_threads", "gmail_label_thread", "gmail_unlabel_thread", "gmail_list_labels", "gmail_label_message", "gmail_unlabel_message", "gmail_create_label",
+      "gmail_create_draft", "gmail_update_draft", "gmail_delete_draft", "gmail_list_drafts", "gmail_get_thread", "gmail_search_threads", "gmail_label_thread", "gmail_unlabel_thread", "gmail_list_labels", "gmail_label_message", "gmail_unlabel_message", "gmail_create_label",
     ]);
   });
 

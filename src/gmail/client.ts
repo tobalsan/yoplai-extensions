@@ -7,6 +7,7 @@ import {
   type LabelThreadParams,
   type ListDraftsParams,
   type SearchThreadsParams,
+  type UpdateDraftParams,
 } from "./models.js";
 
 export type GmailFetch = typeof fetch;
@@ -79,6 +80,29 @@ export class GmailClient {
     };
     const data = await this.request("/drafts", { method: "POST", body: JSON.stringify({ message }) }) as { id?: string };
     return this.getDraft(data.id ?? "");
+  }
+  async updateDraft(params: UpdateDraftParams) {
+    // Gmail replaces the whole draft; omitted fields keep current values (HTML body is not preserved unless resent).
+    const id = encodeURIComponent(params.draftId);
+    const existing = (await this.request(`/drafts/${id}?format=full`) as { message?: GmailMessage }).message ?? {};
+    const merged: CreateDraftParams = {
+      to: params.to ?? recipients(existing, "To"),
+      cc: params.cc ?? recipients(existing, "Cc"),
+      bcc: params.bcc ?? recipients(existing, "Bcc"),
+      subject: params.subject ?? header(existing, "Subject"),
+      body: params.body ?? body(existing.payload),
+      htmlBody: params.htmlBody,
+    };
+    const message = {
+      raw: Buffer.from(rawMessage(merged, header(existing, "In-Reply-To") || undefined)).toString("base64url"),
+      ...(existing.threadId ? { threadId: existing.threadId } : {}),
+    };
+    await this.request(`/drafts/${id}`, { method: "PUT", body: JSON.stringify({ id: params.draftId, message }) });
+    return this.getDraft(params.draftId);
+  }
+  async deleteDraft(params: { draftId: string }) {
+    await this.request(`/drafts/${encodeURIComponent(params.draftId)}`, { method: "DELETE" });
+    return { deleted: true, draftId: params.draftId };
   }
   async account() {
     const profile = await this.request("/profile") as { emailAddress?: string };

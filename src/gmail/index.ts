@@ -4,6 +4,7 @@ import { GmailClient, GmailRequestError } from "./client.js";
 import {
   CreateDraftParamsSchema,
   CreateLabelParamsSchema,
+  DeleteDraftParamsSchema,
   GetThreadParamsSchema,
   GmailConfigSchema,
   LabelMessageParamsSchema,
@@ -11,6 +12,7 @@ import {
   ListDraftsParamsSchema,
   ListLabelsParamsSchema,
   SearchThreadsParamsSchema,
+  UpdateDraftParamsSchema,
 } from "./models.js";
 
 function notConnected(oauth: ResolvedOAuth | undefined) {
@@ -112,6 +114,18 @@ export default defineToolExtension({
         description: "Create an email draft without sending it.",
         parameters: CreateDraftParamsSchema,
         execute: run(CreateDraftParamsSchema, (gmail, params) => gmail.createDraft(params)),
+      },
+      {
+        name: "update_draft",
+        description: "Update an existing draft by Draft ID (from list_drafts without query). Omitted fields keep current values; HTML body is dropped unless htmlBody is resent.",
+        parameters: UpdateDraftParamsSchema,
+        execute: run(UpdateDraftParamsSchema, (gmail, params) => gmail.updateDraft(params)),
+      },
+      {
+        name: "delete_draft",
+        description: "Permanently delete a draft by Draft ID (from list_drafts without query). Not recoverable.",
+        parameters: DeleteDraftParamsSchema,
+        execute: run(DeleteDraftParamsSchema, (gmail, params) => gmail.deleteDraft(params)),
       },
       {
         name: "list_drafts",

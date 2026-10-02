@@ -57,6 +57,33 @@ describe("GmailClient", () => {
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body).message.threadId).toBe("thread-1");
   });
 
+  it("updates a draft, keeping omitted fields and thread", async () => {
+    const existing = { id: "draft-1", message: { threadId: "thread-1", payload: { mimeType: "text/plain", body: { data: Buffer.from("old body").toString("base64url") }, headers: [{ name: "To", value: "a@example.com" }, { name: "Subject", value: "Old" }, { name: "In-Reply-To", value: "<m1@x>" }] } } };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response(existing))
+      .mockResolvedValueOnce(response({ id: "draft-1" }))
+      .mockResolvedValueOnce(response(existing));
+    const client = new GmailClient("token", fetchImpl);
+    await client.updateDraft({ draftId: "draft-1", subject: "New" });
+    expect(fetchImpl.mock.calls[1][1].method).toBe("PUT");
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/drafts/draft-1");
+    const sent = JSON.parse(fetchImpl.mock.calls[1][1].body);
+    expect(sent.message.threadId).toBe("thread-1");
+    const raw = Buffer.from(sent.message.raw, "base64url").toString("utf8");
+    expect(raw).toContain("Subject: New");
+    expect(raw).toContain("To: a@example.com");
+    expect(raw).toContain("In-Reply-To: <m1@x>");
+    expect(raw).toContain("old body");
+  });
+
+  it("deletes a draft", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new GmailClient("token", fetchImpl);
+    await expect(client.deleteDraft({ draftId: "draft-1" })).resolves.toEqual({ deleted: true, draftId: "draft-1" });
+    expect(fetchImpl.mock.calls[0][1].method).toBe("DELETE");
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/drafts/draft-1");
+  });
+
   it.each([
     ["labels a thread", (client: GmailClient) => client.labelThread({ threadId: "thread-1", labelIds: ["LABEL"] }), "/threads/thread-1/modify", { addLabelIds: ["LABEL"] }],
     ["unlabels a thread", (client: GmailClient) => client.labelThread({ threadId: "thread-1", labelIds: ["LABEL"] }, true), "/threads/thread-1/modify", { removeLabelIds: ["LABEL"] }],

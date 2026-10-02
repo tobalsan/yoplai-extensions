@@ -5,6 +5,8 @@ Gmail mailbox tools for an agent, via **per-agent OAuth** — no pasted secrets.
 Tools (mounted as `gmail_<name>`), the Google Gmail MCP's current ten-tool surface:
 
 - `create_draft` — create an email draft without sending it (supports `to`/`cc`/`bcc`, text or HTML body, `replyToMessageId`)
+- `update_draft` — update an existing draft by Draft ID; omitted fields keep current values (HTML body dropped unless resent)
+- `delete_draft` — permanently delete a draft by Draft ID
 - `list_drafts` — list drafts, paginated, optional Gmail query
 - `get_thread` — get a thread and its messages (`MINIMAL` or `FULL_CONTENT`)
 - `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`
