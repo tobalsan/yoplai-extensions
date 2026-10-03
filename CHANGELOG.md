@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Google OAuth tool extensions (Gmail, Google Drive) now resolve the requesting user's personal "Just me" connection before the team one, instead of always reporting not connected.
 - MCP OAuth transports now force-refresh and reconnect after a 401, so cached agents keep their MCP tools through token expiry.
 - Concurrent MCP OAuth token requests now share one refresh, preserving rotated refresh tokens and avoiding duplicate provider calls.
 - Zendesk configuration now rejects invalid subdomains that could redirect API credentials to another host.

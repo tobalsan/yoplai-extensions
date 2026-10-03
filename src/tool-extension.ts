@@ -35,9 +35,12 @@ export type ResolvedOAuth =
 /** Host-injected hook context passed to the extension's tool/prompt hooks. */
 export interface ToolExtensionHookContext {
   config: { extensions?: Record<string, unknown> };
+  /** Requesting Yoplai user; selects their personal credential over the team one. */
+  userId?: string;
   resolveOAuth?: (
     agent: { id: string },
-    requirement: OAuthRequirement
+    requirement: OAuthRequirement,
+    requesterUserId?: string
   ) => Promise<ResolvedOAuth>;
 }
 
@@ -161,7 +164,7 @@ async function resolveOAuthForDefinition(
       message: `OAuth provider "${definition.oauth.provider}" is not configured on this host.`,
     };
   }
-  return context.resolveOAuth(agent, definition.oauth);
+  return context.resolveOAuth(agent, definition.oauth, context.userId);
 }
 
 function getMountedToolName(
@@ -254,7 +257,24 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
               $refStrategy: "none",
             })
         ) as Record<string, unknown>,
-        execute: (params: unknown) => tool.execute(params),
+        execute: async (params: unknown, toolContext?: { userId?: string }) => {
+          if (!definition.oauth || !context.resolveOAuth) return tool.execute(params);
+          // Re-resolve per call so the token matches this call's requester.
+          const oauth = await context.resolveOAuth(
+            agent,
+            definition.oauth,
+            toolContext?.userId ?? context.userId
+          );
+          const callTimeTool = definition
+            .createTools({ ...resolved, oauth })
+            .find((candidate) => candidate.name === tool.name);
+          if (!callTimeTool) {
+            throw new Error(
+              `OAuth tool "${getMountedToolName(definition, tool.name)}" is no longer available`
+            );
+          }
+          return callTimeTool.execute(params);
+        },
       }));
     },
   };
