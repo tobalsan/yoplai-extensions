@@ -290,6 +290,14 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const auth = c.get?.("multiUserAuthContext");
       return isRecord(auth) && isRecord(auth.user) && typeof auth.user.id === "string" ? auth.user.id : undefined;
     }
+    // Team grants act for everyone, so only staff may set or remove them.
+    function canConfigureTeam(c: RouteContext): boolean {
+      if (!multiUserEnabled()) return true;
+      const auth = c.get?.("multiUserAuthContext");
+      const role = isRecord(auth) && isRecord(auth.user) ? auth.user.role : undefined;
+      const roles = Array.isArray(role) ? role : [role];
+      return roles.some((r) => r === "admin" || r === "superadmin");
+    }
     function requestedScope(c: RouteContext): CredentialScope | undefined {
       const id = userId(c);
       if (c.req.query("scope") === "team" && (id || !multiUserEnabled())) return { type: "team" };
@@ -310,7 +318,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         const connection = await store.read(agent, server.name, scope);
         return { name: server.name, url: server.url, auth: "oauth", state: connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected", ...(connection ? { connectedAt: connection.connectedAt, expiresAt: connection.expiresAt } : {}) };
       }));
-      return c.json({ servers });
+      return c.json({ servers, canConfigureTeam: canConfigureTeam(c) });
     });
     app.get("/mcp/oauth/authorize", async (c) => {
       const agent = c.req.query("agent");
@@ -322,8 +330,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (!scope) {
         if (c.req.query("scope")) return c.text("Invalid credential scope", 400);
         const base = `/api/mcp/oauth/authorize?agent=${encodeURIComponent(agent)}&server=${encodeURIComponent(server.name)}`;
-        return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a> <a href="${base}&scope=team">Whole team</a>`);
+        return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a>${canConfigureTeam(c) ? ` <a href="${base}&scope=team">Whole team</a>` : ""}`);
       }
+      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
       try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope)).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
@@ -336,6 +345,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     app.post("/mcp/oauth/disconnect", async (c) => {
       const scope = requestedScope(c);
       if (!scope) return c.text("Authenticated credential scope required", 400);
+      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
       await oauth.revoke(agent, name, scope);

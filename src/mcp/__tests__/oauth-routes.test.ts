@@ -34,6 +34,22 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("GET /mcp/oauth/status")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
   });
+  it("restricts team connections to staff in multi-user mode", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
+    const extension = createMcpExtension();
+    await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({ extensions: { multiUser: { enabled: true } } }), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const as = (role: string, query: Record<string, string>) => ({ ...context(query), get: () => ({ user: { id: "user-a", role } }) });
+    const member = { agent: "casey", server: "claap", scope: "team" };
+
+    await expect(routes.routes.get("GET /mcp/oauth/authorize")!(as("user", member))).resolves.toMatchObject({ status: 403 });
+    await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(as("user", member))).resolves.toMatchObject({ status: 403 });
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(as("user", { agent: "casey" }))).resolves.toMatchObject({ canConfigureTeam: false });
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(as("admin", { agent: "casey" }))).resolves.toMatchObject({ canConfigureTeam: true });
+  });
+
   it("reports 401 URL-only servers as disconnected OAuth and excludes stdio", async () => {
     const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" }, static: { url: "https://static.test/mcp", headers: { Authorization: "Bearer key" } }, local: { command: "node" } } }));
@@ -45,7 +61,7 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toEqual({ servers: [
       { name: "claap", url: "https://api.claap.io/mcp", auth: "oauth", state: "disconnected" },
       { name: "static", url: "https://static.test/mcp", auth: "static", state: "static" },
-    ] });
+    ], canConfigureTeam: true });
     expect(fetchMock).toHaveBeenCalledWith("https://api.claap.io/mcp", expect.any(Object));
     expect(fetchMock).not.toHaveBeenCalledWith("https://static.test/mcp", expect.any(Object));
   });
@@ -64,7 +80,7 @@ describe("MCP OAuth routes", () => {
 
     await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toEqual({ servers: [
       { name: "rooted", url: "https://root.test/mcp", auth: "static", state: "static" },
-    ] });
+    ], canConfigureTeam: true });
   });
 
   it("returns an HTML failure page for invalid callback state", async () => {
