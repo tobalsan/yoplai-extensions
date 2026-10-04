@@ -369,8 +369,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
-      await oauth.revoke(agent, name, scope);
-      await oauth.delete(agent, name, scope);
+      await oauth.disconnect(agent, name, scope);
       oauthServers.add(`${agent}:${name}`);
       await resetManagers(agent);
       return c.json({ ok: true });

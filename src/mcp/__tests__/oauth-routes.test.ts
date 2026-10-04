@@ -165,6 +165,24 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(context({ agent: "casey", server: "claap" }))).resolves.toEqual({ ok: true });
     await expect(store.read("casey", "claap")).resolves.toBeUndefined();
   });
+
+  it("returns while revocation hangs and the next requester call falls back or refuses", async () => {
+    vi.useFakeTimers();
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
+    const connection = { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "team", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" };
+    await store.write("casey", "claap", connection);
+    await store.write("casey", "claap", { ...connection, tokens: { ...connection.tokens, access_token: "personal" } }, { type: "personal", userId: "user-a" });
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const extension = createMcpExtension();
+    await extension.start({ credentials: hostCredentials, getDataDir: () => dataDir, getConfig: () => ({}), getAgent: () => undefined });
+    const routes = app(); extension.registerRoutes(routes);
+    await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(context({ agent: "casey", server: "claap", scope: "personal" }))).resolves.toEqual({ ok: true });
+    await expect(store.accessToken("casey", "claap", 60_000, "user-a")).resolves.toBe("team");
+    await store.delete("casey", "claap");
+    await expect(store.accessToken("casey", "claap", 60_000, "user-a")).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(10_001);
+  });
 });
 
 describe("resolveOAuthRedirectUri", () => {

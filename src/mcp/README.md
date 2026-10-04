@@ -2,6 +2,8 @@
 
 Connect an Yoplai agent to standard MCP servers declared in its `mcp.json`. Exposed tools are named `mcp__<server>__<tool>` (non-alphanumeric characters become `_`).
 
+The agent's **My connections** tab lists your personal MCP OAuth connections and team availability. Disconnect deletes your credential immediately; the next request uses the team connection or asks you to connect. Provider revocation runs separately and cannot delay local removal.
+
 ## Install
 
 ```bash

@@ -126,11 +126,16 @@ export class McpOAuthStore {
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
-  async revoke(agent: string, server: string, scope: CredentialScope = TEAM): Promise<void> {
+  async disconnect(agent: string, server: string, scope: CredentialScope = TEAM): Promise<void> {
     const connection = await this.read(agent, server, scope);
+    await this.delete(agent, server, scope);
     if (!connection) return;
+    void this.revokeConnection(connection);
+  }
+
+  private async revokeConnection(connection: OAuthConnection): Promise<void> {
     try {
-      const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
+      const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl, { fetchFn: oauthFetch });
       const endpoint = (metadata as Record<string, unknown> | undefined)?.revocation_endpoint;
       if (typeof endpoint !== "string") return;
       await fetch(endpoint, {

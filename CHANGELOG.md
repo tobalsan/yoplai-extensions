@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- MCP disconnect removes the selected credential immediately; provider revocation runs in the background so outages cannot block team fallback (ALG-460).
+
 - MCP OAuth refusals in Slack offer one personal connect link, reusing host pairing and confirming the originating thread after authorization.
 
 - MCP **Whole team** connections can only be connected or disconnected by admins in multi-user mode; status reports `canConfigureTeam` so the UI can hide the option.
