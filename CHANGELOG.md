@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- MCP OAuth refusals in Slack offer one personal connect link, reusing host pairing and confirming the originating thread after authorization.
+
 - MCP **Whole team** connections can only be connected or disconnected by admins in multi-user mode; status reports `canConfigureTeam` so the UI can hide the option.
 - Google OAuth tool extensions (Gmail, Google Drive) now resolve the requesting user's personal "Just me" connection before the team one, instead of always reporting not connected.
 - MCP OAuth transports now force-refresh and reconnect after a 401, so cached agents keep their MCP tools through token expiry.

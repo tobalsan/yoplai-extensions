@@ -124,7 +124,7 @@ describe("MCP OAuth routes", () => {
     const state = new URL((authorization as { redirect: string }).redirect).searchParams.get("state");
     expect(state).toBeTruthy();
     await expect(routes.routes.get("GET /mcp/oauth/callback")!(context({ code: "code", state: state! }))).resolves.toMatchObject({ body: expect.stringContaining("success:true") });
-    expect(discover).toHaveBeenCalledWith("https://api.claap.io/mcp");
+    expect(discover).toHaveBeenCalledWith("https://api.claap.io/mcp", { fetchFn: expect.any(Function) });
     expect(register).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ clientMetadata: expect.objectContaining({ redirect_uris: [redirectUri] }) }));
     expect(authorize).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ redirectUrl: redirectUri, resource: new URL("https://api.claap.io/mcp") }));
     expect(exchange).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ authorizationCode: "code", codeVerifier: "verifier" }));

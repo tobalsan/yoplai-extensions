@@ -36,6 +36,7 @@ export interface OAuthConnection {
 }
 
 export interface PendingOAuthFlow {
+  onComplete?: (targetId: string) => Promise<void>;
   scope: CredentialScope;
   agent: string;
   server: string;
@@ -52,6 +53,26 @@ function filePart(value: string): string {
 function expiry(tokens: OAuthTokens): string | undefined {
   return tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : undefined;
 }
+
+const oauthFetch: typeof fetch = async (input, init) => {
+  const controller = new AbortController();
+  const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(input, { ...init, signal });
+        if (!response.body) return response;
+        // The SDK reads JSON after fetch returns; keep slow bodies inside the deadline.
+        const body = await response.arrayBuffer();
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => { controller.abort(); reject(new Error("MCP OAuth request timed out")); }, 10_000);
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+};
 
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
@@ -128,9 +149,9 @@ export class McpOAuthStore {
     if (connection) await this.write(agent, server, { ...connection, state: "needs_reconnect" }, scope);
   }
 
-  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM): Promise<{ state: string; authorizationUrl: string }> {
+  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>): Promise<{ state: string; authorizationUrl: string }> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
-    const info = await discoverOAuthServerInfo(url);
+    const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
     if (!staticClient && !info.authorizationServerMetadata?.registration_endpoint) {
       throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json");
     }
@@ -139,6 +160,7 @@ export class McpOAuthStore {
       ? { client_id: staticClient.clientId, ...(staticClient.clientSecret ? { client_secret: staticClient.clientSecret } : {}), redirect_uris: [this.redirectUri] }
       : existing?.client ?? await registerClient(info.authorizationServerUrl, {
         metadata: info.authorizationServerMetadata,
+        fetchFn: oauthFetch,
         clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
       });
     const state = crypto.randomBytes(32).toString("base64url");
@@ -155,17 +177,20 @@ export class McpOAuthStore {
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");
     }
-    this.pending.set(state, { scope, agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
+    this.pending.set(state, { onComplete, scope, agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }
+
+  cancel(state: string): void { this.pending.delete(state); }
 
   async finish(state: string, code: string): Promise<{ agent: string; server: string }> {
     const pending = this.pending.get(state);
     this.pending.delete(state);
     if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000) throw new Error("OAuth state is invalid or expired");
-    const info = await discoverOAuthServerInfo(pending.url);
-    const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
+    const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
+    const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
     await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected" }, pending.scope);
+    await pending.onComplete?.(pending.server);
     return pending;
   }
 
