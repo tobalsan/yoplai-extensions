@@ -1,6 +1,6 @@
 # Gmail extension
 
-Gmail mailbox tools for an agent, via **per-agent OAuth** — no pasted secrets. The host supplies a fresh Google OAuth token when building the agent's tools; this extension stores neither tokens nor mailbox data.
+Gmail mailbox tools for an agent, via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host supplies a fresh Google OAuth token when building the agent's tools; this extension stores neither tokens nor mailbox data.
 
 Tools (mounted as `gmail_<name>`), the Google Gmail MCP's current ten-tool surface:
 
@@ -58,7 +58,7 @@ A fuller example alongside other extensions:
 name: mail-triage
 model: claude-sonnet-5
 extensions:
-  gmail: {}                # per-agent OAuth — nothing else to configure here
+  gmail: {}                # Google OAuth — nothing else to configure here
   googleDrive: {}
 ```
 
@@ -113,11 +113,11 @@ OAUTH_ENCRYPTION_KEY=<random 32-byte secret>
 
 Notes:
 - `oauth.encryptionKey` encrypts tokens at rest (AES-256-GCM). **Fail-closed:** without it the host refuses to persist tokens.
-- Connection is owned per **agent/workspace** (single shared grant), not per user.
+- Each connection is either **Just me** (personal: used only for that user's requests) or **Whole team** (shared fallback for everyone on the agent). Tool calls use the requester's personal connection first, then the team connection; another user's personal connection is never used. Only admins can change the Whole team connection.
 
 ## 5. User: connect
 
-In the Yoplai web UI, open **`/connections`** for the agent and click **Connect Google**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
+In the Yoplai web UI, open the agent's **Gmail** extension page (or the agent's **My connections** tab), pick the **Just me** or **Whole team** tab, and click **Connect**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
 
 - **Needs reconnect** (grant revoked/expired-beyond-refresh) → click **Reconnect**.
 - **Disconnect** revokes and clears the grant.

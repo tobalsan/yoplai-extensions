@@ -18,7 +18,7 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
     message:
       oauth && !oauth.connected
         ? oauth.message
-        : "Google Drive is not connected. Click Connect Google Drive in settings.",
+        : "Google Drive is not connected. Connect a Google account (Just me or Whole team) in the agent's Google Drive settings.",
     authorizeUrl:
       oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
   };
@@ -35,10 +35,10 @@ export default defineToolExtension({
   id: "googleDrive",
   displayName: "Google Drive",
   description:
-    "Read-only Google Drive access via per-agent OAuth. List and search files, and read a file's text content.",
+    "Read-only Google Drive access via Google OAuth: connect your own account (Just me) or a shared team account (Whole team). List and search files, and read a file's text content.",
   systemPrompt: `Use this extension for read-only Google Drive access.
 
-Authentication is handled by per-agent OAuth. If a tool reports not connected, tell the user to click "Connect Google Drive" in settings — do not attempt to guess or supply credentials.
+Authentication uses the requester's own Google connection, falling back to the team connection. If a tool reports not connected, share the connect link it returns (or tell the user to connect Google Drive in the agent's settings) — do not attempt to guess or supply credentials.
 
 Tools:
 - googleDrive_list_files: list accessible Drive files, optionally filtered by a name substring; supports pageSize and pageToken pagination

@@ -22,6 +22,8 @@ The source directory is the build/install directory name. The extension ID is th
 | `pipedrive` | `pipedrive` | Read-only Pipedrive CRM and custom-field normalization | Company domain and API token |
 | `zendesk` | `zendesk` | Read-only Zendesk ticket listing, search, and comments | Subdomain, email, and API key |
 
+In multi-user Yoplai, credentials can be personal or shared: each user can add their own API token or Google connection (**Just me**, used only for their requests), and admins set the shared fallback (**Whole team**). Requests use the requester's own credentials first, then the team's.
+
 Extension-specific operational documentation stays beside the owning slice or under `docs/specs/`. The authoritative host extension contract is maintained in the Yoplai repository rather than copied here.
 
 ## Usage

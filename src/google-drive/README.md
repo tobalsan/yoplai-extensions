@@ -1,6 +1,6 @@
 # Google Drive extension
 
-Read-only Google Drive access for an agent, via **per-agent OAuth** — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
+Read-only Google Drive access for an agent, via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
 
 Tools (mounted as `googleDrive_<name>`):
 
@@ -87,11 +87,11 @@ OAUTH_ENCRYPTION_KEY=<random 32-byte secret>
 
 Notes:
 - `oauth.encryptionKey` encrypts tokens at rest (AES-256-GCM). **Fail-closed:** without it the host refuses to persist tokens.
-- Connection is owned per **agent/workspace** (single shared grant), not per user.
+- Each connection is either **Just me** (personal: used only for that user's requests) or **Whole team** (shared fallback for everyone on the agent). Tool calls use the requester's personal connection first, then the team connection; another user's personal connection is never used. Only admins can change the Whole team connection.
 
 ## 5. User: connect
 
-In the Yoplai web UI, open **`/connections`** for the agent and click **Connect Google Drive**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
+In the Yoplai web UI, open the agent's **Google Drive** extension page (or the agent's **My connections** tab), pick the **Just me** or **Whole team** tab, and click **Connect**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
 
 - **Needs reconnect** (grant revoked/expired-beyond-refresh) → click **Reconnect**.
 - **Disconnect** revokes and clears the grant.

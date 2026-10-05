@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Gmail and Google Drive descriptions, agent instructions, and not-connected messages now say connections can be personal (**Just me**) or shared (**Whole team**) instead of "per-agent OAuth"; the READMEs describe the personal-then-team fallback and the current connect flow.
+
 ### Fixed
 
 - MCP disconnect removes the selected credential immediately; provider revocation runs in the background so outages cannot block team fallback (ALG-460).

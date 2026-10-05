@@ -21,7 +21,7 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
     connected: false,
     provider: "google",
     reason: disconnected?.reason ?? "not_connected",
-    message: disconnected?.message ?? "Gmail is not connected. Click Connect Google in settings.",
+    message: disconnected?.message ?? "Gmail is not connected. Connect a Google account (Just me or Whole team) in the agent's Gmail settings.",
     authorizeUrl: disconnected && "authorizeUrl" in disconnected ? disconnected.authorizeUrl : undefined,
   };
 }
@@ -29,7 +29,7 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
 export default defineToolExtension({
   id: "gmail",
   displayName: "Gmail",
-  description: "Gmail mailbox tools via per-agent Google OAuth.",
+  description: "Gmail mailbox tools via Google OAuth: connect your own account (Just me) or a shared team account (Whole team).",
   systemPrompt: "Use Gmail-compatible query syntax. Gmail content is returned only for this tool call; never repeat it unnecessarily.",
   configSchema: GmailConfigSchema,
   requiredSecrets: [],
