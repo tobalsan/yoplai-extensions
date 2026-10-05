@@ -106,7 +106,7 @@ describe("googleDrive extension", () => {
     expect(validate).toBeDefined();
 
     const result = await validate!.execute({});
-    expect(resolveOAuth).toHaveBeenCalledWith(agent, extension.oauth);
+    expect(resolveOAuth).toHaveBeenCalledWith(agent, extension.oauth, undefined);
     expect(result).toMatchObject({ connected: true, account: "bob@example.com" });
     expect(aboutSpy).toHaveBeenCalled();
   });

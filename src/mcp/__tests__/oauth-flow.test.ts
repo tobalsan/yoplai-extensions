@@ -1,10 +1,12 @@
+import { credentials } from "./credentials.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+let hostCredentials = credentials();
 const dirs: string[] = [];
-afterEach(async () => {
+afterEach(async () => { hostCredentials = credentials();
   vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js");
   vi.resetModules();
   await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -23,7 +25,7 @@ describe("MCP OAuth flow", () => {
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/api/mcp/oauth/callback");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/api/mcp/oauth/callback", hostCredentials);
     const started = await store.begin("casey", "claap", "https://api.claap.io/mcp");
     await store.finish(started.state, "code");
 
@@ -45,7 +47,7 @@ describe("MCP OAuth flow", () => {
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     const started = await store.begin("connie", "gmail", "https://gmail.test/mcp", { clientId: "cid", clientSecret: "secret", scopes: ["a", "b"] });
     await store.finish(started.state, "code");
 
@@ -74,7 +76,7 @@ describe("MCP OAuth flow", () => {
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     await store.write("casey", "claap", {
       client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
       tokens: { access_token: "expired", refresh_token: "refresh-1", token_type: "Bearer" },
@@ -109,7 +111,7 @@ describe("MCP OAuth flow", () => {
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     await store.write("casey", "claap", {
       client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
       tokens: { access_token: "still-valid", refresh_token: "refresh-1", token_type: "Bearer" },
@@ -131,7 +133,7 @@ describe("MCP OAuth flow", () => {
     }));
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-")); dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     const started = await store.begin("casey", "claap", "https://api.claap.io/mcp");
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1);
     await expect(store.finish(started.state, "code")).rejects.toThrow("invalid or expired");

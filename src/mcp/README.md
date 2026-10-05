@@ -2,6 +2,8 @@
 
 Connect an Yoplai agent to standard MCP servers declared in its `mcp.json`. Exposed tools are named `mcp__<server>__<tool>` (non-alphanumeric characters become `_`).
 
+The agent's **My connections** tab lists your personal MCP OAuth connections and team availability. Disconnect deletes your credential immediately; the next request uses the team connection or asks you to connect. Provider revocation runs separately and cannot delay local removal.
+
 ## Install
 
 ```bash
@@ -78,7 +80,7 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
 ```
 
-Open the agent's MCP extension settings and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the per-agent connection under its data directory with restrictive permissions.
+Open the agent's MCP extension settings, choose **Just me** or **Whole team**, and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the connection in the host's shared encrypted credential store (`ctx.credentials`). Tool execution resolves the authenticated requester's personal connection first, then the team connection; unattended runs use team only. A personal connection needing reconnect never falls back to another account. Existing per-agent OAuth files migrate as team connections after encrypted persistence succeeds; files remain readable until encryption is configured. New authorizations require the host credential store. Status and disconnect target the selected scope, and refresh/reconnect are isolated per credential.
 
 Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `yoplai.json` is sufficient; do not include an `/api` suffix:
 
@@ -99,3 +101,9 @@ Claap can instead use a workspace API key, which remains the unchanged static-he
 ```json
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp", "headers": { "Authorization": "Bearer ${CLAAP_API_KEY}" } } } }
 ```
+
+## Personal connections from Slack
+
+On hosts exposing `ctx.credentialConnect`, missing or unusable MCP credentials return the requester’s single connect link. The host verifies Slack ownership and pairs if needed before invoking MCP authorization; the grant is always **Just me**. MCP uses the trusted `mcpServers` configuration key (`server.name`) as the hook’s `targetId`, binds it and the personal owner to expiring CSRF/PKCE state, and confirms the original thread only after storing the grant. Provider denial, exchange failure, invalid/expired state, and replay never confirm. Existing team connections and hosts without the hook keep their normal behavior.
+
+This uses the context hook introduced by platform ALG-458 (PR #129, commit `2c56a866`); it does not import or bundle `@yoplai/shared`. Live Slack and Claap consent must be verified in a real workspace after deployment.

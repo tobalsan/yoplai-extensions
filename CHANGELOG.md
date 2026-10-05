@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- MCP disconnect removes the selected credential immediately; provider revocation runs in the background so outages cannot block team fallback (ALG-460).
+
+- MCP OAuth refusals in Slack offer one personal connect link, reusing host pairing and confirming the originating thread after authorization.
+
+- MCP **Whole team** connections can only be connected or disconnected by admins in multi-user mode; status reports `canConfigureTeam` so the UI can hide the option.
+- Google OAuth tool extensions (Gmail, Google Drive) now resolve the requesting user's personal "Just me" connection before the team one, instead of always reporting not connected.
 - MCP OAuth transports now force-refresh and reconnect after a 401, so cached agents keep their MCP tools through token expiry.
 - Concurrent MCP OAuth token requests now share one refresh, preserving rotated refresh tokens and avoiding duplicate provider calls.
 - Zendesk configuration now rejects invalid subdomains that could redirect API credentials to another host.
@@ -20,6 +26,8 @@
 - HTTP client errors now retain truncated upstream response bodies with status and endpoint details for actionable diagnostics.
 
 ### Added
+
+- MCP OAuth connections support personal or team credentials in the host encrypted store, with requester-specific resolution and legacy team migration (ALG-455).
 
 - Pipedrive Leads inbox read support: `list_leads` (lean projection, `archived_status`/`owner_id`/`person_id`/`organization_id`/`filter_id`/`sort` filters), `get_lead` (full detail with custom fields normalized through the same deal-field schema/registry as `get_deal`), `search_leads`, `list_lead_labels`, `list_lead_sources`, `list_lead_notes`, and `list_lead_activities` (v2 API). A lead's `person_id`/`organization_id` resolve via the existing `get_person`/`get_organization`.
 

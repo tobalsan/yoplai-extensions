@@ -160,7 +160,7 @@ describe("defineToolExtension", () => {
     expect(resolveOAuth).toHaveBeenCalledWith(agent, {
       provider: "google",
       scopes: ["scope"],
-    });
+    }, undefined);
     expect(createTools).toHaveBeenCalledWith(
       expect.objectContaining({ oauth })
     );
@@ -172,6 +172,30 @@ describe("defineToolExtension", () => {
         "- example_ready: Already mounted",
       ].join("\n"),
     ]);
+  });
+
+  it("resolves OAuth for the requesting user at build and call time", async () => {
+    const resolveOAuth = vi.fn().mockResolvedValue({
+      connected: true as const,
+      provider: "google",
+      accessToken: "user-token",
+      scopes: [],
+    });
+    const { extension } = createDefinition({
+      oauth: { provider: "google" },
+    });
+    const agent = { id: "agent-1", extensions: { example: { region: "eu" } } };
+    const context = {
+      config: { extensions: { example: { apiKey: "secret" } } },
+      userId: "user-a",
+      resolveOAuth,
+    };
+
+    const tools = await extension.getAgentTools(agent, context);
+    expect(resolveOAuth).toHaveBeenLastCalledWith(agent, { provider: "google" }, "user-a");
+
+    await tools[0]?.execute({ query: "q" }, { userId: "user-b" });
+    expect(resolveOAuth).toHaveBeenLastCalledWith(agent, { provider: "google" }, "user-b");
   });
 
   it("uses structured disconnected OAuth and preserves adapter JSON Schema", async () => {
