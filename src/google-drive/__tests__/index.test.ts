@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import extension from "../index.js";
-import { GoogleDriveClient } from "../client.js";
+import { GoogleDriveClient, GoogleDriveRequestError } from "../client.js";
 import type { ResolvedOAuth } from "../../tool-extension.js";
 
 describe("googleDrive extension", () => {
@@ -13,7 +13,7 @@ describe("googleDrive extension", () => {
     expect(extension.id).toBe("googleDrive");
     expect(extension.displayName).toBe("Google Drive");
     expect(extension.requiredSecrets).toEqual([]);
-    expect(extension.oauth).toEqual({
+    expect(typeof extension.oauth === "function" ? extension.oauth({ global: {}, agent: {}, merged: {} }) : extension.oauth).toEqual({
       provider: "google",
       scopes: [
         "https://www.googleapis.com/auth/drive.readonly",
@@ -106,7 +106,7 @@ describe("googleDrive extension", () => {
     expect(validate).toBeDefined();
 
     const result = await validate!.execute({});
-    expect(resolveOAuth).toHaveBeenCalledWith(agent, extension.oauth, undefined);
+    expect(resolveOAuth).toHaveBeenCalledWith(agent, typeof extension.oauth === "function" ? extension.oauth({ global: {}, agent: {}, merged: {} }) : extension.oauth, undefined);
     expect(result).toMatchObject({ connected: true, account: "bob@example.com" });
     expect(aboutSpy).toHaveBeenCalled();
   });
@@ -120,5 +120,51 @@ describe("googleDrive extension", () => {
     const result = (await validate.execute({})) as { connected: boolean; reason: string };
     expect(result.connected).toBe(false);
     expect(result.reason).toBe("provider_not_configured");
+  });
+});
+
+
+describe("write mode", () => {
+  it("defaults to read-only and exposes six writes only when enabled", () => {
+    const names = (merged: Record<string, unknown>) => extension.createTools({ global: {}, agent: {}, merged }).map((tool) => tool.name);
+    expect(names({})).toEqual(["list_files", "search_files", "read_file", "validate"]);
+    expect(names({ allowWrite: false })).toEqual(names({}));
+    expect(names({ allowWrite: true })).toEqual([...names({}), "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
+    expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false } } });
+  });
+
+  it.each([[true, false, false], [false, true, true]])("agent override beats root (%s / %s)", async (rootWrite, agentWrite, expectedWrite) => {
+    const resolveOAuth = vi.fn(async (_agent: { id: string }, _requirement: import("../../tool-extension.js").OAuthRequirement) => ({ connected: false as const, provider: "google", reason: "not_connected" as const, message: "Connect Google" }));
+    const agent = { id: "a1", extensions: { googleDrive: { allowWrite: agentWrite } } };
+    const context = { config: { extensions: { googleDrive: { allowWrite: rootWrite } } }, resolveOAuth };
+    const tools = await extension.getAgentTools(agent, context);
+    expect(tools.some((tool) => tool.name === "googleDrive_create_file")).toBe(expectedWrite);
+    const scopes = resolveOAuth.mock.calls[0][1].scopes;
+    expect(scopes).toEqual([
+      "https://www.googleapis.com/auth/drive.readonly",
+      ...(expectedWrite ? ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets"] : []),
+      "https://www.googleapis.com/auth/userinfo.email",
+    ]);
+    await tools[0].execute({});
+    expect(resolveOAuth).toHaveBeenCalledTimes(2);
+    expect(resolveOAuth.mock.calls[1][1]).toEqual(resolveOAuth.mock.calls[0][1]);
+    const prompts = await extension.getSystemPromptContributions(agent, context);
+    expect(prompts!.join("\n").includes("googleDrive_create_file")).toBe(expectedWrite);
+  });
+
+  it("preserves the host insufficient_scope reconnect link", async () => {
+    const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
+      connected: false, provider: "google", reason: "insufficient_scope", message: "Reconnect", authorizeUrl: "/authorize?scopes=write",
+    } });
+    await expect(tools.find((tool) => tool.name === "create_file")!.execute({ name: "Clients", content: "" })).resolves.toMatchObject({ reason: "insufficient_scope", authorizeUrl: "/authorize?scopes=write" });
+  });
+
+  it("turns API permission refusals into insufficient_scope", async () => {
+    vi.spyOn(GoogleDriveClient.prototype, "createFolder").mockRejectedValue(new GoogleDriveRequestError("Forbidden", 403, "files", "permission denied"));
+    const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
+      connected: true, provider: "google", accessToken: "token", scopes: [],
+    } });
+    await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toMatchObject({ reason: "insufficient_scope" });
+    vi.restoreAllMocks();
   });
 });

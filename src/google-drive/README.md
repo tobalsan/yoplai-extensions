@@ -1,6 +1,6 @@
 # Google Drive extension
 
-Read-only Google Drive access for an agent, via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
+Google Drive access for an agent (read-only by default; optional file and Sheets writes), via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
 
 Tools (mounted as `googleDrive_<name>`):
 
@@ -9,7 +9,18 @@ Tools (mounted as `googleDrive_<name>`):
 - `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF and DOCX text-extracted)
 - `validate` — confirm the connection is live; returns the connected Google account
 
-Scopes requested: `drive.readonly` + `userinfo.email`. Read-only, no mutations.
+Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file` and `spreadsheets`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets.
+
+Write tools (only mounted when `allowWrite: true`):
+
+- `create_folder` — name and optional parent folder id
+- `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
+- `update_file_content` — overwrite content (text for Docs, CSV for Sheets)
+- `rename_move_file` — rename and/or add/remove parent folders
+- `sheets_update_range` — A1 range and `values` row arrays
+- `sheets_append_rows` — A1 table range and `rows` arrays; appends using `USER_ENTERED`
+
+Read the target before writing, confirm when ambiguous, and report what changed. Deleting, sharing, and permissions are not exposed. API 403 responses return `insufficient_scope`; 429 responses retry twice, then return `rate_limited`.
 
 ---
 
@@ -29,21 +40,24 @@ ln -sfn "$PWD/dist/google-drive" ~/.yoplai/extensions/google-drive
 
 ## 2. Enable it for an agent
 
-Opt in under `extensions` in the agent's `agent.yaml`. Config is empty — the token is injected by the host, not read from here.
+Opt in under `extensions` in the agent's `agent.yaml`. The token is injected by the host. `allowWrite` defaults to false; enable it with the toggle on the agent extension page, then reconnect Google to approve write scopes.
 
 `~/.yoplai/agents/<agent>/agent.yaml`:
 
 ```yaml
 extensions:
-  googleDrive: {}          # presence opts in; enabled: true is optional
+  googleDrive:
+    allowWrite: true       # omit or false for read-only
 ```
+
+Root `extensions.googleDrive.allowWrite` sets the shared default; an agent's explicit `allowWrite` overrides it (including `false`).
 
 ## 3. Operator: register a Google OAuth client (one-time, in GCP)
 
 In the [Google Cloud Console](https://console.cloud.google.com/):
 
-1. **Enable the Google Drive API** (APIs & Services → Library).
-2. **OAuth consent screen** — add the scope `.../auth/drive.readonly` (and `userinfo.email`).
+1. **Enable the Google Drive API** (and Google Sheets API for write mode) (APIs & Services → Library).
+2. **OAuth consent screen** — add `.../auth/drive.readonly` and `userinfo.email`; write mode also needs `.../auth/drive.file` and `.../auth/spreadsheets`.
 3. **Credentials → Create OAuth client ID → Web application.**
 4. Under **Authorized redirect URIs**, add — byte-for-byte, per deployment:
 
@@ -93,6 +107,7 @@ Notes:
 
 In the Yoplai web UI, open the agent's **Google Drive** extension page (or the agent's **My connections** tab), pick the **Just me** or **Whole team** tab, and click **Connect**. This opens Google's consent screen; on return the state shows **Connected as `<email>`**.
 
+- **Insufficient scope** (e.g. write mode enabled after a read-only grant) → reconnect and approve the configured scopes. The reconnect URL requests those scopes.
 - **Needs reconnect** (grant revoked/expired-beyond-refresh) → click **Reconnect**.
 - **Disconnect** revokes and clears the grant.
 
@@ -105,3 +120,16 @@ Until connected, every tool returns a documented not-connected signal (never a r
 Run `googleDrive_validate` from the agent — a healthy connection returns `connected: true` with the Google account and scopes.
 
 Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md`.
+
+
+## Human OAuth verification checklist
+
+Use the external-testing Google OAuth app (no agent-driven OAuth E2E):
+
+1. Confirm read-only mode lists/reads files and exposes no writes; enable and save `allowWrite` on the agent page, then reconnect with the write scopes.
+2. Create a Sheet with `create_file` (`convertTo: "sheet"`), append rows, and update an A1 range, including a pre-existing Sheet.
+3. Read the result, rename/move the file, and confirm the reported changes in Drive.
+4. Confirm Gmail tools still work on the same Google connection after Drive reconnect (Google incremental consent preserves prior grants).
+5. Confirm an agent `allowWrite: false` overrides a root `true` default and hides write tools.
+
+Requires the platform release with config-dependent OAuth requirements; land platform first.
