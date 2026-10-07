@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { McpClientManager } from "../client-manager.js";
-import { adaptMcpTools, getMcpExtensionToolName } from "../tool-adapter.js";
+import { adaptMcpTools, getMcpExtensionToolName, normalizeTypeLists } from "../tool-adapter.js";
 
 describe("MCP tool adapter", () => {
   it("namespaces server and tool names and preserves JSON schema parameters", async () => {
@@ -66,5 +66,23 @@ describe("MCP tool adapter", () => {
       "mcp__github_main__search_issues",
       "mcp__github_main__search_issues__2",
     ]);
+  });
+
+  it("rewrites JSON Schema type lists as anyOf", () => {
+    expect(
+      normalizeTypeLists({
+        type: "object",
+        properties: {
+          folder: { type: ["string", "null"], description: "d" },
+          tags: { type: ["array"], items: { type: ["string", "null"] } },
+        },
+      })
+    ).toEqual({
+      type: "object",
+      properties: {
+        folder: { anyOf: [{ type: "string" }, { type: "null" }], description: "d" },
+        tags: { type: "array", items: { anyOf: [{ type: "string" }, { type: "null" }] } },
+      },
+    });
   });
 });

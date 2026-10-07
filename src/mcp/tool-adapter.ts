@@ -12,6 +12,22 @@ export function getMcpExtensionToolName(tool: McpToolDefinition): string {
   return `mcp__${sanitizeSegment(tool.server)}__${sanitizeSegment(tool.name)}`;
 }
 
+// Some providers' tool-call parsers (e.g. opencode-go MiMo) break on
+// `type: [...]` lists; `anyOf` is equivalent and broadly supported.
+export function normalizeTypeLists(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(normalizeTypeLists);
+  if (!schema || typeof schema !== "object") return schema;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) out[key] = normalizeTypeLists(value);
+  if (Array.isArray(out.type)) {
+    const types = out.type as unknown[];
+    delete out.type;
+    if (types.length === 1) out.type = types[0];
+    else out.anyOf = types.map((type) => ({ type }));
+  }
+  return out;
+}
+
 export function adaptMcpTools(
   tools: McpToolDefinition[],
   manager: McpClientManager
@@ -26,7 +42,7 @@ export function adaptMcpTools(
       name,
       description: tool.description,
       parameters: z.object({}).passthrough(),
-      jsonSchemaParameters: tool.inputSchema,
+      jsonSchemaParameters: normalizeTypeLists(tool.inputSchema) as Record<string, unknown>,
       execute: async (params) => manager.invokeTool(tool.server, tool.name, params),
     };
   });
