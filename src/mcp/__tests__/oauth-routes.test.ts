@@ -34,7 +34,7 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("GET /mcp/oauth/status")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
   });
-  it("restricts team connections to staff in multi-user mode", async () => {
+  it("allows members with agent access to manage team connections", async () => {
     const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
@@ -44,9 +44,9 @@ describe("MCP OAuth routes", () => {
     const as = (role: string, query: Record<string, string>) => ({ ...context(query), get: () => ({ user: { id: "user-a", role } }) });
     const member = { agent: "casey", server: "claap", scope: "team" };
 
-    await expect(routes.routes.get("GET /mcp/oauth/authorize")!(as("user", member))).resolves.toMatchObject({ status: 403 });
-    await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(as("user", member))).resolves.toMatchObject({ status: 403 });
-    await expect(routes.routes.get("GET /mcp/oauth/status")!(as("user", { agent: "casey" }))).resolves.toMatchObject({ canConfigureTeam: false });
+    await expect(routes.routes.get("GET /mcp/oauth/authorize")!(as("user", member))).resolves.not.toMatchObject({ status: 403 });
+    await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(as("user", member))).resolves.toEqual({ ok: true });
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(as("user", { agent: "casey" }))).resolves.toMatchObject({ canConfigureTeam: true });
     await expect(routes.routes.get("GET /mcp/oauth/status")!(as("admin", { agent: "casey" }))).resolves.toMatchObject({ canConfigureTeam: true });
   });
 

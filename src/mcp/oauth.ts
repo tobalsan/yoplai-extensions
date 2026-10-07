@@ -95,7 +95,7 @@ export class McpOAuthStore {
     await this.read(agent, server, TEAM);
     const personal = requesterUserId ? this.credentials?.get<OAuthConnection>(this.key(agent, server, { type: "personal", userId: requesterUserId })) : undefined;
     if (personal) return { connection: personal, scope: { type: "personal", userId: requesterUserId! } };
-    const result = this.credentials?.resolve<OAuthConnection>({ agentId: agent, integration: `mcp:${server}`, requesterUserId, connectUrl: `/agents/${encodeURIComponent(agent)}/extensions/mcp?scope=personal` });
+    const result = this.credentials?.resolve<OAuthConnection>({ agentId: agent, integration: `mcp:${server}`, requesterUserId, connectUrl: `/agents/${encodeURIComponent(agent)}/edit` });
     if (result?.connected) return { connection: result.payload, scope: result.scope };
     const legacy = await this.readLegacy(agent, server);
     return legacy ? { connection: legacy, scope: TEAM } : undefined;

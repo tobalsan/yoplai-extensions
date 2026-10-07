@@ -14,19 +14,7 @@ ln -sfn "$PWD/dist/mcp" ~/.yoplai/extensions/mcp
 
 ## Enable an agent
 
-MCP requires explicit opt-in with `enabled: true`.
-
-`~/.yoplai/agents/research/agent.yaml`:
-
-```yaml
-id: research
-name: Research
-extensions:
-  mcp:
-    enabled: true
-```
-
-By default, the extension loads `mcp.json` from the agent directory.
+MCP is available automatically when the agent directory contains `mcp.json`; an `enabled` flag is not required. Without that file, no MCP tools or server cards appear. By default, the extension loads `mcp.json` from the agent directory.
 
 ## Configure servers
 
@@ -66,7 +54,6 @@ Set `configPath` or `agentDir` when the defaults do not fit:
 ```yaml
 extensions:
   mcp:
-    enabled: true
     configPath: /srv/yoplai/mcp/research.json
 ```
 
@@ -80,7 +67,9 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
 ```
 
-Open the agent's MCP extension settings, choose **Just me** or **Whole team**, and connect Claap. The extension discovers the OAuth server, dynamically registers a client, and stores the connection in the host's shared encrypted credential store (`ctx.credentials`). Tool execution resolves the authenticated requester's personal connection first, then the team connection; unattended runs use team only. A personal connection needing reconnect never falls back to another account. Existing per-agent OAuth files migrate as team connections after encrypted persistence succeeds; files remain readable until encryption is configured. New authorizations require the host credential store. Status and disconnect target the selected scope, and refresh/reconnect are isolated per credential.
+The agent's extension list at `/agents/<agent-id>/edit` shows every configured MCP server as its own card. **Add custom extension** accepts an HTTP(S) URL and **Just me** or **Whole team**; a detected OAuth server starts authorization immediately. A server without OAuth is connected directly. Existing stdio and hand-configured HTTP servers also appear as cards with their configuration read-only. **Disconnect** deletes the selected OAuth credential but keeps the server; **Remove** deletes the server from the shared `mcp.json` for everyone, after confirmation in the UI. Missing app icons use the generic MCP icon. Tool refusals link back to that agent edit page.
+
+The extension discovers OAuth servers, dynamically registers clients, and stores connections in the host's shared encrypted credential store (`ctx.credentials`). Tool execution resolves the authenticated requester's personal connection first, then the team connection; unattended runs use team only. A personal connection needing reconnect never falls back to another account. Existing per-agent OAuth files migrate as team connections after encrypted persistence succeeds; files remain readable until encryption is configured. New authorizations require the host credential store. Status and disconnect target the selected scope, and refresh/reconnect are isolated per credential. An agent member with access may select either scope.
 
 Set `BASE_URL` to the public gateway origin so the OAuth provider can return to the gateway. Top-level `env` in `yoplai.json` is sufficient; do not include an `/api` suffix:
 

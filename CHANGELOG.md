@@ -4,9 +4,13 @@
 
 ### Added
 
+- MCP servers now appear as individual extension cards, and agent members can add HTTP(S) servers from the extension list with immediate OAuth authorization or direct no-auth connection (ALG-469).
+
 - MCP OAuth connections and removals record redacted settings audit events when the host supports auditing (ALG-470).
 
 ### Changed
+
+- MCP loads automatically when an agent has `mcp.json`; server cards show live connection state and app icons when available, while disconnect and removal remain separate actions (ALG-469).
 
 - Google Drive now supports an optional `allowWrite` toggle for creating/editing files and Google Sheets, with mode-specific OAuth scopes and reconnect guidance (ALG-467). The toggle is labeled **Enable creating and writing files**; extensions can set config field labels via `configFieldTitles`.
 

@@ -98,8 +98,8 @@ describe("MCP Slack credential connect", () => {
     const refusal = tools.find((tool) => tool.name === "mcp__claap__not_connected")!;
 
     await expect(refusal.execute({}, { userId: "user-a" })).resolves.toMatchObject({
-      authorizeUrl: "/agents/agent-a/extensions/mcp?scope=personal",
-      message: expect.stringContaining("own MCP connection settings"),
+      authorizeUrl: "/agents/agent-a/edit",
+      message: expect.stringContaining("agent's extensions"),
     });
     await extension.stop();
   });
@@ -113,7 +113,7 @@ describe("MCP Slack credential connect", () => {
     const tools = await extension.getAgentTools(agent, { userId: "user-a", config: {} });
     const refusal = tools.find((tool) => tool.name === "mcp__claap__not_connected")!;
 
-    await expect(refusal.execute({}, undefined)).resolves.toMatchObject({ authorizeUrl: expect.stringContaining("scope=personal") });
+    await expect(refusal.execute({}, undefined)).resolves.toMatchObject({ authorizeUrl: "/agents/agent-a/edit" });
     expect(requestLink).not.toHaveBeenCalled();
     await extension.stop();
   });

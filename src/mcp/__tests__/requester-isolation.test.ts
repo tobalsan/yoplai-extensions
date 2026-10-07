@@ -30,7 +30,7 @@ describe("MCP requester isolation", () => {
       const tool = tools.find((entry) => entry.name === "mcp__claap__data");
       expect(tool).toBeDefined();
       await expect(tool!.execute({}, { userId: "A" })).resolves.toBe("A");
-      await expect(tool!.execute({}, { userId: "B" })).resolves.toMatchObject({ connected: false, authorizeUrl: expect.stringContaining("scope=personal") });
+      await expect(tool!.execute({}, { userId: "B" })).resolves.toMatchObject({ connected: false, authorizeUrl: "/agents/casey/edit" });
       await expect(tool!.execute({})).resolves.toMatchObject({ connected: false });
       expect(calls.mock.calls).toEqual([["A"]]);
       await store.write("casey", "claap", connection("team"));

@@ -5,7 +5,7 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
-import { loadMcpConfigFile, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
+import { loadMcpConfigFile, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
 import { McpOAuthStore, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
@@ -36,7 +36,7 @@ type AgentLike = {
 
 type RouteContext = {
   get?(name: string): unknown;
-  req: { query(name: string): string | undefined };
+  req: { query(name: string): string | undefined; json?(): Promise<unknown> };
   json(body: unknown): unknown;
   text(body: string, status?: number): unknown;
   html(body: string, status?: number): unknown;
@@ -107,6 +107,39 @@ function resolveConfigPath(agent: AgentLike, config: ResolvedToolExtensionConfig
   return path.join(resolveAgentDir(agent, config), "mcp.json");
 }
 
+function readRawConfig(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return { mcpServers: {} };
+  const raw: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (!isRecord(raw) || !isRecord(raw.mcpServers)) throw new Error("Invalid mcp.json: mcpServers must be an object");
+  return raw;
+}
+
+function writeRawConfig(filePath: string, config: Record<string, unknown>): void {
+  const temporary = `${filePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function extensionHub(agentId: string): string {
+  return `/agents/${encodeURIComponent(agentId)}/edit`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function resolveExtensionConfig(
   agent: AgentLike,
   rootConfig: { extensions?: Record<string, unknown> }
@@ -161,7 +194,6 @@ const baseExtension = defineToolExtension({
   agentConfigSchema: McpExtensionConfigSchema,
   requiredSecrets: [],
   advancedConfigFields: ["configPath", "agentDir"],
-  configRoute: { path: "/agents/:agentId/extensions/mcp" },
   createTools() {
     return [];
   },
@@ -187,6 +219,8 @@ export function resolveOAuthRedirectUri(config: McpRuntimeConfig): string {
 export function createMcpExtension(clientFactory?: McpClientFactory) {
   const managers = new Map<string, Promise<McpClientManager>>();
   const oauthServers = new Set<string>();
+  const oauthProbeResults = new Map<string, { result: boolean; until: number }>();
+  const oauthProbes = new Map<string, Promise<boolean>>();
   let runtime: McpRuntime | undefined;
   let oauth: McpOAuthStore | undefined;
   let connect: CredentialConnectHost | undefined;
@@ -200,6 +234,52 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const configPath = resolveConfigPath(agent, resolved);
     if (!fs.existsSync(configPath)) return undefined;
     return loadMcpConfigFile(configPath, resolveInterpolationEnv(agent, root, resolved));
+  }
+
+  function configForAgent(agentId: string): { agent: AgentLike; path: string } | undefined {
+    const agent = runtime?.getAgent(agentId);
+    if (!agent || !runtime) return undefined;
+    return { agent, path: resolveConfigPath(agent, resolveExtensionConfig(agent, runtime.getConfig())) };
+  }
+
+  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string) {
+    const oauthServer = server.type === "http" && !server.headers && await isOAuthServer(agentId, server);
+    const auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
+    const personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
+    const team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
+    const scopeState = (connection: typeof personal) => connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected";
+    const config = configForAgent(agentId);
+    const raw = config && fs.existsSync(config.path) ? readRawConfig(config.path) : undefined;
+    const rawServer = isRecord(raw?.mcpServers) ? raw.mcpServers[server.name] : undefined;
+    const managed = isRecord(rawServer) && rawServer.yoplaiManaged === true;
+    let connected = false;
+    let iconUrl: string | undefined;
+    const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
+    try {
+      const manager = await getManager(key, agentId, [server], requesterUserId);
+      const tools = await manager.listTools();
+      connected = manager.hasClient(server.name) && tools.some((tool) => tool.server === server.name);
+      const icon = manager.getServerIcon(server.name);
+      if (icon) {
+        try {
+          const candidate = new URL(icon, server.type === "http" ? server.url : undefined);
+          if (candidate.protocol === "http:" || candidate.protocol === "https:") iconUrl = candidate.toString();
+        } catch { /* Ignore invalid server-provided icons. */ }
+      }
+    } finally {
+      const manager = await managers.get(key);
+      managers.delete(key);
+      if (manager) void manager.close().catch(() => {});
+    }
+    return {
+      name: server.name,
+      type: server.type,
+      ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? new URL("/favicon.ico", server.url).toString() } : iconUrl ? { iconUrl } : {}),
+      auth,
+      state: connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected",
+      ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team) } : {}),
+      readOnly: !managed,
+    };
   }
 
   async function connectResponse(server: string, execution: unknown, response: unknown): Promise<unknown> {
@@ -216,27 +296,40 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const key = `${agent}:${server.name}`;
     if (server.oauth) return true;
     if (oauthServers.has(key) || await oauth?.read(agent, server.name)) return true;
-    try {
-      const response = await fetch(server.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: AbortSignal.timeout(10_000),
-        body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-detection", method: "initialize", params: {} }),
-      });
-      if (response.status === 401) oauthServers.add(key);
-    } catch {
-      // Connection failures are not evidence that this server uses OAuth.
-    }
-    return oauthServers.has(key);
+    const probeKey = `${key}:${server.url}`;
+    const cached = oauthProbeResults.get(probeKey);
+    if (cached && cached.until > Date.now()) return cached.result;
+    const active = oauthProbes.get(probeKey);
+    if (active) return active;
+    const probe = (async () => {
+      let result = false;
+      try {
+        const response = await withTimeout(fetch(server.url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(10_000),
+          body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-detection", method: "initialize", params: {} }),
+        }), 10_000, "MCP OAuth detection timed out");
+        result = response.status === 401;
+        if (result) oauthServers.add(key);
+      } catch {
+        // Connection failures are not evidence that this server uses OAuth.
+      }
+      oauthProbeResults.set(probeKey, { result, until: Date.now() + 30_000 });
+      return result;
+    })();
+    oauthProbes.set(probeKey, probe);
+    try { return await probe; }
+    finally { oauthProbes.delete(probeKey); }
   }
 
   async function resetManagers(agent: string): Promise<void> {
     const keys = [...managers.keys()].filter((key) => key.startsWith(`${agent}:`));
-    await Promise.all(keys.map(async (key) => {
-      const manager = await managers.get(key);
+    for (const key of keys) {
+      const pending = managers.get(key);
       managers.delete(key);
-      await manager?.close();
-    }));
+      if (pending) void pending.then((manager) => manager.close()).catch(() => {});
+    }
   }
 
   async function getManager(
@@ -246,7 +339,11 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     requesterUserId?: string
   ): Promise<McpClientManager> {
     const cached = managers.get(key);
-    if (cached) return cached;
+    if (cached) {
+      const manager = await cached;
+      await manager.connect();
+      return manager;
+    }
     const managerPromise = (async () => {
       const selectedScopes = new Map<string, CredentialScope>();
       const manager = new McpClientManager(
@@ -268,7 +365,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
           return false;
         },
         async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
-        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it using your own MCP connection settings.`, authorizeUrl: `/agents/${encodeURIComponent(agentId)}/extensions/mcp?scope=personal&server=${encodeURIComponent(server)}` }),
+        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
         async (server) => {
           if (server.type === "http" && !server.headers) {
             const scope = selectedScopes.get(server.name);
@@ -324,13 +421,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const auth = c.get?.("multiUserAuthContext");
       return isRecord(auth) && isRecord(auth.user) && typeof auth.user.id === "string" ? auth.user.id : undefined;
     }
-    // Team grants act for everyone, so only staff may set or remove them.
     function canConfigureTeam(c: RouteContext): boolean {
-      if (!multiUserEnabled()) return true;
-      const auth = c.get?.("multiUserAuthContext");
-      const role = isRecord(auth) && isRecord(auth.user) ? auth.user.role : undefined;
-      const roles = Array.isArray(role) ? role : [role];
-      return roles.some((r) => r === "admin" || r === "superadmin");
+      return !multiUserEnabled() || Boolean(userId(c));
     }
     function requestedScope(c: RouteContext): CredentialScope | undefined {
       const id = userId(c);
@@ -339,6 +431,79 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (c.req.query("scope") === "personal") return { type: "personal", userId: id };
       return undefined;
     }
+    app.get("/mcp/servers", async (c) => {
+      const agentId = c.req.query("agent");
+      if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const loaded = loadedForAgent(agentId);
+      const servers = loaded ? await Promise.all(loaded.servers.map((server) => serverCard(agentId, server, userId(c)))) : [];
+      return c.json({ servers, canConfigureTeam: canConfigureTeam(c) });
+    });
+    app.post("/mcp/servers", async (c) => {
+      const agentId = c.req.query("agent");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !config) return c.text("Unknown agent", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!isRecord(input) || typeof input.url !== "string" || (input.credentialScope !== "personal" && input.credentialScope !== "team")) return c.text("URL and credentialScope are required", 400);
+      if (input.credentialScope === "team" && !canConfigureTeam(c)) return c.text("Team connections are unavailable", 403);
+      let url: URL;
+      try { url = new URL(input.url); }
+      catch { return c.text("Invalid MCP server URL", 400); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
+      const name = `${url.hostname.replace(/[^A-Za-z0-9_]/g, "_")}_${crypto.randomBytes(6).toString("hex")}`;
+      const server: McpServerConfig = { type: "http", name, url: url.toString() };
+      const scope: CredentialScope = input.credentialScope === "team" ? { type: "team" } : userId(c) ? { type: "personal", userId: userId(c)! } : { type: "team" };
+      if (input.credentialScope === "personal" && scope.type !== "personal") return c.text("Authentication required for personal connection", 401);
+      let flow: { state: string; authorizationUrl: string } | undefined;
+      try {
+        if (await isOAuthServer(agentId, server)) {
+          if (!oauth) throw new Error("OAuth is unavailable");
+          const store = oauth;
+          let timedOut = false;
+          const pending = store.begin(agentId, name, server.url, undefined, scope, undefined, actor(c));
+          void pending.then((late) => { if (timedOut) store.cancel(late.state); }).catch(() => {});
+          try {
+            flow = await withTimeout(pending, 30_000, "MCP OAuth authorization timed out");
+          } catch (error) {
+            timedOut = true;
+            throw error;
+          }
+        }
+        const root = readRawConfig(config.path);
+        const servers = root.mcpServers as Record<string, unknown>;
+        if (Object.hasOwn(servers, name)) throw new Error("MCP server name collision; retry adding the server");
+        servers[name] = { url: server.url, yoplaiManaged: true };
+        writeRawConfig(config.path, root);
+        await resetManagers(agentId);
+        audit({ ...actor(c), action: "mcp.server.add", agentId, targetType: "mcp", targetId: name, scope: scope.type, changes: [{ field: "mcpServers", secret: "set" }] });
+        return c.json({ server: await serverCard(agentId, server, userId(c)), ...(flow ? { authorizationUrl: flow.authorizationUrl } : {}) });
+      } catch (error) {
+        if (flow) oauth?.cancel(flow.state);
+        return c.text(error instanceof Error ? error.message : "Unable to add MCP server", 400);
+      }
+    });
+    app.post("/mcp/servers/remove", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      try {
+        const root = readRawConfig(config.path);
+        const servers = root.mcpServers as Record<string, unknown>;
+        if (!Object.hasOwn(servers, name)) return c.text("Unknown MCP server", 404);
+        delete servers[name];
+        writeRawConfig(config.path, root);
+        await resetManagers(agentId);
+        audit({ ...actor(c), action: "mcp.server.remove", agentId, targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "mcpServers", secret: "removed" }] });
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to remove MCP server", 400);
+      }
+    });
     app.get("/mcp/oauth/status", async (c) => {
       const scope = requestedScope(c);
       if (!scope) return c.text("Authenticated credential scope required", 400);
@@ -366,7 +531,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         const base = `/api/mcp/oauth/authorize?agent=${encodeURIComponent(agent)}&server=${encodeURIComponent(server.name)}`;
         return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a>${canConfigureTeam(c) ? ` <a href="${base}&scope=team">Whole team</a>` : ""}`);
       }
-      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
+      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Team connections are unavailable", 403);
       try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope, undefined, actor(c))).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
@@ -382,7 +547,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     app.post("/mcp/oauth/disconnect", async (c) => {
       const scope = requestedScope(c);
       if (!scope) return c.text("Authenticated credential scope required", 400);
-      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
+      if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Team connections are unavailable", 403);
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
       if (await oauth.disconnect(agent, name, scope)) {
@@ -395,21 +560,16 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   },
   getSystemPromptContributions(agent: AgentLike, context?: { config: { extensions?: Record<string, unknown> } }) {
     if (!context) return undefined;
-    if (!isRecord(agent.extensions?.mcp) || agent.extensions.mcp.enabled !== true) {
-      return undefined;
-    }
-    return baseExtension.getSystemPromptContributions(agent, context);
+    const configPath = resolveConfigPath(agent, resolveExtensionConfig(agent, context.config));
+    return fs.existsSync(configPath) ? [baseExtension.systemPrompt] : undefined;
   },
   validateAgentConfigs(config: { agents: AgentLike[]; extensions?: Record<string, unknown> }) {
     const errors: string[] = [];
     for (const agent of config.agents) {
-      if (!isRecord(agent.extensions?.mcp) || agent.extensions.mcp.enabled !== true) {
-        continue;
-      }
       try {
         McpExtensionConfigSchema.parse({
           ...resolveConfigRecord(config.extensions?.mcp),
-          ...resolveConfigRecord(agent.extensions.mcp),
+          ...resolveConfigRecord(agent.extensions?.mcp),
         });
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
@@ -421,6 +581,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     unregister?.();
     unregister = undefined;
     connect = undefined;
+    oauthProbeResults.clear();
+    oauthProbes.clear();
+    oauthServers.clear();
     const resolvedManagers = await Promise.all([...managers.values()]);
     await Promise.all(resolvedManagers.map((manager) => manager.close()));
     managers.clear();
@@ -428,19 +591,15 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   },
   async getAgentTools(agent: AgentLike, context?: { userId?: string; config: { extensions?: Record<string, unknown>; env?: Record<string, string> } }) {
     if (!context) return [];
-    if (!isRecord(agent.extensions?.mcp) || agent.extensions.mcp.enabled !== true) {
-      return [];
-    }
     const extensionConfig = resolveExtensionConfig(agent, context.config);
     const configPath = resolveConfigPath(agent, extensionConfig);
     if (!fs.existsSync(configPath)) return [];
 
-    const loaded = loadMcpConfigFile(
-      configPath,
-      resolveInterpolationEnv(agent, context.config, extensionConfig)
-    );
+    const rawConfig = fs.readFileSync(configPath, "utf8");
+    const revision = crypto.createHash("sha256").update(rawConfig).digest("hex");
+    const loaded = parseMcpConfig(rawConfig, resolveInterpolationEnv(agent, context.config, extensionConfig));
     logConfigErrors(loaded);
-    const manager = await getManager(`${agent.id}:${configPath}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, context.userId);
+    const manager = await getManager(`${agent.id}:${configPath}:${revision}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, context.userId);
     const definitions = await manager.listTools();
     const tools = adaptMcpTools(definitions, manager);
     const connectedTools = tools.map((tool, index) => ({
@@ -448,6 +607,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       execute: async (params: unknown, execution?: { userId?: string }) => {
+        if (!fs.existsSync(configPath) || crypto.createHash("sha256").update(fs.readFileSync(configPath, "utf8")).digest("hex") !== revision) {
+          return { connected: false, provider: "mcp", reason: "configuration_changed", message: "MCP server settings changed. Reload the agent's tools." };
+        }
         const definition = definitions[index]!;
         const target = loaded.servers.find((server) => server.name === definition.server)!;
         if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target)) return tool.execute(params);
@@ -457,7 +619,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         try {
           const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
           if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params));
-          return connectResponse(target.name, execution, { connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server using your own connection settings.", authorizeUrl: `/agents/${encodeURIComponent(agent.id)}/extensions/mcp?scope=personal` });
+          return connectResponse(target.name, execution, { connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
         } finally { managers.delete(key); await fresh.close(); }
       },
     }));
@@ -465,9 +627,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (!await isOAuthServer(agent.id, server) || await oauth?.accessToken(agent.id, server.name, 60_000, context.userId)) return undefined;
       return {
         name: `mcp__${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__not_connected`,
-        description: `Connect ${server.name} in the MCP extension settings before using its tools.`,
+        description: `Connect ${server.name} from the agent's extensions before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: async (_params: unknown, execution?: { userId?: string }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it using your own MCP connection settings.`, authorizeUrl: `/agents/${encodeURIComponent(agent.id)}/extensions/mcp?scope=personal` }),
+        execute: async (_params: unknown, execution?: { userId?: string }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
       };
     }));
     return [...connectedTools, ...disconnected.filter((tool): tool is NonNullable<typeof tool> => Boolean(tool))];
