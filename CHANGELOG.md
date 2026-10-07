@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- MCP OAuth connections and removals record redacted settings audit events when the host supports auditing (ALG-470).
+
 ### Changed
 
 - Google Drive now supports an optional `allowWrite` toggle for creating/editing files and Google Sheets, with mode-specific OAuth scopes and reconnect guidance (ALG-467). The toggle is labeled **Enable creating and writing files**; extensions can set config field labels via `configFieldTitles`.

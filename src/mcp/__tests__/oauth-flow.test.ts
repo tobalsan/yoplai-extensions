@@ -31,6 +31,10 @@ describe("MCP OAuth flow", () => {
 
     expect(exchange).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ authorizationCode: "code", codeVerifier: "verifier" }));
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ tokens: { access_token: "access" }, state: "connected" });
+    const notified = await store.begin("casey", "claap", "https://api.claap.io/mcp", undefined, { type: "personal", userId: "user-a" }, async () => { throw new Error("notification failed"); }, { actorUserId: "user-a", actorEmail: "user@example.test" });
+    const onConnected = vi.fn();
+    await expect(store.finish(notified.state, "code", onConnected)).rejects.toThrow("notification failed");
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agent: "casey", server: "claap", scope: { type: "personal", userId: "user-a" }, actor: { actorUserId: "user-a", actorEmail: "user@example.test" } }));
   });
 
   it("uses a pre-registered client when the server lacks dynamic registration", async () => {

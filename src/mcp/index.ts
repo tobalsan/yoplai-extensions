@@ -7,7 +7,7 @@ import { z } from "zod";
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { loadMcpConfigFile, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
-import { McpOAuthStore, type ScopedCredentials, type CredentialScope } from "./oauth.js";
+import { McpOAuthStore, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
@@ -169,10 +169,11 @@ const baseExtension = defineToolExtension({
 
 type McpRuntimeConfig = { extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
 export interface CredentialConnectHost {
-  registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
+  registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; actorEmail?: string; impersonatorUserId?: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
   requestLink(toolContext: unknown, target: { kind: "extension-oauth"; extensionId: string; targetId: string }): Promise<string | undefined>;
 }
-export type McpRuntime = { credentialConnect?: CredentialConnectHost; credentials?: ScopedCredentials; getDataDir(): string; getConfig(): McpRuntimeConfig; getAgent(id: string): AgentLike | undefined };
+type AuditEntry = AuditActor & { action: string; agentId: string; targetType: string; targetId: string; scope: "team" | "personal"; changes: { field: string; secret: "set" | "removed" }[] };
+export type McpRuntime = { audit?: { record(entry: AuditEntry): void }; credentialConnect?: CredentialConnectHost; credentials?: ScopedCredentials; getDataDir(): string; getConfig(): McpRuntimeConfig; getAgent(id: string): AgentLike | undefined };
 
 /**
  * OAuth providers behind a WAF (e.g. TradingView/CloudFront) reject localhost redirect URIs outright,
@@ -293,13 +294,28 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     runtime = ctx;
     oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials);
     connect = ctx.credentialConnect;
-    unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, targetId, onComplete }) => {
+    unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {
       const server = loadedForAgent(agentId)?.servers.find((item) => item.name === targetId);
       if (!server || server.type !== "http" || server.headers || !oauth) throw new Error("Unknown OAuth MCP server");
-      return (await oauth.begin(agentId, server.name, server.url, server.oauth, { type: "personal", userId }, onComplete)).authorizationUrl;
+      return (await oauth.begin(agentId, server.name, server.url, server.oauth, { type: "personal", userId }, onComplete, { actorUserId: userId, actorEmail, impersonatorUserId })).authorizationUrl;
     });
   },
   registerRoutes(app: RouteApp) {
+    function actor(c: RouteContext): AuditActor {
+      const auth = c.get?.("multiUserAuthContext");
+      if (!isRecord(auth)) return {};
+      const user = isRecord(auth.user) ? auth.user : {};
+      const impersonator = isRecord(auth.impersonator) ? auth.impersonator : {};
+      return {
+        actorUserId: typeof user.id === "string" ? user.id : undefined,
+        actorEmail: typeof user.email === "string" ? user.email : undefined,
+        impersonatorUserId: typeof impersonator.id === "string" ? impersonator.id : undefined,
+      };
+    }
+    function audit(entry: AuditEntry): void {
+      try { runtime?.audit?.record(entry); }
+      catch { console.warn("[mcp] Failed to record settings audit"); }
+    }
     function multiUserEnabled(): boolean {
       const config = runtime?.getConfig().extensions?.multiUser;
       return isRecord(config) && config.enabled === true;
@@ -351,7 +367,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a>${canConfigureTeam(c) ? ` <a href="${base}&scope=team">Whole team</a>` : ""}`);
       }
       if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
-      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope)).authorizationUrl); }
+      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope, undefined, actor(c))).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
     app.get("/mcp/oauth/callback", async (c) => {
@@ -360,7 +376,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         if (state) oauth?.cancel(state);
         return c.html(html("", false, "OAuth connection failed"), 400);
       }
-      try { const flow = await oauth.finish(state, code); oauthServers.add(`${flow.agent}:${flow.server}`); await resetManagers(flow.agent); return c.html(html(flow.server, true, "MCP server connected")); }
+      try { const flow = await oauth.finish(state, code, (connected) => audit({ ...(connected.actor ?? actor(c)), action: "mcp.connect", agentId: connected.agent, targetType: "mcp", targetId: connected.server, scope: connected.scope.type, changes: [{ field: "credentials", secret: "set" }] })); oauthServers.add(`${flow.agent}:${flow.server}`); await resetManagers(flow.agent); return c.html(html(flow.server, true, "MCP server connected")); }
       catch (error) { return c.html(html("", false, error instanceof Error ? error.message : "OAuth connection failed"), 400); }
     });
     app.post("/mcp/oauth/disconnect", async (c) => {
@@ -369,7 +385,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Only admins can manage team connections", 403);
       const agent = c.req.query("agent"); const name = c.req.query("server");
       if (!agent || !name || !oauth) return c.json({ ok: true });
-      await oauth.disconnect(agent, name, scope);
+      if (await oauth.disconnect(agent, name, scope)) {
+        audit({ ...actor(c), action: "mcp.disconnect", agentId: agent, targetType: "mcp", targetId: name, scope: scope.type, changes: [{ field: "credentials", secret: "removed" }] });
+      }
       oauthServers.add(`${agent}:${name}`);
       await resetManagers(agent);
       return c.json({ ok: true });

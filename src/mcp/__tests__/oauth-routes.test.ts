@@ -17,7 +17,7 @@ function app() {
 }
 
 function context(query: Record<string, string>) {
-  return { get: () => ({ user: { id: "user-a" } }), req: { query: (name: string) => name === "scope" ? (query[name] ?? "team") : query[name] }, json: (body: unknown) => body, text: (body: string, status?: number) => ({ body, status }), html: (body: string, status?: number) => ({ body, status }), redirect: (url: string) => ({ redirect: url }) };
+  return { get: () => ({ user: { id: "user-a", email: "user@example.test" }, impersonator: { id: "admin-a" } }), req: { query: (name: string) => name === "scope" ? (query[name] ?? "team") : query[name] }, json: (body: unknown) => body, text: (body: string, status?: number) => ({ body, status }), html: (body: string, status?: number) => ({ body, status }), redirect: (url: string) => ({ redirect: url }) };
 }
 
 describe("MCP OAuth routes", () => {
@@ -112,7 +112,8 @@ describe("MCP OAuth routes", () => {
     await fs.writeFile(rootConfigPath, JSON.stringify({ mcpServers: { wrong: { url: "https://wrong.test/mcp" } } }));
     await fs.writeFile(agentConfigPath, JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     const extension = createExtension();
-    await extension.start({ credentials: hostCredentials,
+    const record = vi.fn();
+    await extension.start({ audit: { record }, credentials: hostCredentials,
       getDataDir: () => work,
       getConfig: () => ({ extensions: { mcp: { configPath: rootConfigPath } } }),
       getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true, configPath: agentConfigPath } } }),
@@ -123,7 +124,8 @@ describe("MCP OAuth routes", () => {
     expect(authorization).toMatchObject({ redirect: expect.stringContaining("https://auth.test/authorize?code_challenge=challenge") });
     const state = new URL((authorization as { redirect: string }).redirect).searchParams.get("state");
     expect(state).toBeTruthy();
-    await expect(routes.routes.get("GET /mcp/oauth/callback")!(context({ code: "code", state: state! }))).resolves.toMatchObject({ body: expect.stringContaining("success:true") });
+    await expect(routes.routes.get("GET /mcp/oauth/callback")!(({ ...context({ code: "code", state: state! }), get: () => undefined }))).resolves.toMatchObject({ body: expect.stringContaining("success:true") });
+    expect(record).toHaveBeenCalledExactlyOnceWith({ actorUserId: "user-a", actorEmail: "user@example.test", impersonatorUserId: "admin-a", action: "mcp.connect", agentId: "casey", targetType: "mcp", targetId: "claap", scope: "team", changes: [{ field: "credentials", secret: "set" }] });
     expect(discover).toHaveBeenCalledWith("https://api.claap.io/mcp", { fetchFn: expect.any(Function) });
     expect(register).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ clientMetadata: expect.objectContaining({ redirect_uris: [redirectUri] }) }));
     expect(authorize).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ redirectUrl: redirectUri, resource: new URL("https://api.claap.io/mcp") }));
@@ -159,11 +161,30 @@ describe("MCP OAuth routes", () => {
     const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
     await store.write("casey", "claap", { client: { client_id: "client", redirect_uris: ["http://localhost:4000/api/mcp/oauth/callback"] }, tokens: { access_token: "token", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" });
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const record = vi.fn();
     const extension = createMcpExtension();
-    await extension.start({ credentials: hostCredentials, getDataDir: () => dataDir, getConfig: () => ({}), getAgent: () => undefined });
+    await extension.start({ audit: { record }, credentials: hostCredentials, getDataDir: () => dataDir, getConfig: () => ({}), getAgent: () => undefined });
     const routes = app(); extension.registerRoutes(routes);
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(context({ agent: "casey", server: "claap" }))).resolves.toEqual({ ok: true });
+    expect(record).toHaveBeenCalledExactlyOnceWith({ actorUserId: "user-a", actorEmail: "user@example.test", impersonatorUserId: "admin-a", action: "mcp.disconnect", agentId: "casey", targetType: "mcp", targetId: "claap", scope: "team", changes: [{ field: "credentials", secret: "removed" }] });
+    await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(context({ agent: "casey", server: "claap" }))).resolves.toEqual({ ok: true });
+    expect(record).toHaveBeenCalledTimes(1);
     await expect(store.read("casey", "claap")).resolves.toBeUndefined();
+  });
+
+  it("keeps disconnect successful when the audit recorder fails", async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
+    await store.write("casey", "claap", { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "private-token", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const extension = createMcpExtension();
+      await extension.start({ audit: { record: () => { throw new Error("read-only"); } }, credentials: hostCredentials, getDataDir: () => dataDir, getConfig: () => ({}), getAgent: () => undefined });
+      const routes = app(); extension.registerRoutes(routes);
+      await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(context({ agent: "casey", server: "claap" }))).resolves.toEqual({ ok: true });
+      await expect(store.read("casey", "claap")).resolves.toBeUndefined();
+      expect(warning).toHaveBeenCalledWith("[mcp] Failed to record settings audit");
+    } finally { warning.mockRestore(); }
   });
 
   it("returns while revocation hangs and the next requester call falls back or refuses", async () => {

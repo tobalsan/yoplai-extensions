@@ -35,7 +35,14 @@ export interface OAuthConnection {
   state?: OAuthState;
 }
 
+export interface AuditActor {
+  actorUserId?: string;
+  actorEmail?: string;
+  impersonatorUserId?: string;
+}
+
 export interface PendingOAuthFlow {
+  actor?: AuditActor;
   onComplete?: (targetId: string) => Promise<void>;
   scope: CredentialScope;
   agent: string;
@@ -126,11 +133,12 @@ export class McpOAuthStore {
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
-  async disconnect(agent: string, server: string, scope: CredentialScope = TEAM): Promise<void> {
+  async disconnect(agent: string, server: string, scope: CredentialScope = TEAM): Promise<boolean> {
     const connection = await this.read(agent, server, scope);
     await this.delete(agent, server, scope);
-    if (!connection) return;
+    if (!connection) return false;
     void this.revokeConnection(connection);
+    return true;
   }
 
   private async revokeConnection(connection: OAuthConnection): Promise<void> {
@@ -154,7 +162,7 @@ export class McpOAuthStore {
     if (connection) await this.write(agent, server, { ...connection, state: "needs_reconnect" }, scope);
   }
 
-  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>): Promise<{ state: string; authorizationUrl: string }> {
+  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>, actor?: AuditActor): Promise<{ state: string; authorizationUrl: string }> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
     if (!staticClient && !info.authorizationServerMetadata?.registration_endpoint) {
@@ -182,19 +190,20 @@ export class McpOAuthStore {
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");
     }
-    this.pending.set(state, { onComplete, scope, agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
+    this.pending.set(state, { actor, onComplete, scope, agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }
 
   cancel(state: string): void { this.pending.delete(state); }
 
-  async finish(state: string, code: string): Promise<{ agent: string; server: string }> {
+  async finish(state: string, code: string, onConnected?: (flow: PendingOAuthFlow) => void): Promise<{ agent: string; server: string; scope: CredentialScope; actor?: AuditActor }> {
     const pending = this.pending.get(state);
     this.pending.delete(state);
     if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000) throw new Error("OAuth state is invalid or expired");
     const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
     const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
     await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected" }, pending.scope);
+    onConnected?.(pending);
     await pending.onComplete?.(pending.server);
     return pending;
   }
