@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Google Drive now supports an optional `allowWrite` toggle for creating/editing files and Google Sheets, with mode-specific OAuth scopes and reconnect guidance (ALG-467). The toggle is labeled **Enable creating and writing files**; extensions can set config field labels via `configFieldTitles`.
+
 - Gmail and Google Drive descriptions, agent instructions, and not-connected messages now say connections can be personal (**Just me**) or shared (**Whole team**) instead of "per-agent OAuth"; the READMEs describe the personal-then-team fallback and the current connect flow.
 
 ### Fixed

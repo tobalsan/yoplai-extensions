@@ -1,12 +1,8 @@
 import { z } from "zod";
 
-/**
- * googleDrive config is intentionally minimal: no API key lives here — the
- * access token is injected by the host at tool-build time via the OAuth
- * requirement. Config only carries the enable flag (handled by the base schema)
- * so this is an empty object.
- */
-export const GoogleDriveConfigSchema = z.object({}).passthrough();
+export const GoogleDriveConfigSchema = z.object({
+  allowWrite: z.boolean().default(false).describe("Allow creating and editing Drive files and Google Sheets. Reconnect Google after enabling."),
+}).passthrough();
 export type GoogleDriveConfig = z.infer<typeof GoogleDriveConfigSchema>;
 
 export const ValidateParamsSchema = z.object({}).strict();
@@ -74,3 +70,42 @@ export const GOOGLE_WORKSPACE_EXPORT_MIME: Record<string, string> = {
   "application/vnd.google-apps.spreadsheet": "text/csv",
   "application/vnd.google-apps.presentation": "text/plain",
 };
+
+export const CreateFolderParamsSchema = z.object({
+  name: z.string().min(1),
+  parentId: z.string().min(1).optional(),
+});
+export const CreateFileParamsSchema = z.object({
+  name: z.string().min(1),
+  content: z.string(),
+  mimeType: z.string().min(1).optional(),
+  parentId: z.string().min(1).optional(),
+  convertTo: z.enum(["doc", "sheet"]).optional(),
+});
+export const UpdateFileContentParamsSchema = z.object({
+  fileId: z.string().min(1),
+  content: z.string(),
+});
+export const RenameMoveFileParamsSchema = z.object({
+  fileId: z.string().min(1),
+  name: z.string().min(1).optional(),
+  addParentId: z.string().min(1).optional(),
+  removeParentId: z.string().min(1).optional(),
+});
+const SheetCellSchema = z.union([z.string(), z.number(), z.boolean()]);
+export const SheetsUpdateRangeParamsSchema = z.object({
+  spreadsheetId: z.string().min(1),
+  range: z.string().min(1).describe("A1 notation, e.g. 'Clients'!A2:C10."),
+  values: z.array(z.array(SheetCellSchema).min(1)).min(1),
+});
+export const SheetsAppendRowsParamsSchema = z.object({
+  spreadsheetId: z.string().min(1),
+  range: z.string().min(1).describe("A1 notation identifying the table to append to, e.g. 'Clients'!A:C."),
+  rows: z.array(z.array(SheetCellSchema).min(1)).min(1),
+});
+export type CreateFolderParams = z.infer<typeof CreateFolderParamsSchema>;
+export type CreateFileParams = z.infer<typeof CreateFileParamsSchema>;
+export type UpdateFileContentParams = z.infer<typeof UpdateFileContentParamsSchema>;
+export type RenameMoveFileParams = z.infer<typeof RenameMoveFileParamsSchema>;
+export type SheetsUpdateRangeParams = z.infer<typeof SheetsUpdateRangeParamsSchema>;
+export type SheetsAppendRowsParams = z.infer<typeof SheetsAppendRowsParamsSchema>;

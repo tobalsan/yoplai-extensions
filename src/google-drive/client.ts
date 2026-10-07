@@ -7,6 +7,12 @@ import {
   GOOGLE_WORKSPACE_EXPORT_MIME,
   driveFileExportUrl,
   driveFileMediaUrl,
+  type CreateFolderParams,
+  type CreateFileParams,
+  type UpdateFileContentParams,
+  type RenameMoveFileParams,
+  type SheetsUpdateRangeParams,
+  type SheetsAppendRowsParams,
   type ListFilesParams,
   type ReadFileParams,
   type SearchFilesParams,
@@ -72,11 +78,6 @@ function normalizeText(text: string): string {
     .trim();
 }
 
-/**
- * Read-only Google Drive client. It consumes the fresh access token injected by
- * the host OAuth resolver and exposes list/search/read-file capabilities plus
- * the `about` probe used by `validate`. No write scopes, no mutating calls.
- */
 export class GoogleDriveClient {
   #accessToken: string;
   #fetch: DriveFetch;
@@ -139,6 +140,73 @@ export class GoogleDriveClient {
       bytes: buffer.byteLength,
       exported: Boolean(exportMime),
     };
+  }
+
+  async createFolder(params: CreateFolderParams): Promise<unknown> {
+    return this.#json(DRIVE_FILES_URL, "POST", {
+      name: params.name,
+      mimeType: "application/vnd.google-apps.folder",
+      ...(params.parentId ? { parents: [params.parentId] } : {}),
+    });
+  }
+
+  async createFile(params: CreateFileParams): Promise<unknown> {
+    const mimeType = params.mimeType ?? (params.convertTo === "sheet" ? "text/csv" : "text/plain");
+    const metadata = {
+      name: params.name,
+      mimeType: params.convertTo === "doc" ? "application/vnd.google-apps.document"
+        : params.convertTo === "sheet" ? "application/vnd.google-apps.spreadsheet" : mimeType,
+      ...(params.parentId ? { parents: [params.parentId] } : {}),
+    };
+    const boundary = `yoplai-${crypto.randomUUID()}`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n${params.content}\r\n--${boundary}--\r\n`;
+    const response = await this.#request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+      method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body,
+    });
+    return response.json();
+  }
+
+  async updateFileContent(params: UpdateFileContentParams): Promise<unknown> {
+    const metadata = await this.#getFileMetadata(params.fileId);
+    const mimeType = metadata.mimeType === "application/vnd.google-apps.spreadsheet" ? "text/csv"
+      : metadata.mimeType === "application/vnd.google-apps.document" ? "text/plain"
+      : metadata.mimeType ?? "text/plain";
+    const response = await this.#request(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(params.fileId)}?uploadType=media`, {
+      method: "PATCH", headers: { "Content-Type": mimeType }, body: params.content,
+    });
+    return response.json();
+  }
+
+  async renameMoveFile(params: RenameMoveFileParams): Promise<unknown> {
+    if (!params.name && !params.addParentId && !params.removeParentId) {
+      throw new Error("Provide a name or parent change.");
+    }
+    const url = new URL(`${DRIVE_FILES_URL}/${encodeURIComponent(params.fileId)}`);
+    if (params.addParentId) url.searchParams.set("addParents", params.addParentId);
+    if (params.removeParentId) url.searchParams.set("removeParents", params.removeParentId);
+    return this.#json(url.toString(), "PATCH", params.name ? { name: params.name } : {});
+  }
+
+  async sheetsUpdateRange(params: SheetsUpdateRangeParams): Promise<unknown> {
+    return this.#sheetValues(params.spreadsheetId, params.range, params.values, false);
+  }
+
+  async sheetsAppendRows(params: SheetsAppendRowsParams): Promise<unknown> {
+    return this.#sheetValues(params.spreadsheetId, params.range, params.rows, true);
+  }
+
+  async #sheetValues(spreadsheetId: string, range: string, values: (string | number | boolean)[][], append: boolean): Promise<unknown> {
+    const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}${append ? ":append" : ""}`);
+    url.searchParams.set("valueInputOption", "USER_ENTERED");
+    if (append) url.searchParams.set("insertDataOption", "INSERT_ROWS");
+    return this.#json(url.toString(), append ? "POST" : "PUT", { range, majorDimension: "ROWS", values });
+  }
+
+  async #json(url: string, method: string, body: unknown): Promise<unknown> {
+    const response = await this.#request(url, {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    return response.json();
   }
 
   async #queryFiles(
@@ -219,21 +287,33 @@ export class GoogleDriveClient {
     return normalizeText(buffer.toString("utf8"));
   }
 
-  async #request(url: string): Promise<Response> {
-    const response = await this.#fetch(url, {
-      headers: {
-        Authorization: `Bearer ${this.#accessToken}`,
-        Accept: "application/json",
-      },
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const responseBody = body.slice(0, 500);
-      throw new GoogleDriveRequestError(
-        `Google Drive request failed (HTTP ${response.status}) for ${url}${responseBody ? `: ${responseBody}` : ""}`,
-        response.status, url, responseBody,
-      );
+  async #request(url: string, init: RequestInit = {}): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.#fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          Authorization: `Bearer ${this.#accessToken}`,
+          Accept: "application/json",
+          ...init.headers,
+        },
+      });
+      if (response.status === 429 && attempt < 2) {
+        const retryAfter = response.headers.get("retry-after");
+        const seconds = retryAfter === null ? NaN : Number(retryAfter);
+        const delay = Number.isFinite(seconds) ? Math.min(30_000, Math.max(0, seconds * 1000)) : 1000 * (attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        const responseBody = body.slice(0, 500);
+        throw new GoogleDriveRequestError(
+          `Google Drive request failed (HTTP ${response.status}) for ${url}${responseBody ? `: ${responseBody}` : ""}`,
+          response.status, url, responseBody,
+        );
+      }
+      return response;
     }
-    return response;
   }
 }

@@ -27,7 +27,7 @@ export type ResolvedOAuth =
   | {
       connected: false;
       provider: string;
-      reason: "not_connected" | "provider_not_configured" | "expired";
+      reason: "not_connected" | "provider_not_configured" | "expired" | "needs_reconnect" | "insufficient_scope";
       authorizeUrl?: string;
       message: string;
     };
@@ -70,13 +70,15 @@ export interface ToolExtensionDefinition {
   agentConfigSchema?: z.ZodTypeAny;
   requiredSecrets: string[];
   advancedConfigFields?: string[];
+  /** UI labels for config fields, emitted as JSON Schema `title`. */
+  configFieldTitles?: Record<string, string>;
   configRoute?: { path: string };
   /**
    * Declares that this extension needs an OAuth token. When set, `createTools`
    * receives `config.oauth` with a fresh access token (or a not-connected
    * signal) resolved by the host at tool-build time.
    */
-  oauth?: OAuthRequirement;
+  oauth?: OAuthRequirement | ((config: ResolvedToolExtensionConfig) => OAuthRequirement);
   createTools(config: ResolvedToolExtensionConfig): ToolExtensionTool[];
 }
 
@@ -153,18 +155,20 @@ function resolveConfig(
 async function resolveOAuthForDefinition(
   definition: ToolExtensionDefinition,
   agent: { id: string },
-  context: ToolExtensionHookContext
+  context: ToolExtensionHookContext,
+  resolved: ResolvedToolExtensionConfig
 ): Promise<ResolvedOAuth | undefined> {
   if (!definition.oauth) return undefined;
+  const requirement = typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
   if (!context.resolveOAuth) {
     return {
       connected: false,
-      provider: definition.oauth.provider,
+      provider: requirement.provider,
       reason: "provider_not_configured",
-      message: `OAuth provider "${definition.oauth.provider}" is not configured on this host.`,
+      message: `OAuth provider "${requirement.provider}" is not configured on this host.`,
     };
   }
-  return context.resolveOAuth(agent, definition.oauth, context.userId);
+  return context.resolveOAuth(agent, requirement, context.userId);
 }
 
 function getMountedToolName(
@@ -188,6 +192,15 @@ function renderMountedToolNames(
   ].join("\n");
 }
 
+function withFieldTitles<T>(schema: T, titles: Record<string, string> = {}): T {
+  const properties = (schema as { properties?: Record<string, object> }).properties;
+  if (!properties) return schema;
+  for (const [name, title] of Object.entries(titles)) {
+    if (properties[name]) properties[name] = { ...properties[name], title };
+  }
+  return schema;
+}
+
 export function defineToolExtension(definition: ToolExtensionDefinition) {
   return {
     id: definition.id,
@@ -197,7 +210,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
     requiredSecrets: definition.requiredSecrets,
     oauth: definition.oauth,
     advancedConfigFields: definition.advancedConfigFields,
-    configJsonSchema: zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }),
+    configJsonSchema: withFieldTitles(zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }), definition.configFieldTitles),
     configRoute: definition.configRoute,
     createTools: definition.createTools,
     dependencies: [],
@@ -237,7 +250,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       if (!context) return undefined;
       const resolved = resolveConfig(definition, context.config, agent);
       if (!resolved) return undefined;
-      resolved.oauth = await resolveOAuthForDefinition(definition, agent, context);
+      resolved.oauth = await resolveOAuthForDefinition(definition, agent, context, resolved);
       return [
         definition.systemPrompt?.trim() || undefined,
         renderMountedToolNames(definition, resolved),
@@ -247,7 +260,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       if (!context) return [];
       const resolved = resolveConfig(definition, context.config, agent);
       if (!resolved) return [];
-      resolved.oauth = await resolveOAuthForDefinition(definition, agent, context);
+      resolved.oauth = await resolveOAuthForDefinition(definition, agent, context, resolved);
       return definition.createTools(resolved).map((tool) => ({
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
@@ -262,7 +275,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
           // Re-resolve per call so the token matches this call's requester.
           const oauth = await context.resolveOAuth(
             agent,
-            definition.oauth,
+            typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth,
             toolContext?.userId ?? context.userId
           );
           const callTimeTool = definition
