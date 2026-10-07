@@ -46,6 +46,7 @@ Tools:
 - googleDrive_read_file: download a file by id and extract its text (Google Docs/Sheets/Slides are exported to text/CSV; PDF and DOCX are text-extracted)
 - googleDrive_validate: check that the Google Drive connection is live`,
   configSchema: GoogleDriveConfigSchema,
+  configFieldTitles: { allowWrite: "Enable creating and writing files" },
   requiredSecrets: [],
   oauth: (config) => ({
     provider: "google",

@@ -130,7 +130,7 @@ describe("write mode", () => {
     expect(names({})).toEqual(["list_files", "search_files", "read_file", "validate"]);
     expect(names({ allowWrite: false })).toEqual(names({}));
     expect(names({ allowWrite: true })).toEqual([...names({}), "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
-    expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false } } });
+    expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false, title: "Enable creating and writing files" } } });
   });
 
   it.each([[true, false, false], [false, true, true]])("agent override beats root (%s / %s)", async (rootWrite, agentWrite, expectedWrite) => {

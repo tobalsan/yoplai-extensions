@@ -70,6 +70,8 @@ export interface ToolExtensionDefinition {
   agentConfigSchema?: z.ZodTypeAny;
   requiredSecrets: string[];
   advancedConfigFields?: string[];
+  /** UI labels for config fields, emitted as JSON Schema `title`. */
+  configFieldTitles?: Record<string, string>;
   configRoute?: { path: string };
   /**
    * Declares that this extension needs an OAuth token. When set, `createTools`
@@ -190,6 +192,15 @@ function renderMountedToolNames(
   ].join("\n");
 }
 
+function withFieldTitles<T>(schema: T, titles: Record<string, string> = {}): T {
+  const properties = (schema as { properties?: Record<string, object> }).properties;
+  if (!properties) return schema;
+  for (const [name, title] of Object.entries(titles)) {
+    if (properties[name]) properties[name] = { ...properties[name], title };
+  }
+  return schema;
+}
+
 export function defineToolExtension(definition: ToolExtensionDefinition) {
   return {
     id: definition.id,
@@ -199,7 +210,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
     requiredSecrets: definition.requiredSecrets,
     oauth: definition.oauth,
     advancedConfigFields: definition.advancedConfigFields,
-    configJsonSchema: zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }),
+    configJsonSchema: withFieldTitles(zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }), definition.configFieldTitles),
     configRoute: definition.configRoute,
     createTools: definition.createTools,
     dependencies: [],
