@@ -6,6 +6,10 @@ Tools (mounted as `googleDrive_<name>`):
 
 - `list_files` — list files, optional name-substring filter, paginated
 - `search_files` — search with Drive `q` syntax, paginated
+- `sheets_list_spreadsheets` — list Google Sheets, optional name filter + pagination
+- `sheets_inspect` — tabs, dimensions, detected headers
+- `sheets_read_sheet` — one tab as headers + row objects (`rowOffset`, `maxRows`, `columns`)
+- `sheets_read_range` — raw values for an A1 range (`majorDimension`)
 - `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF and DOCX text-extracted)
 - `validate` — confirm the connection is live; returns the connected Google account
 
@@ -17,8 +21,10 @@ Write tools (only mounted when `allowWrite: true`):
 - `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
 - `update_file_content` — overwrite content (text for Docs, CSV for Sheets)
 - `rename_move_file` — rename and/or add/remove parent folders
-- `sheets_update_range` — A1 range and `values` row arrays
-- `sheets_append_rows` — A1 table range and `rows` arrays; appends using `USER_ENTERED`
+- `sheets_update_range` — A1 range and `values` row arrays; `valueInputOption` `USER_ENTERED` (default) or `RAW`
+
+All Sheets tools accept `spreadsheetId` or `spreadsheetUrl`. Sheets reads work under `drive.readonly`; Google Sheets API must be enabled.
+- `sheets_append_rows` — A1 table range and `rows` arrays; `valueInputOption` `USER_ENTERED` (default) or `RAW`
 
 Read the target before writing, confirm when ambiguous, and report what changed. Deleting, sharing, and permissions are not exposed. API 403 responses return `insufficient_scope`; 429 responses retry twice, then return `rate_limited`.
 

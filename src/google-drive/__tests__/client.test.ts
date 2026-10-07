@@ -264,7 +264,7 @@ describe("GoogleDriveClient writes", () => {
   it.each([false, true])("writes Sheets values (append=%s) with encoded A1 ranges", async (append) => {
     const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ updatedCells: 3 }));
     const client = makeClient(fetchMock);
-    const params = { spreadsheetId: "sheet/id", range: "'Client DB'!A2:C", values: [["Alice", 1, true]] };
+    const params = { spreadsheetId: "sheet/id", range: "'Client DB'!A2:C", values: [["Alice", 1, true]], valueInputOption: "USER_ENTERED" as const };
     if (append) await client.sheetsAppendRows({ ...params, rows: params.values });
     else await client.sheetsUpdateRange(params);
     const [calledUrl, init] = fetchMock.mock.calls[0];
@@ -276,6 +276,44 @@ describe("GoogleDriveClient writes", () => {
     expect(url.searchParams.get("insertDataOption")).toBe(append ? "INSERT_ROWS" : null);
     expect(init?.method).toBe(append ? "POST" : "PUT");
     expect(JSON.parse(String(init?.body))).toEqual({ range: params.range, majorDimension: "ROWS", values: params.values });
+  });
+
+  it("writes RAW values and resolves spreadsheetUrl", async () => {
+    const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ updatedCells: 1 }));
+    await makeClient(fetchMock).sheetsUpdateRange({ spreadsheetUrl: "https://docs.google.com/spreadsheets/d/abc_123/edit", range: "A1", values: [["=1"]], valueInputOption: "RAW" });
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.pathname).toContain("/spreadsheets/abc_123/values/");
+    expect(url.searchParams.get("valueInputOption")).toBe("RAW");
+  });
+
+  it("lists spreadsheets filtered by name", async () => {
+    const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ files: [{ id: "s1", name: "Budget", modifiedTime: "t" }], nextPageToken: "n" }));
+    const result = await makeClient(fetchMock).sheetsListSpreadsheets({ query: "Bud'get", pageSize: 10 });
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("q")).toBe("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains 'Bud\\'get'");
+    expect(result).toEqual({ spreadsheets: [{ id: "s1", name: "Budget", url: "https://docs.google.com/spreadsheets/d/s1", lastModified: "t" }], nextPageToken: "n" });
+  });
+
+  it("inspects tabs and detects headers", async () => {
+    const fetchMock = vi.fn<DriveFetch>()
+      .mockResolvedValueOnce(jsonResponse({ properties: { title: "Book" }, sheets: [{ properties: { sheetId: 0, title: "Clients", index: 0, gridProperties: { rowCount: 100, columnCount: 3 } } }] }))
+      .mockResolvedValueOnce(jsonResponse({ values: [["Name", "Email"], ["Alice", "a@x"]] }));
+    const result = await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 10 });
+    expect(decodeURIComponent(String(fetchMock.mock.calls[1][0]))).toContain("'Clients'!1:10");
+    expect(result).toMatchObject({ spreadsheetTitle: "Book", tabs: [{ tabName: "Clients", rowCount: 100, headers: ["Name", "Email"], headerRowIndex: 1, isEmpty: false }] });
+  });
+
+  it("reads a sheet as rows with offset, limit, and columns", async () => {
+    const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ values: [["Name", "Email"], ["A", "a@x"], ["B", "b@x"], ["C", "c@x"]] }));
+    const result = await makeClient(fetchMock).sheetsReadSheet({ spreadsheetId: "s1", tabName: "Clients", headerRowIndex: 0, rowOffset: 1, maxRows: 1, columns: ["Email", "Missing"] });
+    expect(result).toMatchObject({ headers: ["Email"], rows: [{ Email: "b@x" }], rowCount: 1, totalRowCount: 3, missingColumns: ["Missing"] });
+  });
+
+  it("reads a raw range", async () => {
+    const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ range: "Clients!A1:B2", majorDimension: "COLUMNS", values: [["a", 1]] }));
+    const result = await makeClient(fetchMock).sheetsReadRange({ spreadsheetId: "s1", range: "Clients!A1:B2", majorDimension: "COLUMNS" });
+    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("majorDimension")).toBe("COLUMNS");
+    expect(result).toMatchObject({ range: "Clients!A1:B2", values: [["a", "1"]] });
   });
 
   it("retries 429 responses and stops after two retries", async () => {

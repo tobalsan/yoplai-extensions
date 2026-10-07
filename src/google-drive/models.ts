@@ -93,15 +93,39 @@ export const RenameMoveFileParamsSchema = z.object({
   removeParentId: z.string().min(1).optional(),
 });
 const SheetCellSchema = z.union([z.string(), z.number(), z.boolean()]);
-export const SheetsUpdateRangeParamsSchema = z.object({
-  spreadsheetId: z.string().min(1),
+const SpreadsheetRefSchema = z.object({
+  spreadsheetId: z.string().min(1).optional().describe("Spreadsheet id; or pass spreadsheetUrl."),
+  spreadsheetUrl: z.string().min(1).optional().describe("Full Google Sheets URL; used when spreadsheetId is omitted."),
+});
+const ValueInputOptionSchema = z.enum(["USER_ENTERED", "RAW"]).optional().default("USER_ENTERED");
+export const SheetsListSpreadsheetsParamsSchema = z.object({
+  query: z.string().optional().describe("Optional spreadsheet name substring."),
+  pageSize: z.number().int().min(1).max(100).optional().default(50),
+  pageToken: z.string().min(1).optional(),
+});
+export const SheetsInspectParamsSchema = SpreadsheetRefSchema.extend({
+  maxHeaderScanRows: z.number().int().min(1).max(50).optional().default(10),
+});
+export const SheetsReadSheetParamsSchema = SpreadsheetRefSchema.extend({
+  tabName: z.string().min(1),
+  headerRowIndex: z.number().int().min(0).optional().default(0).describe("1-based header row; 0 auto-detects."),
+  rowOffset: z.number().int().min(0).optional().default(0),
+  maxRows: z.number().int().min(1).max(5000).optional(),
+  columns: z.array(z.string().min(1)).optional(),
+});
+export const SheetsReadRangeParamsSchema = SpreadsheetRefSchema.extend({
+  range: z.string().min(1).describe("A1 notation, e.g. 'Clients'!A1:C10."),
+  majorDimension: z.enum(["ROWS", "COLUMNS"]).optional().default("ROWS"),
+});
+export const SheetsUpdateRangeParamsSchema = SpreadsheetRefSchema.extend({
   range: z.string().min(1).describe("A1 notation, e.g. 'Clients'!A2:C10."),
   values: z.array(z.array(SheetCellSchema).min(1)).min(1),
+  valueInputOption: ValueInputOptionSchema,
 });
-export const SheetsAppendRowsParamsSchema = z.object({
-  spreadsheetId: z.string().min(1),
+export const SheetsAppendRowsParamsSchema = SpreadsheetRefSchema.extend({
   range: z.string().min(1).describe("A1 notation identifying the table to append to, e.g. 'Clients'!A:C."),
   rows: z.array(z.array(SheetCellSchema).min(1)).min(1),
+  valueInputOption: ValueInputOptionSchema,
 });
 export type CreateFolderParams = z.infer<typeof CreateFolderParamsSchema>;
 export type CreateFileParams = z.infer<typeof CreateFileParamsSchema>;
@@ -109,3 +133,7 @@ export type UpdateFileContentParams = z.infer<typeof UpdateFileContentParamsSche
 export type RenameMoveFileParams = z.infer<typeof RenameMoveFileParamsSchema>;
 export type SheetsUpdateRangeParams = z.infer<typeof SheetsUpdateRangeParamsSchema>;
 export type SheetsAppendRowsParams = z.infer<typeof SheetsAppendRowsParamsSchema>;
+export type SheetsListSpreadsheetsParams = z.infer<typeof SheetsListSpreadsheetsParamsSchema>;
+export type SheetsInspectParams = z.infer<typeof SheetsInspectParamsSchema>;
+export type SheetsReadSheetParams = z.infer<typeof SheetsReadSheetParamsSchema>;
+export type SheetsReadRangeParams = z.infer<typeof SheetsReadRangeParamsSchema>;

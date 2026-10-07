@@ -10,6 +10,10 @@ import {
   RenameMoveFileParamsSchema,
   SheetsUpdateRangeParamsSchema,
   SheetsAppendRowsParamsSchema,
+  SheetsListSpreadsheetsParamsSchema,
+  SheetsInspectParamsSchema,
+  SheetsReadSheetParamsSchema,
+  SheetsReadRangeParamsSchema,
   ListFilesParamsSchema,
   ReadFileParamsSchema,
   SearchFilesParamsSchema,
@@ -44,7 +48,13 @@ Tools:
 - googleDrive_list_files: list accessible Drive files, optionally filtered by a name substring; supports pageSize and pageToken pagination
 - googleDrive_search_files: search Drive using the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'"; supports pagination
 - googleDrive_read_file: download a file by id and extract its text (Google Docs/Sheets/Slides are exported to text/CSV; PDF and DOCX are text-extracted)
-- googleDrive_validate: check that the Google Drive connection is live`,
+- googleDrive_sheets_list_spreadsheets: list Google Sheets, optionally filtered by name
+- googleDrive_sheets_inspect: inspect a spreadsheet's tabs, dimensions, and detected headers
+- googleDrive_sheets_read_sheet: read one tab as headers plus row objects; use rowOffset, maxRows, and columns for large tabs
+- googleDrive_sheets_read_range: read an arbitrary A1 range as raw values
+- googleDrive_validate: check that the Google Drive connection is live
+
+Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDrive_sheets_update_range overwrites an exact A1 range; googleDrive_sheets_append_rows appends after table data. Before writing, read the target tab or range; after writing, report the updated range and cell count.`,
   configSchema: GoogleDriveConfigSchema,
   configFieldTitles: { allowWrite: "Enable creating and writing files" },
   requiredSecrets: [],
@@ -101,6 +111,46 @@ Tools:
         },
       },
       {
+        name: "sheets_list_spreadsheets",
+        description: "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.",
+        parameters: SheetsListSpreadsheetsParamsSchema,
+        execute: async (params) => {
+          const parsed = SheetsListSpreadsheetsParamsSchema.parse(params);
+          if (!connected) return notConnected(oauth);
+          return new GoogleDriveClient(connected.accessToken).sheetsListSpreadsheets(parsed);
+        },
+      },
+      {
+        name: "sheets_inspect",
+        description: "Inspect a spreadsheet's tabs, dimensions, and detected headers.",
+        parameters: SheetsInspectParamsSchema,
+        execute: async (params) => {
+          const parsed = SheetsInspectParamsSchema.parse(params);
+          if (!connected) return notConnected(oauth);
+          return new GoogleDriveClient(connected.accessToken).sheetsInspect(parsed);
+        },
+      },
+      {
+        name: "sheets_read_sheet",
+        description: "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.",
+        parameters: SheetsReadSheetParamsSchema,
+        execute: async (params) => {
+          const parsed = SheetsReadSheetParamsSchema.parse(params);
+          if (!connected) return notConnected(oauth);
+          return new GoogleDriveClient(connected.accessToken).sheetsReadSheet(parsed);
+        },
+      },
+      {
+        name: "sheets_read_range",
+        description: "Read an arbitrary A1 range from a spreadsheet as raw values.",
+        parameters: SheetsReadRangeParamsSchema,
+        execute: async (params) => {
+          const parsed = SheetsReadRangeParamsSchema.parse(params);
+          if (!connected) return notConnected(oauth);
+          return new GoogleDriveClient(connected.accessToken).sheetsReadRange(parsed);
+        },
+      },
+      {
         name: "validate",
         description:
           "Validate the Google Drive connection. Returns connected + the Google account when a fresh token is available, or a clear not-connected signal otherwise.",
@@ -137,8 +187,8 @@ Tools:
         writeTool("create_file", "Create a text/CSV file; optionally convert it to a Google Doc or Sheet.", CreateFileParamsSchema, (client, params) => client.createFile(params)),
         writeTool("update_file_content", "Overwrite a file's content; Google Docs accept text and Sheets accept CSV. Read the target first.", UpdateFileContentParamsSchema, (client, params) => client.updateFileContent(params)),
         writeTool("rename_move_file", "Rename or move a Drive file. Supply name and/or parent changes.", RenameMoveFileParamsSchema, (client, params) => client.renameMoveFile(params)),
-        writeTool("sheets_update_range", "Update Google Sheet cells using an A1 range and row arrays; values use USER_ENTERED interpretation.", SheetsUpdateRangeParamsSchema, (client, params) => client.sheetsUpdateRange(params)),
-        writeTool("sheets_append_rows", "Append row arrays to a Google Sheet table using an A1 range and USER_ENTERED values.", SheetsAppendRowsParamsSchema, (client, params) => client.sheetsAppendRows(params)),
+        writeTool("sheets_update_range", "Update Google Sheet cells using an A1 range and row arrays; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsUpdateRangeParamsSchema, (client, params) => client.sheetsUpdateRange(params)),
+        writeTool("sheets_append_rows", "Append row arrays to a Google Sheet table using an A1 range; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsAppendRowsParamsSchema, (client, params) => client.sheetsAppendRows(params)),
       );
     }
     return tools.map((tool) => ({

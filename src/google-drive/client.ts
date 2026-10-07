@@ -13,10 +13,27 @@ import {
   type RenameMoveFileParams,
   type SheetsUpdateRangeParams,
   type SheetsAppendRowsParams,
+  type SheetsListSpreadsheetsParams,
+  type SheetsInspectParams,
+  type SheetsReadSheetParams,
+  type SheetsReadRangeParams,
   type ListFilesParams,
   type ReadFileParams,
   type SearchFilesParams,
 } from "./models.js";
+
+import {
+  detectHeaderRow,
+  extractSpreadsheetId,
+  filterColumns,
+  normalizeValues,
+  quoteSheetName,
+  rowsFromValues,
+  spreadsheetUrl,
+  trimTrailingEmptyCells,
+} from "./sheets.js";
+
+const SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 
 export type DriveFetch = typeof fetch;
 
@@ -187,17 +204,108 @@ export class GoogleDriveClient {
     return this.#json(url.toString(), "PATCH", params.name ? { name: params.name } : {});
   }
 
+  async sheetsListSpreadsheets(params: SheetsListSpreadsheetsParams): Promise<Record<string, unknown>> {
+    const filters = ["mimeType='application/vnd.google-apps.spreadsheet'", "trashed=false"];
+    if (params.query?.trim()) filters.push(`name contains '${escapeDriveQueryValue(params.query.trim())}'`);
+    const url = new URL(DRIVE_FILES_URL);
+    url.searchParams.set("q", filters.join(" and "));
+    url.searchParams.set("pageSize", String(params.pageSize));
+    url.searchParams.set("orderBy", "modifiedTime desc");
+    url.searchParams.set("fields", "files(id,name,modifiedTime,webViewLink),nextPageToken");
+    if (params.pageToken) url.searchParams.set("pageToken", params.pageToken);
+    const data = (await (await this.#request(url.toString())).json()) as DriveFilesListResponse;
+    return {
+      spreadsheets: (data.files ?? []).map((file) => ({
+        id: file.id ?? "",
+        name: file.name ?? "",
+        url: file.webViewLink ?? (file.id ? spreadsheetUrl(file.id) : ""),
+        lastModified: file.modifiedTime ?? null,
+      })),
+      nextPageToken: data.nextPageToken ?? null,
+    };
+  }
+
+  async sheetsInspect(params: SheetsInspectParams): Promise<Record<string, unknown>> {
+    const spreadsheetId = extractSpreadsheetId(params);
+    const url = new URL(`${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}`);
+    url.searchParams.set("includeGridData", "false");
+    url.searchParams.set("fields", "spreadsheetId,properties.title,sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount)))");
+    const spreadsheet = (await (await this.#request(url.toString())).json()) as {
+      properties?: { title?: string };
+      sheets?: Array<{ properties?: { sheetId?: number; title?: string; index?: number; gridProperties?: { rowCount?: number; columnCount?: number } } }>;
+    };
+    const tabs = await Promise.all((spreadsheet.sheets ?? []).map(async (sheet) => {
+      const props = sheet.properties;
+      const title = props?.title ?? "";
+      const values = title ? await this.#getValues(spreadsheetId, `${quoteSheetName(title)}!1:${params.maxHeaderScanRows}`, "ROWS").then((r) => normalizeValues(r.values)) : [];
+      const detected = detectHeaderRow(values, params.maxHeaderScanRows);
+      return {
+        tabName: title,
+        sheetId: props?.sheetId ?? null,
+        index: props?.index ?? null,
+        rowCount: props?.gridProperties?.rowCount ?? null,
+        columnCount: props?.gridProperties?.columnCount ?? null,
+        headers: detected.headers,
+        headerRowIndex: detected.headerRowIndex,
+        isEmpty: values.length === 0 || !values.some((row) => row.some((cell) => cell.trim())),
+      };
+    }));
+    return { spreadsheetId, spreadsheetTitle: spreadsheet.properties?.title ?? "", spreadsheetUrl: spreadsheetUrl(spreadsheetId), tabs };
+  }
+
+  async sheetsReadSheet(params: SheetsReadSheetParams): Promise<Record<string, unknown>> {
+    const spreadsheetId = extractSpreadsheetId(params);
+    const values = normalizeValues((await this.#getValues(spreadsheetId, quoteSheetName(params.tabName), "ROWS")).values);
+    const base = { spreadsheetId, spreadsheetUrl: spreadsheetUrl(spreadsheetId), tabName: params.tabName };
+    if (values.length === 0) return { ...base, headerRowIndex: null, headers: [], rows: [] };
+    const detected = params.headerRowIndex > 0
+      ? { headerRowIndex: params.headerRowIndex, headers: trimTrailingEmptyCells(values[params.headerRowIndex - 1] ?? []) }
+      : detectHeaderRow(values);
+    const allRows = rowsFromValues(values, detected.headerRowIndex ?? 1, detected.headers);
+    const rows = params.maxRows === undefined ? allRows.slice(params.rowOffset) : allRows.slice(params.rowOffset, params.rowOffset + params.maxRows);
+    const filtered = filterColumns(rows, detected.headers, params.columns);
+    return {
+      ...base,
+      headerRowIndex: detected.headerRowIndex,
+      headers: filtered.headers,
+      rows: filtered.rows,
+      rowOffset: params.rowOffset,
+      rowCount: filtered.rows.length,
+      totalRowCount: allRows.length,
+      requestedColumns: filtered.requestedColumns,
+      missingColumns: filtered.missingColumns,
+    };
+  }
+
+  async sheetsReadRange(params: SheetsReadRangeParams): Promise<Record<string, unknown>> {
+    const spreadsheetId = extractSpreadsheetId(params);
+    const data = await this.#getValues(spreadsheetId, params.range, params.majorDimension);
+    return {
+      spreadsheetId,
+      spreadsheetUrl: spreadsheetUrl(spreadsheetId),
+      range: data.range ?? params.range,
+      majorDimension: data.majorDimension ?? params.majorDimension,
+      values: normalizeValues(data.values),
+    };
+  }
+
   async sheetsUpdateRange(params: SheetsUpdateRangeParams): Promise<unknown> {
-    return this.#sheetValues(params.spreadsheetId, params.range, params.values, false);
+    return this.#sheetValues(extractSpreadsheetId(params), params.range, params.values, false, params.valueInputOption);
   }
 
   async sheetsAppendRows(params: SheetsAppendRowsParams): Promise<unknown> {
-    return this.#sheetValues(params.spreadsheetId, params.range, params.rows, true);
+    return this.#sheetValues(extractSpreadsheetId(params), params.range, params.rows, true, params.valueInputOption);
   }
 
-  async #sheetValues(spreadsheetId: string, range: string, values: (string | number | boolean)[][], append: boolean): Promise<unknown> {
-    const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}${append ? ":append" : ""}`);
-    url.searchParams.set("valueInputOption", "USER_ENTERED");
+  async #getValues(spreadsheetId: string, range: string, majorDimension: string): Promise<{ range?: string; majorDimension?: string; values?: unknown }> {
+    const url = new URL(`${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`);
+    url.searchParams.set("majorDimension", majorDimension);
+    return (await this.#request(url.toString())).json() as Promise<{ range?: string; majorDimension?: string; values?: unknown }>;
+  }
+
+  async #sheetValues(spreadsheetId: string, range: string, values: (string | number | boolean)[][], append: boolean, valueInputOption = "USER_ENTERED"): Promise<unknown> {
+    const url = new URL(`${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}${append ? ":append" : ""}`);
+    url.searchParams.set("valueInputOption", valueInputOption);
     if (append) url.searchParams.set("insertDataOption", "INSERT_ROWS");
     return this.#json(url.toString(), append ? "POST" : "PUT", { range, majorDimension: "ROWS", values });
   }

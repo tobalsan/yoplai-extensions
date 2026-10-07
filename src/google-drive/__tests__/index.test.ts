@@ -127,7 +127,7 @@ describe("googleDrive extension", () => {
 describe("write mode", () => {
   it("defaults to read-only and exposes six writes only when enabled", () => {
     const names = (merged: Record<string, unknown>) => extension.createTools({ global: {}, agent: {}, merged }).map((tool) => tool.name);
-    expect(names({})).toEqual(["list_files", "search_files", "read_file", "validate"]);
+    expect(names({})).toEqual(["list_files", "search_files", "read_file", "sheets_list_spreadsheets", "sheets_inspect", "sheets_read_sheet", "sheets_read_range", "validate"]);
     expect(names({ allowWrite: false })).toEqual(names({}));
     expect(names({ allowWrite: true })).toEqual([...names({}), "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
     expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false, title: "Enable creating and writing files" } } });
