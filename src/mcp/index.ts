@@ -7,6 +7,7 @@ import { z } from "zod";
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { loadMcpConfigFile, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
+import { createIconResolver, siteLabel } from "./icon.js";
 import { McpOAuthStore, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
@@ -124,6 +125,75 @@ function writeRawConfig(filePath: string, config: Record<string, unknown>): void
   }
 }
 
+const MASK = "••••••••";
+
+const EditableHttpServerSchema = z
+  .object({
+    url: z.string().url(),
+    headers: z.record(z.string()).optional(),
+    oauth: z
+      .object({ clientId: z.string().min(1), clientSecret: z.string().min(1).optional(), scopes: z.array(z.string()).optional() })
+      .strict()
+      .optional(),
+  })
+  .passthrough();
+
+function maskValues(values: unknown): unknown {
+  return isRecord(values) ? Object.fromEntries(Object.keys(values).map((key) => [key, MASK])) : values;
+}
+
+/** Copy of a raw server entry that is safe to show: header/env values and OAuth client secret are masked. */
+function maskServerConfig(server: Record<string, unknown>): Record<string, unknown> {
+  const masked: Record<string, unknown> = { ...server };
+  if ("headers" in masked) masked.headers = maskValues(masked.headers);
+  if ("env" in masked) masked.env = maskValues(masked.env);
+  if (isRecord(masked.oauth) && "clientSecret" in masked.oauth) masked.oauth = { ...masked.oauth, clientSecret: MASK };
+  return masked;
+}
+
+function restoreMasked(submitted: unknown, original: unknown, label: string): unknown {
+  if (!isRecord(submitted)) return submitted;
+  const source = isRecord(original) ? original : {};
+  return Object.fromEntries(Object.entries(submitted).map(([key, value]) => {
+    if (value !== MASK) return [key, value];
+    if (typeof source[key] !== "string") throw new Error(`${label} "${key}" has no stored value to keep; enter a new value`);
+    return [key, source[key]];
+  }));
+}
+
+function validateEditedHttpServer(submitted: unknown, original: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(submitted)) throw new Error("Server config must be a JSON object");
+  for (const field of ["command", "args", "env"]) {
+    if (field in submitted) throw new Error(`"${field}" is not allowed; only HTTP servers are editable`);
+  }
+  const next: Record<string, unknown> = { ...submitted };
+  if ("headers" in next) next.headers = restoreMasked(next.headers, original.headers, "Header");
+  if (isRecord(next.oauth) && next.oauth.clientSecret === MASK) {
+    const secret = isRecord(original.oauth) ? original.oauth.clientSecret : undefined;
+    if (typeof secret !== "string") throw new Error("oauth.clientSecret has no stored value to keep; enter a new value");
+    next.oauth = { ...next.oauth, clientSecret: secret };
+  }
+  const parsed = EditableHttpServerSchema.safeParse(next);
+  if (!parsed.success) throw new Error(parsed.error.issues.map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`).join("; "));
+  const url = new URL(parsed.data.url);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("url must be HTTP or HTTPS without embedded credentials");
+  if (original.yoplaiManaged === true) next.yoplaiManaged = true;
+  for (const field of ["displayName", "description"]) if (!(field in next) && typeof original[field] === "string") next[field] = original[field];
+  return next;
+}
+
+/** Persists the server-reported label once, for UI-added servers only. */
+function saveLabel(filePath: string, name: string, label: { title?: string; description?: string }): void {
+  try {
+    const root = readRawConfig(filePath);
+    const entry = isRecord(root.mcpServers) ? root.mcpServers[name] : undefined;
+    if (!isRecord(entry) || entry.yoplaiManaged !== true || "displayName" in entry || "description" in entry) return;
+    if (label.title) entry.displayName = label.title;
+    if (label.description) entry.description = label.description;
+    writeRawConfig(filePath, root);
+  } catch { /* label is best-effort */ }
+}
+
 function extensionHub(agentId: string): string {
   return `/agents/${encodeURIComponent(agentId)}/edit`;
 }
@@ -224,6 +294,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   let runtime: McpRuntime | undefined;
   let oauth: McpOAuthStore | undefined;
   let connect: CredentialConnectHost | undefined;
+  let resolveIcon: ReturnType<typeof createIconResolver> | undefined;
   let unregister: (() => void) | undefined;
 
   function loadedForAgent(agentId: string): LoadedMcpConfig | undefined {
@@ -254,11 +325,20 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const managed = isRecord(rawServer) && rawServer.yoplaiManaged === true;
     let connected = false;
     let iconUrl: string | undefined;
+    const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
+    // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
+    let title = rawText("displayName");
+    let description = rawText("description");
+    const siteIcon = server.type === "http" ? resolveIcon?.(server.url) : undefined;
     const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
     try {
       const manager = await getManager(key, agentId, [server], requesterUserId);
       const tools = await manager.listTools();
       connected = manager.hasClient(server.name) && tools.some((tool) => tool.server === server.name);
+      if (!title && !description && connected) {
+        ({ title, description } = manager.getServerInfo(server.name));
+        if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
+      }
       const icon = manager.getServerIcon(server.name);
       if (icon) {
         try {
@@ -273,8 +353,10 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     }
     return {
       name: server.name,
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
       type: server.type,
-      ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? new URL("/favicon.ico", server.url).toString() } : iconUrl ? { iconUrl } : {}),
+      ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? await siteIcon } : iconUrl ? { iconUrl } : {}),
       auth,
       state: connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected",
       ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team) } : {}),
@@ -391,6 +473,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     runtime = ctx;
     oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials);
     connect = ctx.credentialConnect;
+    resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {
       const server = loadedForAgent(agentId)?.servers.find((item) => item.name === targetId);
       if (!server || server.type !== "http" || server.headers || !oauth) throw new Error("Unknown OAuth MCP server");
@@ -453,7 +536,11 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       try { url = new URL(input.url); }
       catch { return c.text("Invalid MCP server URL", 400); }
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
-      const name = `${url.hostname.replace(/[^A-Za-z0-9_]/g, "_")}_${crypto.randomBytes(6).toString("hex")}`;
+      const existing = readRawConfig(config.path).mcpServers;
+      const taken = (candidate: string) => isRecord(existing) && Object.hasOwn(existing, candidate);
+      const base = siteLabel(url.hostname);
+      let name = base;
+      for (let n = 2; taken(name); n++) name = `${base}_${n}`;
       const server: McpServerConfig = { type: "http", name, url: url.toString() };
       const scope: CredentialScope = input.credentialScope === "team" ? { type: "team" } : userId(c) ? { type: "personal", userId: userId(c)! } : { type: "team" };
       if (input.credentialScope === "personal" && scope.type !== "personal") return c.text("Authentication required for personal connection", 401);
@@ -502,6 +589,49 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         return c.json({ ok: true });
       } catch (error) {
         return c.text(error instanceof Error ? error.message : "Unable to remove MCP server", 400);
+      }
+    });
+    app.get("/mcp/servers/config", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      try {
+        const rawServer = readRawConfig(config.path).mcpServers as Record<string, unknown>;
+        const server = Object.hasOwn(rawServer, name) ? rawServer[name] : undefined;
+        if (!isRecord(server)) return c.text("Unknown MCP server", 404);
+        const type = typeof server.command === "string" && typeof server.url !== "string" ? "stdio" : "http";
+        return c.json({ name, type, editable: type === "http" && canConfigureTeam(c), config: maskServerConfig(server) });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to read MCP server config", 400);
+      }
+    });
+    app.post("/mcp/servers/config", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!isRecord(input) || !("config" in input)) return c.text("config is required", 400);
+      try {
+        const root = readRawConfig(config.path);
+        const servers = root.mcpServers as Record<string, unknown>;
+        const original = Object.hasOwn(servers, name) ? servers[name] : undefined;
+        if (!isRecord(original)) return c.text("Unknown MCP server", 404);
+        if (typeof original.command === "string" && typeof original.url !== "string") return c.text("stdio MCP servers are read-only", 403);
+        const next = validateEditedHttpServer(input.config, original);
+        servers[name] = next;
+        writeRawConfig(config.path, root);
+        await resetManagers(agentId);
+        audit({ ...actor(c), action: "mcp.server.update", agentId, targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "mcpServers", secret: "set" }] });
+        return c.json({ name, type: "http", editable: true, config: maskServerConfig(next) });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to save MCP server config", 400);
       }
     });
     app.get("/mcp/oauth/status", async (c) => {

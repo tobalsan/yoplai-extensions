@@ -218,3 +218,80 @@ describe("MCP server cards and self-service routes", () => {
     await extension.stop();
   });
 });
+
+describe("MCP server config routes", () => {
+  it("masks secrets, keeps masked values, rejects stdio edits, preserves other fields, audits", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-config-")); dirs.push(dir);
+    const file = path.join(dir, "mcp.json");
+    const original = { futureField: 1, mcpServers: {
+      local: { command: "node", env: { TOKEN: "secret" } },
+      api: { url: "https://api.example.test/mcp", headers: { Authorization: "Bearer real" }, future: "x" },
+    } };
+    await fs.writeFile(file, JSON.stringify(original));
+    const extension = createMcpExtension(async () => { throw new Error("offline"); });
+    const record = vi.fn();
+    await extension.start({ audit: { record }, getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const get = routes.routes.get("GET /mcp/servers/config")!;
+    const post = routes.routes.get("POST /mcp/servers/config")!;
+    const shown = await get(context({ agent: "agent-a", server: "api" }));
+    expect(shown).toMatchObject({ type: "http", editable: true, config: { headers: { Authorization: "••••••••" } } });
+    expect(JSON.stringify(shown)).not.toContain("Bearer real");
+    expect(await get(context({ agent: "agent-a", server: "local" }))).toMatchObject({ type: "stdio", editable: false, config: { env: { TOKEN: "••••••••" } } });
+    const saved = await post(context({ agent: "agent-a", server: "api" }, { config: { url: "https://api2.example.test/mcp", headers: { Authorization: "••••••••", "X-New": "n" }, future: "x" } }));
+    expect(saved).toMatchObject({ editable: true });
+    const disk = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(disk.futureField).toBe(1);
+    expect(disk.mcpServers.local).toEqual(original.mcpServers.local);
+    expect(disk.mcpServers.api).toEqual({ url: "https://api2.example.test/mcp", headers: { Authorization: "Bearer real", "X-New": "n" }, future: "x" });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: "mcp.server.update", targetId: "api" }));
+    expect(await post(context({ agent: "agent-a", server: "local" }, { config: { url: "https://x.example.test" } }))).toMatchObject({ status: 403 });
+    expect(await post(context({ agent: "agent-a", server: "api" }, { config: { url: "https://x.example.test", command: "sh" } }))).toMatchObject({ status: 400 });
+    expect(await post(context({ agent: "agent-a", server: "api" }, { config: { url: "ftp://x.example.test" } }))).toMatchObject({ status: 400 });
+    expect(await post(context({ agent: "agent-a", server: "api" }, { config: { url: "https://x.example.test", headers: { "X-Unknown": "••••••••" } } }))).toMatchObject({ status: 400 });
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual(disk);
+    await extension.stop();
+  });
+
+  it("names added servers after their site, dedupes, and stores the server-reported title", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const file = path.join(dir, "mcp.json");
+    await fs.writeFile(file, JSON.stringify({ mcpServers: {} }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const factory = vi.fn(async (server: { name: string }) => ({
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+      getServerInfo: () => ({ title: "Linear", description: "Issues and projects" }),
+    }));
+    const extension = createMcpExtension(factory);
+    await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const add = routes.routes.get("POST /mcp/servers")!;
+    const first = await add(context({ agent: "agent-a" }, { url: "https://mcp.linear.app/mcp", credentialScope: "team" }));
+    const second = await add(context({ agent: "agent-a" }, { url: "https://mcp.linear.app/sse", credentialScope: "team" }));
+    expect([first.server.name, second.server.name]).toEqual(["linear", "linear_2"]);
+    expect(first.server.title).toBe("Linear");
+    expect(JSON.parse(await fs.readFile(file, "utf8")).mcpServers.linear).toEqual({ url: "https://mcp.linear.app/mcp", yoplaiManaged: true, displayName: "Linear", description: "Issues and projects" });
+    expect(first.server.description).toBe("Issues and projects");
+    await extension.stop();
+  });
+
+  it("uses displayName and description from any server entry, including stdio", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: {
+      aimx: { command: "node", args: ["server.js"], displayName: "AIMX Mail", description: "Agent mailboxes" },
+    } }));
+    const factory = vi.fn(async (server: { name: string }) => ({
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+    }));
+    const extension = createMcpExtension(factory);
+    await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const list = await routes.routes.get("GET /mcp/servers")!(context({ agent: "agent-a" }));
+    expect(list.servers[0]).toMatchObject({ name: "aimx", type: "stdio", title: "AIMX Mail", description: "Agent mailboxes", state: "connected" });
+    await extension.stop();
+  });
+});

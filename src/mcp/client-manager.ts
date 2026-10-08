@@ -16,11 +16,41 @@ export interface McpToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+export type McpServerLabel = { title?: string; description?: string };
+
+const MAX_TITLE_LENGTH = 40;
+
+/**
+ * Short title + description from initialize `serverInfo`. Some servers stuff a sentence into `title`
+ * (e.g. "Claap Meeting Recording Platform: Browse meetings…"); split it at the first ":" / " - " / " — ".
+ */
+export function labelFromServerInfo(info: { name?: string; title?: string; description?: string } | undefined): McpServerLabel {
+  let title = info?.title?.trim() || undefined;
+  let description = info?.description?.trim() || undefined;
+  if (!title) {
+    const name = info?.name?.trim();
+    // `name` is often a slug ("github-mcp-server"); only use it when it reads like a label.
+    if (name && /[A-Z ]/.test(name) && !/[_-]/.test(name)) title = name;
+  }
+  if (title && title.length > MAX_TITLE_LENGTH) {
+    const match = title.match(/^(.{2,40}?)\s*(?::|\s[-—–]\s)\s*(.+)$/);
+    if (match) {
+      title = match[1];
+      description ??= match[2];
+    } else {
+      description ??= title;
+      title = undefined;
+    }
+  }
+  return { ...(title ? { title } : {}), ...(description ? { description } : {}) };
+}
+
 export interface McpClientHandle {
   listTools(): Promise<McpToolDefinition[]>;
   callTool(name: string, args: unknown): Promise<unknown>;
   close(): Promise<void>;
   getServerIcon?(): string | undefined;
+  getServerInfo?(): McpServerLabel;
 }
 
 async function withTimeout<T>(task: Promise<T>, message: string): Promise<T> {
@@ -83,6 +113,10 @@ export class SdkMcpClientHandle implements McpClientHandle {
 
   getServerIcon(): string | undefined {
     return this.client.getServerVersion()?.icons?.[0]?.src;
+  }
+
+  getServerInfo(): McpServerLabel {
+    return labelFromServerInfo(this.client.getServerVersion());
   }
 
   async close(): Promise<void> {
@@ -266,6 +300,10 @@ export class McpClientManager {
 
   getServerIcon(server: string): string | undefined {
     return this.clients.get(server)?.getServerIcon?.();
+  }
+
+  getServerInfo(server: string): McpServerLabel {
+    return this.clients.get(server)?.getServerInfo?.() ?? {};
   }
 
   async invoke(namespacedToolName: string, args: unknown): Promise<unknown> {
