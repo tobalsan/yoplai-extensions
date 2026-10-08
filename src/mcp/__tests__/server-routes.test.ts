@@ -327,4 +327,16 @@ describe("MCP server config routes", () => {
     expect(page.value).toContain("Connection failed");
     expect(page.value).not.toContain("<b>");
   });
+
+  it("rejects adding a server URL that is already configured", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const file = path.join(dir, "mcp.json");
+    await fs.writeFile(file, JSON.stringify({ mcpServers: { docs: { url: "https://docs.example.test/mcp" } } }));
+    const extension = createMcpExtension();
+    await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const result = await routes.routes.get("POST /mcp/servers")!(context({ agent: "agent-a" }, { url: "https://DOCS.example.test/mcp/", credentialScope: "team" }));
+    expect(result).toMatchObject({ status: 409, value: "This MCP server has already been added." });
+    expect(Object.keys(JSON.parse(await fs.readFile(file, "utf8")).mcpServers)).toEqual(["docs"]);
+  });
 });

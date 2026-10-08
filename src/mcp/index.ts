@@ -269,6 +269,12 @@ const baseExtension = defineToolExtension({
   },
 });
 
+/** Same URL ignoring host case, default port and trailing slash. */
+function sameServerUrl(a: string, b: URL): boolean {
+  const normalize = (url: URL) => `${url.origin}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+  try { return normalize(new URL(a)) === normalize(b); } catch { return false; }
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
@@ -574,6 +580,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       catch { return c.text("Invalid MCP server URL", 400); }
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
       const existing = readRawConfig(config.path).mcpServers;
+      if (isRecord(existing) && Object.values(existing).some((entry) => isRecord(entry) && typeof entry.url === "string" && sameServerUrl(entry.url, url))) return c.text("This MCP server has already been added.", 409);
       const taken = (candidate: string) => isRecord(existing) && Object.hasOwn(existing, candidate);
       const base = siteLabel(url.hostname);
       let name = base;
