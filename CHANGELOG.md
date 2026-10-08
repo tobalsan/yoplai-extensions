@@ -4,9 +4,18 @@
 
 ### Added
 
+- MCP servers now appear as individual extension cards, and agent members can add HTTP(S) servers from the extension list with immediate OAuth authorization or direct no-auth connection (ALG-469).
+
 - MCP OAuth connections and removals record redacted settings audit events when the host supports auditing (ALG-470).
 
 ### Changed
+
+- Servers added from the UI get a readable key from their site (`mcp.linear.app` → `linear`, then `linear_2`), and cards show the server-reported name and description (`serverInfo.title`/`description`; sentence-like titles are split at the first colon or dash) once connected, saved as `displayName`/`description` on UI-added `mcp.json` entries. Any server entry, stdio included, may set optional `displayName` and `description` to override the card label (yoplai-only keys; other MCP clients ignore them). Servers without an icon show the official MCP logo.
+- MCP routes `GET/POST /mcp/servers/config?agent=&server=` read and edit one HTTP server's `mcp.json` entry (secrets masked, stdio read-only, audited as `mcp.server.update`) (ALG-469).
+
+- HTTP MCP servers without a server-provided icon use their host's website icon, falling back to the root domain; found icons are cached in `<data dir>/mcp/icons.json` (ALG-469).
+
+- MCP loads automatically when an agent has `mcp.json`; server cards show live connection state and app icons when available, while disconnect and removal remain separate actions (ALG-469).
 
 - Google Drive now supports an optional `allowWrite` toggle for creating/editing files and Google Sheets, with mode-specific OAuth scopes and reconnect guidance (ALG-467). The toggle is labeled **Enable creating and writing files**; extensions can set config field labels via `configFieldTitles`.
 

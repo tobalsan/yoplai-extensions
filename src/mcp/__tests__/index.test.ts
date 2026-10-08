@@ -19,12 +19,8 @@ describe("mcp extension", () => {
     delete process.env.AIHUB_HOME;
   });
 
-  it("ignores mcp.json unless the agent opts in", async () => {
+  it("does not expose tools when mcp.json is absent", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
-    fs.writeFileSync(
-      path.join(agentDir, "mcp.json"),
-      JSON.stringify({ mcpServers: { local: { command: "node" } } })
-    );
 
     await expect(
       extension.getAgentTools?.(
@@ -34,29 +30,35 @@ describe("mcp extension", () => {
     ).resolves.toEqual([]);
   });
 
-  it("requires enabled true to opt in", async () => {
+  it("uses mcp.json even without an enabled flag", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
     fs.writeFileSync(
       path.join(agentDir, "mcp.json"),
       JSON.stringify({ mcpServers: { local: { command: "node" } } })
     );
 
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+    }));
     await expect(
-      extension.getAgentTools?.(
+      mockedExtension.getAgentTools?.(
         { id: "casey", workspaceDir: agentDir, extensions: { mcp: {} } },
         { config: { extensions: {} } }
       )
-    ).resolves.toEqual([]);
+    ).resolves.toEqual([expect.objectContaining({ name: "mcp__local__ping" })]);
 
     expect(
       extension.getSystemPromptContributions?.(
         { id: "casey", workspaceDir: agentDir, extensions: { mcp: {} } },
         { config: { extensions: {} } }
       )
-    ).toBeUndefined();
+    ).toEqual([expect.stringContaining("MCP tools")]);
+    await mockedExtension.stop();
   });
 
-  it("ignores invalid mcp config fields when the agent disables MCP", async () => {
+  it("rejects invalid MCP config fields even with enabled false", async () => {
     await expect(
       extension.getAgentTools?.(
         {
@@ -66,10 +68,10 @@ describe("mcp extension", () => {
         },
         { config: { extensions: {} } }
       )
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("Expected string");
   });
 
-  it("ignores invalid mcp config fields when enabled is omitted", async () => {
+  it("validates invalid MCP config fields without an enabled flag", async () => {
     await expect(
       extension.getAgentTools?.(
         {
@@ -79,14 +81,14 @@ describe("mcp extension", () => {
         },
         { config: { extensions: {} } }
       )
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("Expected string");
 
     expect(
       extension.validateAgentConfigs({
         agents: [{ id: "casey", extensions: { mcp: { configPath: 123 } } }],
         extensions: {},
       })
-    ).toEqual({ valid: true, errors: [] });
+    ).toMatchObject({ valid: false });
   });
 
   it("validates malformed enabled mcp config fields", () => {

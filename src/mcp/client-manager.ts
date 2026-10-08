@@ -16,10 +16,53 @@ export interface McpToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+export type McpServerLabel = { title?: string; description?: string };
+
+const MAX_TITLE_LENGTH = 40;
+
+/**
+ * Short title + description from initialize `serverInfo`. Some servers stuff a sentence into `title`
+ * (e.g. "Claap Meeting Recording Platform: Browse meetings…"); split it at the first ":" / " - " / " — ".
+ */
+export function labelFromServerInfo(info: { name?: string; title?: string; description?: string } | undefined): McpServerLabel {
+  let title = info?.title?.trim() || undefined;
+  let description = info?.description?.trim() || undefined;
+  if (!title) {
+    const name = info?.name?.trim();
+    // `name` is often a slug ("github-mcp-server"); only use it when it reads like a label.
+    if (name && /[A-Z ]/.test(name) && !/[_-]/.test(name)) title = name;
+  }
+  if (title && title.length > MAX_TITLE_LENGTH) {
+    const match = title.match(/^(.{2,40}?)\s*(?::|\s[-—–]\s)\s*(.+)$/);
+    if (match) {
+      title = match[1];
+      description ??= match[2];
+    } else {
+      description ??= title;
+      title = undefined;
+    }
+  }
+  return { ...(title ? { title } : {}), ...(description ? { description } : {}) };
+}
+
 export interface McpClientHandle {
   listTools(): Promise<McpToolDefinition[]>;
   callTool(name: string, args: unknown): Promise<unknown>;
   close(): Promise<void>;
+  getServerIcon?(): string | undefined;
+  getServerInfo?(): McpServerLabel;
+}
+
+async function withTimeout<T>(task: Promise<T>, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 10_000); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
@@ -41,7 +84,13 @@ export class SdkMcpClientHandle implements McpClientHandle {
   static async connect(server: McpServerConfig, accessToken?: string): Promise<SdkMcpClientHandle> {
     const client = new Client({ name: "yoplai-mcp", version: "0.1.0" });
     const transport = createTransport(server, accessToken);
-    await client.connect(transport);
+    try {
+      await withTimeout(client.connect(transport), `MCP server "${server.name}" connection timed out`);
+    } catch (error) {
+      try { await withTimeout(transport.close(), `MCP server "${server.name}" close timed out`); }
+      catch { /* The original connection error is more useful. */ }
+      throw error;
+    }
     return new SdkMcpClientHandle(server.name, client, transport);
   }
 
@@ -60,6 +109,14 @@ export class SdkMcpClientHandle implements McpClientHandle {
       name,
       arguments: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
     });
+  }
+
+  getServerIcon(): string | undefined {
+    return this.client.getServerVersion()?.icons?.[0]?.src;
+  }
+
+  getServerInfo(): McpServerLabel {
+    return labelFromServerInfo(this.client.getServerVersion());
   }
 
   async close(): Promise<void> {
@@ -107,6 +164,7 @@ export class McpClientManager {
   private readonly toolIndex = new Map<string, { server: string; tool: string }>();
   private readonly errors: McpServerError[] = [];
   private readonly recoveries = new Map<string, Promise<boolean>>();
+  private connecting?: Promise<void>;
 
   constructor(
     private readonly servers: McpServerConfig[],
@@ -119,8 +177,9 @@ export class McpClientManager {
   ) {}
 
   async connect(): Promise<void> {
-    await Promise.all(
-      this.servers.map(async (server) => {
+    if (this.connecting) return this.connecting;
+    this.connecting = Promise.all(
+      this.servers.filter((server) => !this.clients.has(server.name)).map(async (server) => {
         try {
           await this.connectServer(server);
         } catch (error) {
@@ -128,7 +187,9 @@ export class McpClientManager {
           this.recordError(server.name, error);
         }
       })
-    );
+    ).then(() => undefined);
+    try { await this.connecting; }
+    finally { this.connecting = undefined; }
   }
 
   private async connectServer(server: McpServerConfig): Promise<void> {
@@ -138,7 +199,13 @@ export class McpClientManager {
     if (server.type === "http" && !server.headers && this.tokenProvider && await this.requiresOAuth?.(server) && !accessToken) {
       throw new Error("OAuth connection required");
     }
-    const client = await this.clientFactory(server, accessToken);
+    const pending = this.clientFactory(server, accessToken);
+    let timedOut = false;
+    void pending.then((client) => { if (timedOut) return withTimeout(client.close(), `MCP server "${server.name}" close timed out`); }).catch(() => {});
+    const client = await withTimeout(pending, `MCP server "${server.name}" connection timed out`).catch((error: unknown) => {
+      timedOut = true;
+      throw error;
+    });
     this.clients.set(server.name, client);
   }
 
@@ -160,7 +227,7 @@ export class McpClientManager {
     this.clients.delete(server.name);
     if (client) {
       try {
-        await client.close();
+        await withTimeout(client.close(), `MCP server "${server.name}" close timed out`);
       } catch (error) {
         this.recordError(server.name, error);
       }
@@ -178,7 +245,7 @@ export class McpClientManager {
   private async discardClient(server: string, client: McpClientHandle): Promise<void> {
     if (this.clients.get(server) === client) this.clients.delete(server);
     try {
-      await client.close();
+      await withTimeout(client.close(), `MCP server "${server}" close timed out`);
     } catch (error) {
       this.recordError(server, error);
     }
@@ -188,14 +255,14 @@ export class McpClientManager {
     const groups = await Promise.all(
       [...this.clients.entries()].map(async ([server, client]) => {
         try {
-          return await client.listTools();
+          return await withTimeout(client.listTools(), `MCP server "${server}" tool listing timed out`);
         } catch (error) {
           const config = this.servers.find((item) => item.name === server);
           if (config && isUnauthorized(error) && await this.recover(config)) {
             const refreshed = this.clients.get(server);
             if (refreshed) {
               try {
-                return await refreshed.listTools();
+                return await withTimeout(refreshed.listTools(), `MCP server "${server}" tool listing timed out`);
               } catch (retryError) {
                 if (isUnauthorized(retryError)) await this.onUnrecoverableAuthFailure?.(config);
                 this.recordError(server, retryError);
@@ -206,7 +273,7 @@ export class McpClientManager {
           }
           this.recordError(server, error);
           try {
-            await client.close();
+            await withTimeout(client.close(), `MCP server "${server}" close timed out`);
           } catch (closeError) {
             this.recordError(server, closeError);
           } finally {
@@ -225,6 +292,18 @@ export class McpClientManager {
       });
     }
     return tools;
+  }
+
+  hasClient(server: string): boolean {
+    return this.clients.has(server);
+  }
+
+  getServerIcon(server: string): string | undefined {
+    return this.clients.get(server)?.getServerIcon?.();
+  }
+
+  getServerInfo(server: string): McpServerLabel {
+    return this.clients.get(server)?.getServerInfo?.() ?? {};
   }
 
   async invoke(namespacedToolName: string, args: unknown): Promise<unknown> {
@@ -272,7 +351,10 @@ export class McpClientManager {
   }
 
   async close(): Promise<void> {
-    await Promise.all([...this.clients.values()].map((client) => client.close()));
+    await Promise.all([...this.clients.entries()].map(async ([server, client]) => {
+      try { await withTimeout(client.close(), `MCP server "${server}" close timed out`); }
+      catch (error) { this.recordError(server, error); }
+    }));
     this.clients.clear();
     this.toolIndex.clear();
   }
