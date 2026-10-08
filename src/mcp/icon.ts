@@ -58,6 +58,15 @@ async function findIcon(origin: string): Promise<string | undefined> {
   return favicon?.headers?.get("content-type")?.startsWith("image/") ? favicon.url || `${origin}/favicon.ico` : undefined;
 }
 
+/** Hosted MCP servers whose serverInfo/site give no usable label or icon (e.g. Google reports "StatelessServer"). */
+const KNOWN_SERVERS: Record<string, { title: string; iconUrl: string }> = {
+  "calendarmcp.googleapis.com": { title: "Google Calendar", iconUrl: "https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png" },
+};
+
+export function knownServer(url: string): { title: string; iconUrl: string } | undefined {
+  try { return KNOWN_SERVERS[new URL(url).host.toLowerCase()]; } catch { return undefined; }
+}
+
 /** Resolves website icons for HTTP MCP servers, persisted as a hostname → icon URL map. */
 export function createIconResolver(dataDir: string) {
   const file = path.join(dataDir, "mcp", "icons.json");
@@ -68,7 +77,8 @@ export function createIconResolver(dataDir: string) {
   async function lookup(serverUrl: string): Promise<string | undefined> {
     const { protocol, hostname } = new URL(serverUrl);
     const root = rootDomain(hostname);
-    const [hostIcon, rootIcon] = await Promise.all([findIcon(`${protocol}//${hostname}`), root ? findIcon(`${protocol}//${root}`) : undefined]);
+    const known = knownServer(serverUrl)?.iconUrl;
+    const [hostIcon, rootIcon] = known ? [known] : await Promise.all([findIcon(`${protocol}//${hostname}`), root ? findIcon(`${protocol}//${root}`) : undefined]);
     const icon = hostIcon ?? rootIcon;
     if (icon) {
       cache[hostname] = icon;

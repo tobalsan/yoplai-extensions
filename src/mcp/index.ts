@@ -7,7 +7,7 @@ import { z } from "zod";
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { loadMcpConfigFile, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
-import { createIconResolver, siteLabel } from "./icon.js";
+import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
@@ -331,7 +331,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     let iconUrl: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
-    let title = rawText("displayName");
+    const known = server.type === "http" ? knownServer(server.url) : undefined;
+    let title = rawText("displayName") ?? known?.title;
     let description = rawText("description");
     const siteIcon = server.type === "http" ? resolveIcon?.(server.url) : undefined;
     const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
@@ -339,6 +340,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const manager = await getManager(key, agentId, [server], requesterUserId);
       const tools = await manager.listTools();
       connected = manager.hasClient(server.name) && tools.some((tool) => tool.server === server.name);
+      if (known && !rawText("displayName") && managed && config) saveLabel(config.path, server.name, { title });
       if (!title && !description && connected) {
         ({ title, description } = manager.getServerInfo(server.name));
         if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });

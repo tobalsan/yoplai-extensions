@@ -295,6 +295,26 @@ describe("MCP server config routes", () => {
     await extension.stop();
   });
 
+  it("labels known hosted MCP servers that report generic server info", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1", yoplaiManaged: true } } }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const factory = vi.fn(async (server: { name: string }) => ({
+      async listTools() { return [{ server: server.name, name: "list_events", description: "List", inputSchema: { type: "object" } }]; },
+      async callTool() { return ""; },
+      async close() {},
+      getServerInfo: () => ({ title: "StatelessServer" }),
+    }));
+    const extension = createMcpExtension(factory);
+    await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const list = await routes.routes.get("GET /mcp/servers")!(context({ agent: "agent-a" }));
+    expect(list.servers).toEqual([expect.objectContaining({ name: "calendar", title: "Google Calendar", iconUrl: "https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png" })]);
+    // Persisted so file-based views (admin Top extensions) show the same label and icon.
+    expect(JSON.parse(await fs.readFile(path.join(dir, "mcp.json"), "utf8")).mcpServers.calendar.displayName).toBe("Google Calendar");
+    expect(JSON.parse(await fs.readFile(path.join(dir, "mcp", "icons.json"), "utf8"))["calendarmcp.googleapis.com"]).toBe("https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png");
+  });
+
   it("renders a styled, escaped OAuth result page", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
