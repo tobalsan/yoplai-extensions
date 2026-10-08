@@ -10,6 +10,7 @@
 
 ### Changed
 
+- `GET /mcp/servers/personal-status?agent=&url=` reports whether the user already has a usable shared personal grant for a server URL, so adding it "Just me" needs no OAuth popup.
 - Personal MCP OAuth connections are shared across agents that configure the same server URL; team connections stay per agent.
 - Servers added from the UI get a readable key from their site (`mcp.linear.app` → `linear`, then `linear_2`), and cards show the server-reported name and description (`serverInfo.title`/`description`; sentence-like titles are split at the first colon or dash) once connected, saved as `displayName`/`description` on UI-added `mcp.json` entries. Any server entry, stdio included, may set optional `displayName` and `description` to override the card label (yoplai-only keys; other MCP clients ignore them). Servers without an icon show the official MCP logo.
 - MCP routes `GET/POST /mcp/servers/config?agent=&server=` read and edit one HTTP server's `mcp.json` entry (secrets masked, stdio read-only, audited as `mcp.server.update`) (ALG-469).

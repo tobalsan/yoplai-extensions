@@ -523,6 +523,22 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (c.req.query("scope") === "personal") return { type: "personal", userId: id };
       return undefined;
     }
+    /** A usable personal grant shared from another agent needs no new authorization. */
+    async function hasUsablePersonalGrant(agentId: string, name: string, scope: CredentialScope, url: string): Promise<boolean> {
+      const grant = scope.type === "personal" ? await oauth?.read(agentId, name, scope, { url }) : undefined;
+      return !!grant && grant.state !== "needs_reconnect";
+    }
+    app.get("/mcp/servers/personal-status", async (c) => {
+      const agentId = c.req.query("agent");
+      if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      let url: URL;
+      try { url = new URL(c.req.query("url") ?? ""); }
+      catch { return c.text("Invalid MCP server URL", 400); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
+      const id = userId(c);
+      return c.json({ connected: id ? await hasUsablePersonalGrant(agentId, siteLabel(url.hostname), { type: "personal", userId: id }, url.toString()) : false });
+    });
     app.get("/mcp/servers", async (c) => {
       const agentId = c.req.query("agent");
       if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
@@ -555,9 +571,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (input.credentialScope === "personal" && scope.type !== "personal") return c.text("Authentication required for personal connection", 401);
       let flow: { state: string; authorizationUrl: string } | undefined;
       try {
-        // A usable personal grant shared from another agent needs no new authorization.
-        const shared = scope.type === "personal" ? await oauth?.read(agentId, name, scope, { url: server.url }) : undefined;
-        if ((!shared || shared.state === "needs_reconnect") && await isOAuthServer(agentId, server)) {
+        if (!await hasUsablePersonalGrant(agentId, name, scope, server.url) && await isOAuthServer(agentId, server)) {
           if (!oauth) throw new Error("OAuth is unavailable");
           const store = oauth;
           let timedOut = false;

@@ -198,6 +198,48 @@ describe("shared personal MCP grants", () => {
       await expect(run("connie", added.server.name, "A")).resolves.toBe("A");
     } finally { await extension.stop(); }
   });
+  describe("personal-status route", () => {
+    const status = (routes: Map<string, (c: unknown) => Promise<any>>, userId: string | undefined, url: string) =>
+      routes.get("GET /mcp/servers/personal-status")!(context(userId, { agent: "connie", url }));
+    it("is connected for the user with a shared personal grant", async () => {
+      const { store, routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
+      try {
+        await store.write("sally", "claap", connection("A"), personal("A"), { url: URL_A });
+        expect(await status(routes, "A", URL_A)).toEqual({ connected: true });
+        expect(await status(routes, "A", "HTTPS://Claap.Example.test:443/mcp")).toEqual({ connected: true });
+      } finally { await extension.stop(); }
+    });
+    it("is not connected when the grant needs reconnect", async () => {
+      const { store, routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
+      try {
+        await store.write("sally", "claap", connection("A", "needs_reconnect"), personal("A"), { url: URL_A });
+        expect(await status(routes, "A", URL_A)).toEqual({ connected: false });
+      } finally { await extension.stop(); }
+    });
+    it("is not connected for another user or without a user", async () => {
+      const { store, routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
+      try {
+        await store.write("sally", "claap", connection("A"), personal("A"), { url: URL_A });
+        expect(await status(routes, "B", URL_A)).toEqual({ connected: false });
+        expect(await status(routes, undefined, URL_A)).toEqual({ connected: false });
+      } finally { await extension.stop(); }
+    });
+    it("is not connected with only a team grant", async () => {
+      const { store, routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
+      try {
+        await store.write("sally", "claap", connection("team"), undefined, { url: URL_A });
+        expect(await status(routes, "A", URL_A)).toEqual({ connected: false });
+      } finally { await extension.stop(); }
+    });
+    it("rejects an invalid URL and an unknown agent", async () => {
+      const { routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
+      try {
+        expect(await status(routes, "A", "not a url")).toMatchObject({ status: 400 });
+        expect(await status(routes, "A", "ftp://claap.example.test/mcp")).toMatchObject({ status: 400 });
+        expect(await routes.get("GET /mcp/servers/personal-status")!(context("A", { agent: "nope", url: URL_A }))).toMatchObject({ status: 404 });
+      } finally { await extension.stop(); }
+    });
+  });
   it("adding a server whose shared personal grant needs reconnect still starts OAuth", async () => {
     const { store, routes, extension } = await setup({ sally: { claap: { url: URL_A } }, connie: {} });
     try {
