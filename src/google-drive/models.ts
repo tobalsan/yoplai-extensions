@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const GoogleDriveConfigSchema = z.object({
-  allowWrite: z.boolean().default(false).describe("Allow creating and editing Drive files and Google Sheets. Reconnect Google after enabling."),
+  allowWrite: z.boolean().default(false).describe("Allow creating and editing Drive files and Google Sheets."),
 }).passthrough();
 export type GoogleDriveConfig = z.infer<typeof GoogleDriveConfigSchema>;
 
