@@ -8,7 +8,7 @@ import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { loadMcpConfigFile, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
 import { createIconResolver, siteLabel } from "./icon.js";
-import { McpOAuthStore, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
+import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
@@ -269,7 +269,7 @@ const baseExtension = defineToolExtension({
   },
 });
 
-type McpRuntimeConfig = { extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
+type McpRuntimeConfig = { oauth?: { providers?: Record<string, { clientId?: string; clientSecret?: string }> }; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
 export interface CredentialConnectHost {
   registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; actorEmail?: string; impersonatorUserId?: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
   requestLink(toolContext: unknown, target: { kind: "extension-oauth"; extensionId: string; targetId: string }): Promise<string | undefined>;
@@ -392,7 +392,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
           signal: AbortSignal.timeout(10_000),
           body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-detection", method: "initialize", params: {} }),
         }), 10_000, "MCP OAuth detection timed out");
-        result = response.status === 401;
+        result = response.status === 401 || await hasProtectedResourceAuthServers(server.url);
         if (result) oauthServers.add(key);
       } catch {
         // Connection failures are not evidence that this server uses OAuth.
@@ -475,7 +475,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       let server: McpServerConfig | undefined;
       try { server = loadedForAgent(agentId)?.servers.find((item) => item.name === name); } catch { return undefined; }
       return server?.type === "http" ? { url: server.url, clientId: server.oauth?.clientId } : undefined;
-    });
+    }, () => ctx.getConfig().oauth?.providers);
     connect = ctx.credentialConnect;
     resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {

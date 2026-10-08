@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   discoverOAuthServerInfo,
   discoverAuthorizationServerMetadata,
+  discoverOAuthProtectedResourceMetadata,
   exchangeAuthorization,
   refreshAuthorization,
   registerClient,
@@ -34,6 +35,26 @@ function identityOf({ url, clientId }: McpServerIdentity): string {
   const parsed = new URL(url);
   const normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
   return clientId ? `${normalized}#${clientId}` : normalized;
+}
+
+export type HostOAuthProviders = () => Record<string, { clientId?: string; clientSecret?: string } | undefined> | undefined;
+
+/** Authorization server host -> host `oauth.providers` key. */
+const KNOWN_ISSUER_PROVIDERS: Record<string, string> = { "accounts.google.com": "google" };
+
+function providerNameForIssuer(authorizationServerUrl: string): string | undefined {
+  try { return KNOWN_ISSUER_PROVIDERS[new URL(authorizationServerUrl).host.toLowerCase()]; } catch { return undefined; }
+}
+
+/** RFC 9728 lookup using the same SDK discovery as `begin()`; true when the resource lists authorization servers. */
+export async function hasProtectedResourceAuthServers(url: string): Promise<boolean> {
+  try {
+    const metadata = await discoverOAuthProtectedResourceMetadata(url, undefined, oauthFetch);
+    return (metadata.authorization_servers?.length ?? 0) > 0;
+  } catch {
+    // Missing or malformed metadata gives no OAuth evidence.
+    return false;
+  }
 }
 
 export type OAuthState = "connected" | "disconnected" | "needs_reconnect";
@@ -100,7 +121,7 @@ export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
   private readonly refreshes = new Map<string, Promise<string | undefined>>();
 
-  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver) {}
+  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly hostProviders?: HostOAuthProviders) {}
 
   private legacyKey(agent: string, server: string, scope: CredentialScope): CredentialKey {
     return { agentId: agent, integration: `mcp:${server}`, scope };
@@ -209,18 +230,24 @@ export class McpOAuthStore {
   async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>, actor?: AuditActor): Promise<{ state: string; authorizationUrl: string }> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
-    if (!staticClient && !info.authorizationServerMetadata?.registration_endpoint) {
-      throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json");
+    const dynamic = Boolean(info.authorizationServerMetadata?.registration_endpoint);
+    const providerName = providerNameForIssuer(info.authorizationServerUrl);
+    const provider = !staticClient && !dynamic && providerName ? this.hostProviders?.()?.[providerName] : undefined;
+    const hostClient = provider?.clientId ? { clientId: provider.clientId, clientSecret: provider.clientSecret } : undefined;
+    if (!staticClient && !dynamic && !hostClient) {
+      throw new Error(`OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json or configure oauth.providers.${providerName ?? "<provider>"} in yoplai.json`);
     }
+    const preRegistered = staticClient ?? hostClient;
     const identity = { url, clientId: staticClient?.clientId };
     const existing = await this.read(agent, server, scope, identity);
-    const client: OAuthClientInformationFull = staticClient
-      ? { client_id: staticClient.clientId, ...(staticClient.clientSecret ? { client_secret: staticClient.clientSecret } : {}), redirect_uris: [this.redirectUri] }
+    const client: OAuthClientInformationFull = preRegistered
+      ? { client_id: preRegistered.clientId, ...(preRegistered.clientSecret ? { client_secret: preRegistered.clientSecret } : {}), redirect_uris: [this.redirectUri] }
       : existing?.client ?? await registerClient(info.authorizationServerUrl, {
         metadata: info.authorizationServerMetadata,
         fetchFn: oauthFetch,
         clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
       });
+    const scopes = staticClient?.scopes?.length ? staticClient.scopes : preRegistered ? info.resourceMetadata?.scopes_supported ?? [] : [];
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,
@@ -228,9 +255,9 @@ export class McpOAuthStore {
       redirectUrl: this.redirectUri,
       state,
       resource: new URL(url),
-      ...(staticClient?.scopes?.length ? { scope: staticClient.scopes.join(" ") } : {}),
+      ...(scopes.length ? { scope: scopes.join(" ") } : {}),
     });
-    if (staticClient) {
+    if (preRegistered) {
       // Pre-registered clients (e.g. Google) only issue refresh tokens for offline access with explicit consent.
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");

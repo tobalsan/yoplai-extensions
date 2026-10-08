@@ -63,6 +63,49 @@ describe("MCP OAuth flow", () => {
     expect(exchange).toHaveBeenCalledWith("https://accounts.test", expect.objectContaining({ clientInformation: expect.objectContaining({ client_id: "cid" }) }));
   });
 
+  const googleServer = (resourceMetadata?: unknown) => ({
+    discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://accounts.google.com/", authorizationServerMetadata: { issuer: "https://accounts.google.com", authorization_endpoint: "https://accounts.google.com/auth", token_endpoint: "https://oauth2.googleapis.com/token" }, resourceMetadata }),
+    registerClient: vi.fn(),
+    startAuthorization: vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://accounts.google.com/auth"), codeVerifier: "verifier" }),
+    exchangeAuthorization: vi.fn(),
+    refreshAuthorization: vi.fn(),
+  });
+
+  it("uses the host OAuth provider matching the issuer and resource scopes when registration is unavailable", async () => {
+    const mocks = googleServer({ resource: "https://calendarmcp.googleapis.com/mcp/v1", authorization_servers: ["https://accounts.google.com/"], scopes_supported: ["cal.read", "cal.write"] });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ google: { clientId: "gid", clientSecret: "gsecret" } }));
+    const started = await store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1");
+    expect(mocks.registerClient).not.toHaveBeenCalled();
+    expect(mocks.startAuthorization).toHaveBeenCalledWith("https://accounts.google.com/", expect.objectContaining({ scope: "cal.read cal.write", clientInformation: expect.objectContaining({ client_id: "gid", client_secret: "gsecret" }) }));
+    const url = new URL(started.authorizationUrl);
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+  });
+
+  it("prefers per-server scopes over resource scopes with a host provider", async () => {
+    const mocks = googleServer({ resource: "r", authorization_servers: ["https://accounts.google.com/"], scopes_supported: ["cal.read"] });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ google: { clientId: "gid" } }));
+    await store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1", { clientId: "own", scopes: ["mine"] });
+    expect(mocks.startAuthorization).toHaveBeenCalledWith("https://accounts.google.com/", expect.objectContaining({ scope: "mine", clientInformation: expect.objectContaining({ client_id: "own" }) }));
+  });
+
+  it("keeps a clear error when no client can be resolved", async () => {
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => googleServer());
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ github: { clientId: "x" } }));
+    await expect(store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1")).rejects.toThrow("dynamic client registration; set oauth.clientId in mcp.json or configure oauth.providers.google in yoplai.json");
+  });
+
   it("coalesces concurrent refreshes for the same connection", async () => {
     type RefreshedTokens = { access_token: string; refresh_token: string; token_type: string; expires_in: number };
     const refreshResolvers: Array<(tokens: RefreshedTokens) => void> = [];

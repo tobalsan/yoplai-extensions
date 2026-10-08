@@ -69,6 +69,52 @@ describe("MCP OAuth routes", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("https://static.test/mcp", expect.any(Object));
   });
 
+  it("treats a 200 initialize with protected-resource authorization servers as OAuth", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1" }, plain: { url: "https://plain.test/mcp" } } }));
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://calendarmcp.googleapis.com/.well-known/oauth-protected-resource/mcp/v1") return new Response(JSON.stringify({ resource: "https://calendarmcp.googleapis.com/mcp/v1", authorization_servers: ["https://accounts.google.com/"] }), { status: 200 });
+      if (url.includes("/.well-known/")) return new Response("not found", { status: 404 });
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const extension = createMcpExtension();
+    await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
+    const routes = app(); extension.registerRoutes(routes);
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toEqual({ servers: [
+      { name: "calendar", url: "https://calendarmcp.googleapis.com/mcp/v1", auth: "oauth", state: "disconnected" },
+      { name: "plain", url: "https://plain.test/mcp", auth: "static", state: "static" },
+    ], canConfigureTeam: true });
+  });
+
+  it("falls back to root protected-resource metadata", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { root: { url: "https://root.test/mcp" } } }));
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => { const url = String(input); return url === "https://root.test/.well-known/oauth-protected-resource"
+      ? new Response(JSON.stringify({ resource: "https://root.test", authorization_servers: ["https://auth.test"] }), { status: 200 })
+      : new Response("{}", { status: url.includes("/.well-known/") ? 404 : 200 }); }));
+    const extension = createMcpExtension();
+    await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
+    const routes = app(); extension.registerRoutes(routes);
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toMatchObject({ servers: [{ name: "root", auth: "oauth" }] });
+  });
+
+  it("does not use root metadata when path metadata fails with a server error, matching connection discovery", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { broken: { url: "https://broken.test/mcp" } } }));
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://broken.test/.well-known/oauth-protected-resource/mcp") return new Response("boom", { status: 500 });
+      if (url === "https://broken.test/.well-known/oauth-protected-resource") return new Response(JSON.stringify({ resource: "https://broken.test", authorization_servers: ["https://accounts.google.com/"] }), { status: 200 });
+      return new Response("{}", { status: 200 });
+    }));
+    const extension = createMcpExtension();
+    await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
+    const routes = app(); extension.registerRoutes(routes);
+    await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toMatchObject({ servers: [{ name: "broken", auth: "static" }] });
+  });
+
   it("loads OAuth status from the merged root config path", async () => {
     const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
     const configPath = path.join(work, "root-mcp.json");
