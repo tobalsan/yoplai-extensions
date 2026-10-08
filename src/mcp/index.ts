@@ -269,6 +269,10 @@ const baseExtension = defineToolExtension({
   },
 });
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
 type McpRuntimeConfig = { oauth?: { providers?: Record<string, { clientId?: string; clientSecret?: string }> }; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
 export interface CredentialConnectHost {
   registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; actorEmail?: string; impersonatorUserId?: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
@@ -371,7 +375,13 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   }
 
   function html(server: string, success: boolean, message: string): string {
-    return `<!doctype html><title>MCP OAuth</title><p>${message}</p><script>window.opener?.postMessage({type:"yoplai-oauth",extension:"mcp",server:${JSON.stringify(server)},success:${success}},"*")</script>`;
+    const title = success ? "Connected" : "Connection failed";
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8f9fa}
+.card{max-width:420px;padding:32px;border-radius:12px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12);text-align:center}
+h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{color:#3c4043;margin:0}</style></head>
+<body><div class="card"><h1>${title}</h1><p>${escapeHtml(message)}</p>
+<p style="margin-top:16px;color:#5f6368;font-size:13px">You can close this window and return to Yoplai.</p></div><script>window.opener?.postMessage({type:"yoplai-oauth",extension:"mcp",server:${JSON.stringify(server)},success:${success}},"*")</script>`;
   }
 
   async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>): Promise<boolean> {

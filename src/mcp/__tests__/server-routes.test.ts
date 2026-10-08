@@ -294,4 +294,17 @@ describe("MCP server config routes", () => {
     expect(list.servers[0]).toMatchObject({ name: "aimx", type: "stdio", title: "AIMX Mail", description: "Agent mailboxes", state: "connected" });
     await extension.stop();
   });
+
+  it("renders a styled, escaped OAuth result page", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    const extension = createMcpExtension();
+    await extension.start({ credentials: credentials(), getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    const page = await routes.routes.get("GET /mcp/oauth/callback")!(context({ state: "<b>bad</b>", code: "code" }));
+    expect(page.status).toBe(400);
+    expect(page.value).toContain('class="card"');
+    expect(page.value).toContain("Connection failed");
+    expect(page.value).not.toContain("<b>");
+  });
 });
