@@ -16,7 +16,7 @@ describe("MCP requester isolation", () => {
     const dir = await directory();
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://claap.example.test/mcp", oauth: { clientId: "client" } } } }));
     const host = credentials();
-    const store = new McpOAuthStore(dir, "http://localhost/callback", host);
+    const store = new McpOAuthStore(dir, "http://localhost/callback", host, () => ({ url: "https://claap.example.test/mcp", clientId: "client" }));
     await store.write("casey", "claap", connection("A"), { type: "personal", userId: "A" });
     const calls = vi.fn((token: string | undefined) => token);
     const extension = createMcpExtension(async (server, token) => ({

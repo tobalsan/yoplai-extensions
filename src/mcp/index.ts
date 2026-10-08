@@ -471,7 +471,11 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   ...baseExtension,
   async start(ctx: McpRuntime) {
     runtime = ctx;
-    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials);
+    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials, (agentId, name) => {
+      let server: McpServerConfig | undefined;
+      try { server = loadedForAgent(agentId)?.servers.find((item) => item.name === name); } catch { return undefined; }
+      return server?.type === "http" ? { url: server.url, clientId: server.oauth?.clientId } : undefined;
+    });
     connect = ctx.credentialConnect;
     resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {
@@ -551,7 +555,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (input.credentialScope === "personal" && scope.type !== "personal") return c.text("Authentication required for personal connection", 401);
       let flow: { state: string; authorizationUrl: string } | undefined;
       try {
-        if (await isOAuthServer(agentId, server)) {
+        // A usable personal grant shared from another agent needs no new authorization.
+        const shared = scope.type === "personal" ? await oauth?.read(agentId, name, scope, { url: server.url }) : undefined;
+        if ((!shared || shared.state === "needs_reconnect") && await isOAuthServer(agentId, server)) {
           if (!oauth) throw new Error("OAuth is unavailable");
           const store = oauth;
           let timedOut = false;

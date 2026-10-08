@@ -200,7 +200,7 @@ describe("MCP Slack credential connect", () => {
     const host = credentials();
     const completion = vi.fn(async (targetId: string) => {
       expect(targetId).toBe("claap");
-      expect(host.get({ agentId: "agent-a", integration: "mcp:claap", scope: { type: "personal", userId: "user-a" } })).toMatchObject({ tokens: { access_token: "personal-token" } });
+      expect(host.get({ agentId: "_shared", integration: "mcp-url:https://claap.example.test/mcp#claap-client", scope: { type: "personal", userId: "user-a" } })).toMatchObject({ tokens: { access_token: "personal-token" } });
     });
     let oauthStart!: (options: { agentId: string; userId: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>;
     const { extension } = await configuredExtension(dir, host, {
@@ -214,7 +214,7 @@ describe("MCP Slack credential connect", () => {
     expect(completion).toHaveBeenCalledWith("claap");
     await expect(routes.routes.get("GET /mcp/oauth/callback")!(routeContext({ code: "code", state }))).resolves.toMatchObject({ status: 400 });
     expect(completion).toHaveBeenCalledOnce();
-    const store = new McpOAuthStore(dir, "http://localhost:4000/api/mcp/oauth/callback", host);
+    const store = new McpOAuthStore(dir, "http://localhost:4000/api/mcp/oauth/callback", host, () => ({ url: "https://claap.example.test/mcp", clientId: "claap-client" }));
     await expect(store.read("agent-a", "claap", { type: "personal", userId: "user-a" })).resolves.toMatchObject({ tokens: { access_token: "personal-token" } });
     await extension.stop();
   });
@@ -284,6 +284,7 @@ describe("MCP Slack credential connect", () => {
     await timeout;
     expect(completion).not.toHaveBeenCalled();
     expect(host.get({ agentId: "agent-a", integration: "mcp:claap", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
+    expect(host.get({ agentId: "_shared", integration: "mcp-url:https://claap.example.test/mcp#claap-client", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
     await extension.stop();
   });
 
@@ -319,6 +320,7 @@ describe("MCP Slack credential connect", () => {
 
     expect(completion).not.toHaveBeenCalled();
     expect(host.get({ agentId: "agent-a", integration: "mcp:claap", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
+    expect(host.get({ agentId: "_shared", integration: "mcp-url:https://claap.example.test/mcp#claap-client", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
     await extension.stop();
   });
 
@@ -354,6 +356,7 @@ describe("MCP Slack credential connect", () => {
 
     expect(completion).not.toHaveBeenCalled();
     expect(host.get({ agentId: "agent-a", integration: "mcp:claap", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
+    expect(host.get({ agentId: "_shared", integration: "mcp-url:https://claap.example.test/mcp#claap-client", scope: { type: "personal", userId: "user-a" } })).toBeUndefined();
     await extension.stop();
   });
 
@@ -377,7 +380,7 @@ describe("MCP Slack credential connect", () => {
 
     await expect(routes.routes.get("GET /mcp/oauth/callback")!(routeContext({ code: "code", state }))).resolves.toMatchObject({ status: 400 });
     expect(completion).toHaveBeenCalledWith("claap");
-    expect(host.get({ agentId: "agent-a", integration: "mcp:claap", scope: { type: "personal", userId: "user-a" } })).toMatchObject({ tokens: { access_token: "saved-token" } });
+    expect(host.get({ agentId: "_shared", integration: "mcp-url:https://claap.example.test/mcp#claap-client", scope: { type: "personal", userId: "user-a" } })).toMatchObject({ tokens: { access_token: "saved-token" } });
     await extension.stop();
   });
 });

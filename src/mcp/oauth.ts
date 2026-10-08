@@ -23,6 +23,18 @@ export interface ScopedCredentials {
   resolve<T>(request: { agentId: string; integration: string; requesterUserId?: string; connectUrl: string }): { connected: true; payload: T; scope: CredentialScope } | { connected: false; reason: "not_connected"; connectUrl: string };
 }
 const TEAM: CredentialScope = { type: "team" };
+// Personal grants follow the user across agents, so they live under a fixed agent id.
+const SHARED_AGENT = "_shared";
+
+export interface McpServerIdentity { url: string; clientId?: string }
+export type ServerIdentityResolver = (agent: string, server: string) => McpServerIdentity | undefined;
+
+/** Normalized URL (lowercase scheme/host, default port and trailing slash dropped) plus the static OAuth client id. */
+function identityOf({ url, clientId }: McpServerIdentity): string {
+  const parsed = new URL(url);
+  const normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
+  return clientId ? `${normalized}#${clientId}` : normalized;
+}
 
 export type OAuthState = "connected" | "disconnected" | "needs_reconnect";
 
@@ -41,6 +53,8 @@ export interface AuditActor {
   impersonatorUserId?: string;
 }
 
+interface Tombstone { tombstone: true; deletedAt: string }
+
 export interface PendingOAuthFlow {
   actor?: AuditActor;
   onComplete?: (targetId: string) => Promise<void>;
@@ -48,6 +62,7 @@ export interface PendingOAuthFlow {
   agent: string;
   server: string;
   url: string;
+  identity: McpServerIdentity;
   codeVerifier: string;
   createdAt: number;
   client: OAuthClientInformationFull;
@@ -85,17 +100,29 @@ export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
   private readonly refreshes = new Map<string, Promise<string | undefined>>();
 
-  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials) {}
+  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver) {}
 
-  private key(agent: string, server: string, scope: CredentialScope): CredentialKey {
+  private legacyKey(agent: string, server: string, scope: CredentialScope): CredentialKey {
     return { agentId: agent, integration: `mcp:${server}`, scope };
+  }
+
+  private sharedIdentity(agent: string, server: string, identity?: McpServerIdentity): string | undefined {
+    try {
+      const known = this.identify ? identity ?? this.identify(agent, server) : undefined;
+      return known ? identityOf(known) : undefined;
+    } catch { return undefined; }
+  }
+
+  private key(agent: string, server: string, scope: CredentialScope, identity?: McpServerIdentity): CredentialKey {
+    const shared = scope.type === "personal" ? this.sharedIdentity(agent, server, identity) : undefined;
+    return shared ? { agentId: SHARED_AGENT, integration: `mcp-url:${shared}`, scope } : this.legacyKey(agent, server, scope);
   }
 
   async resolve(agent: string, server: string, requesterUserId?: string): Promise<{ connection: OAuthConnection; scope: CredentialScope } | undefined> {
     await this.read(agent, server, TEAM);
-    const personal = requesterUserId ? this.credentials?.get<OAuthConnection>(this.key(agent, server, { type: "personal", userId: requesterUserId })) : undefined;
+    const personal = requesterUserId ? await this.read(agent, server, { type: "personal", userId: requesterUserId }) : undefined;
     if (personal) return { connection: personal, scope: { type: "personal", userId: requesterUserId! } };
-    const result = this.credentials?.resolve<OAuthConnection>({ agentId: agent, integration: `mcp:${server}`, requesterUserId, connectUrl: `/agents/${encodeURIComponent(agent)}/edit` });
+    const result = this.credentials?.resolve<OAuthConnection>({ agentId: agent, integration: `mcp:${server}`, connectUrl: `/agents/${encodeURIComponent(agent)}/edit` });
     if (result?.connected) return { connection: result.payload, scope: result.scope };
     const legacy = await this.readLegacy(agent, server);
     return legacy ? { connection: legacy, scope: TEAM } : undefined;
@@ -110,9 +137,22 @@ export class McpOAuthStore {
     return path.join(this.dataDir, "mcp", "oauth", filePart(agent), `${filePart(server)}.json`);
   }
 
-  async read(agent: string, server: string, scope: CredentialScope = TEAM): Promise<OAuthConnection | undefined> {
-    const stored = this.credentials?.get<OAuthConnection>(this.key(agent, server, scope));
-    if (stored || scope.type === "personal") return stored;
+  async read(agent: string, server: string, scope: CredentialScope = TEAM, identity?: McpServerIdentity): Promise<OAuthConnection | undefined> {
+    const key = this.key(agent, server, scope, identity);
+    const stored = this.credentials?.get<OAuthConnection | Tombstone>(key);
+    if (stored && "tombstone" in stored) return undefined;
+    if (scope.type === "personal") {
+      if (stored || !this.credentials || key.agentId !== SHARED_AGENT) return stored;
+      const legacyKey = this.legacyKey(agent, server, scope);
+      const legacyPersonal = this.credentials.get<OAuthConnection>(legacyKey);
+      if (!legacyPersonal) return undefined;
+      try {
+        this.credentials.save(key, legacyPersonal);
+      } catch { return legacyPersonal; }
+      this.credentials.delete(legacyKey);
+      return legacyPersonal;
+    }
+    if (stored) return stored;
     const legacy = await this.readLegacy(agent, server);
     if (!legacy || !this.credentials) return legacy;
     try {
@@ -122,14 +162,18 @@ export class McpOAuthStore {
     return legacy;
   }
 
-  async write(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope = TEAM): Promise<void> {
+  async write(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope = TEAM, identity?: McpServerIdentity): Promise<void> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
-    this.credentials.save(this.key(agent, server, scope), connection);
+    this.credentials.save(this.key(agent, server, scope, identity), connection);
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
   async delete(agent: string, server: string, scope: CredentialScope = TEAM): Promise<void> {
-    this.credentials?.delete(this.key(agent, server, scope));
+    const key = this.key(agent, server, scope);
+    // Tombstone keeps other agents' legacy personal rows from being promoted back after a disconnect.
+    if (scope.type === "personal" && key.agentId === SHARED_AGENT) this.credentials?.save<Tombstone>(key, { tombstone: true, deletedAt: new Date().toISOString() });
+    else this.credentials?.delete(key);
+    if (scope.type === "personal") this.credentials?.delete(this.legacyKey(agent, server, scope));
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
@@ -168,7 +212,8 @@ export class McpOAuthStore {
     if (!staticClient && !info.authorizationServerMetadata?.registration_endpoint) {
       throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json");
     }
-    const existing = await this.read(agent, server, scope);
+    const identity = { url, clientId: staticClient?.clientId };
+    const existing = await this.read(agent, server, scope, identity);
     const client: OAuthClientInformationFull = staticClient
       ? { client_id: staticClient.clientId, ...(staticClient.clientSecret ? { client_secret: staticClient.clientSecret } : {}), redirect_uris: [this.redirectUri] }
       : existing?.client ?? await registerClient(info.authorizationServerUrl, {
@@ -190,7 +235,7 @@ export class McpOAuthStore {
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");
     }
-    this.pending.set(state, { actor, onComplete, scope, agent, server, url, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
+    this.pending.set(state, { actor, onComplete, scope, agent, server, url, identity, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }
 
@@ -202,7 +247,7 @@ export class McpOAuthStore {
     if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000) throw new Error("OAuth state is invalid or expired");
     const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
     const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
-    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected" }, pending.scope);
+    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected" }, pending.scope, pending.identity);
     onConnected?.(pending);
     await pending.onComplete?.(pending.server);
     return pending;
