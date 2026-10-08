@@ -504,8 +504,13 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const auth = c.get?.("multiUserAuthContext");
       return isRecord(auth) && isRecord(auth.user) && typeof auth.user.id === "string" ? auth.user.id : undefined;
     }
+    /** Whole-team MCP setup (shared mcp.json, team OAuth grants) is admin-only. */
     function canConfigureTeam(c: RouteContext): boolean {
-      return !multiUserEnabled() || Boolean(userId(c));
+      if (!multiUserEnabled()) return true;
+      const auth = c.get?.("multiUserAuthContext");
+      const role = isRecord(auth) && isRecord(auth.user) ? auth.user.role : undefined;
+      const roles = Array.isArray(role) ? role : [role];
+      return roles.some((value) => value === "admin" || value === "superadmin");
     }
     function requestedScope(c: RouteContext): CredentialScope | undefined {
       const id = userId(c);
@@ -578,6 +583,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
       if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       try {
         const root = readRawConfig(config.path);
         const servers = root.mcpServers as Record<string, unknown>;
