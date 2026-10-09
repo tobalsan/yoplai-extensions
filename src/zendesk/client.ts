@@ -19,12 +19,11 @@ import {
 type JsonPrimitive = null | boolean | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export interface ZendeskClientOptions {
-  subdomain: string;
-  email: string;
-  apiKey: string;
-  timeoutMs?: number;
-}
+/** Basic auth with an account email and API token, or an OAuth bearer token against a base URL. */
+export type ZendeskClientOptions = { timeoutMs?: number } & (
+  | { subdomain: string; email: string; apiKey: string }
+  | { accessToken: string; baseUrl: string }
+);
 
 function toSnakeCase(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
@@ -51,18 +50,19 @@ function sleep(ms: number): Promise<void> {
 }
 
 export class ZendeskClient {
-  readonly subdomain: string;
-  readonly email: string;
-  readonly apiKey: string;
   readonly timeoutMs: number;
   readonly baseUrl: string;
+  private readonly authorization: string;
 
-  constructor({ subdomain, email, apiKey, timeoutMs = 30000 }: ZendeskClientOptions) {
-    this.subdomain = subdomain;
-    this.email = email;
-    this.apiKey = apiKey;
-    this.timeoutMs = timeoutMs;
-    this.baseUrl = `https://${subdomain}.zendesk.com`;
+  constructor(options: ZendeskClientOptions) {
+    this.timeoutMs = options.timeoutMs ?? 30000;
+    if ("accessToken" in options) {
+      this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+      this.authorization = `Bearer ${options.accessToken}`;
+    } else {
+      this.baseUrl = `https://${options.subdomain}.zendesk.com`;
+      this.authorization = `Basic ${Buffer.from(`${options.email}/token:${options.apiKey}`).toString("base64")}`;
+    }
   }
 
   private async request(
@@ -77,7 +77,6 @@ export class ZendeskClient {
     }
 
     const payload = body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
-    const auth = `Basic ${Buffer.from(`${this.email}/token:${this.apiKey}`).toString("base64")}`;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
@@ -85,7 +84,7 @@ export class ZendeskClient {
           method,
           headers: {
             Accept: "application/json",
-            Authorization: auth,
+            Authorization: this.authorization,
             ...(payload ? { "Content-Type": "application/json" } : {}),
           },
           body: payload,

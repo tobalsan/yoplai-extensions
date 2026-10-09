@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZodObject } from "zod";
 import extension from "../index.js";
+import { ZendeskConfigSchema } from "../models.js";
 
 describe("zendesk extension", () => {
   it("creates 3 tools", () => {
@@ -42,5 +43,89 @@ describe("zendesk extension", () => {
     for (const tool of tools) {
       expect(tool.parameters).toBeInstanceOf(ZodObject);
     }
+  });
+});
+
+describe("zendesk extension modes", () => {
+  const mount = async (agentConfig: Record<string, unknown>, oauth?: unknown) => {
+    const resolveOAuth = vi.fn(async () => oauth as never);
+    const agent = { id: "a1", extensions: { zendesk: { enabled: true, ...agentConfig } } };
+    const tools = await extension.getAgentTools(agent, {
+      config: { extensions: {} },
+      resolveOAuth,
+    });
+    return { tools, resolveOAuth, agent };
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("declares an oauth requirement unless mode is api_key (oauth is the default)", () => {
+    const oauth = extension.oauth as (config: { global: object; agent: object; merged: object }) => unknown;
+    expect(oauth({ global: {}, agent: {}, merged: { mode: "oauth" } })).toEqual({ provider: "zendesk", scopes: ["read"] });
+    expect(oauth({ global: {}, agent: {}, merged: {} })).toEqual({ provider: "zendesk", scopes: ["read"] });
+    expect(oauth({ global: {}, agent: {}, merged: { mode: "api_key" } })).toBeUndefined();
+  });
+
+  it("still requires subdomain, email and apiKey in api_key mode", () => {
+    expect(ZendeskConfigSchema.safeParse({ mode: "api_key" }).success).toBe(false);
+    const result = ZendeskConfigSchema.safeParse({ mode: "api_key", subdomain: "acme" });
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.path[0])).toEqual(["email", "apiKey"]);
+    expect(ZendeskConfigSchema.safeParse({ mode: "api_key", subdomain: "acme", email: "a@b.co", apiKey: "k" }).success).toBe(true);
+  });
+
+  it("needs no subdomain, email or apiKey in oauth mode (the default)", () => {
+    expect(ZendeskConfigSchema.safeParse({ mode: "oauth" }).success).toBe(true);
+    expect(ZendeskConfigSchema.parse({}).mode).toBe("oauth");
+  });
+
+  it("api_key mode works without calling the OAuth host", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tickets: [] }), { status: 200 }),
+    );
+    const { tools, resolveOAuth } = await mount({ mode: "api_key", subdomain: "acme", email: "a@b.co", apiKey: "k" });
+    await tools[0].execute({}, { userId: "alice" });
+    expect(resolveOAuth).not.toHaveBeenCalled();
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("https://acme.zendesk.com/api/v2/tickets.json");
+    expect((fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
+  });
+
+  it("oauth mode returns the structured not-connected result for every tool", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { tools } = await mount({ mode: "oauth" }, {
+      connected: false,
+      provider: "zendesk",
+      reason: "not_connected",
+      message: "Zendesk is not connected",
+      authorizeUrl: "https://gw/api/oauth/zendesk/authorize?agent=a1",
+    });
+    for (const [tool, params] of [[tools[0], {}], [tools[1], { query: "x" }], [tools[2], { ticketId: 1 }]] as const) {
+      expect(await tool.execute(params, {})).toEqual({
+        connected: false,
+        provider: "zendesk",
+        reason: "not_connected",
+        message: "Zendesk is not connected",
+        authorizeUrl: "https://gw/api/oauth/zendesk/authorize?agent=a1",
+      });
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("oauth mode calls the API with the bearer token and apiBaseUrl when connected", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tickets: [] }), { status: 200 }),
+    );
+    const { tools, resolveOAuth, agent } = await mount({ mode: "oauth" }, {
+      connected: true,
+      provider: "zendesk",
+      accessToken: "tok",
+      scopes: ["read"],
+      apiBaseUrl: "https://acme.zendesk.com",
+    });
+    await tools[0].execute({}, { userId: "alice" });
+    expect(resolveOAuth).toHaveBeenLastCalledWith(agent, { provider: "zendesk", scopes: ["read"] }, "alice");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("https://acme.zendesk.com/api/v2/tickets.json");
+    expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
   });
 });

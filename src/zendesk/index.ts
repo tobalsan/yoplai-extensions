@@ -6,8 +6,24 @@ import {
   ZendeskConfigSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
+import type { ResolvedOAuth } from "../tool-extension.js";
 
 export { ZendeskConfigSchema };
+
+/** Documented not-connected signal — never a raw 401. */
+function notConnected(oauth: ResolvedOAuth | undefined) {
+  return {
+    connected: false,
+    provider: "zendesk",
+    reason: oauth && !oauth.connected ? oauth.reason : "not_connected",
+    message:
+      oauth && !oauth.connected
+        ? oauth.message
+        : "Zendesk is not connected. Connect a Zendesk account in the agent's Zendesk settings.",
+    authorizeUrl:
+      oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
+  };
+}
 
 export default defineToolExtension({
   id: "zendesk",
@@ -27,32 +43,50 @@ Common workflows:
 
 Notes:
 - This extension is read-only. It cannot create, update, or delete tickets.
-- Ticket ids are numeric.`,
+- Ticket ids are numeric.
+- In oauth mode the requester's connected Zendesk account is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
   configSchema: ZendeskConfigSchema,
   requiredSecrets: ["apiKey"],
   advancedConfigFields: ["timeoutMs"],
+  oauthHiddenFields: ["mode", "subdomain", "email", "apiKey", "timeoutMs"],
+  oauth: (config) =>
+    config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read"] } : undefined,
   createTools(config) {
     const resolved = ZendeskConfigSchema.parse(config.merged);
-    const client = new ZendeskClient(resolved);
+    const oauth = config.oauth;
+    // OAuth mode builds a bearer client per call once connected; api_key mode builds it up front.
+    const client = (() => {
+      if (resolved.mode === "oauth") {
+        return oauth?.connected === true && oauth.apiBaseUrl
+          ? new ZendeskClient({ accessToken: oauth.accessToken, baseUrl: oauth.apiBaseUrl, timeoutMs: resolved.timeoutMs })
+          : undefined;
+      }
+      return new ZendeskClient({
+        subdomain: resolved.subdomain!,
+        email: resolved.email!,
+        apiKey: resolved.apiKey!,
+        timeoutMs: resolved.timeoutMs,
+      });
+    })();
 
     return [
       {
         name: "list_tickets",
         description: "List tickets with cursor-based pagination. Returns newest tickets first by default.",
         parameters: ListTicketsParamsSchema,
-        execute: (params) => client.listTickets(params),
+        execute: async (params) => (client ? client.listTickets(params) : notConnected(oauth)),
       },
       {
         name: "search_tickets",
         description: "Search tickets using Zendesk search syntax.",
         parameters: SearchTicketsParamsSchema,
-        execute: (params) => client.searchTickets(params),
+        execute: async (params) => (client ? client.searchTickets(params) : notConnected(oauth)),
       },
       {
         name: "get_ticket",
         description: "Get a ticket by id, with comments included.",
         parameters: GetTicketParamsSchema,
-        execute: (params) => client.getTicket(params),
+        execute: async (params) => (client ? client.getTicket(params) : notConnected(oauth)),
       },
     ];
   },

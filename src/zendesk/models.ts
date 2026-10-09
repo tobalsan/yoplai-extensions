@@ -6,26 +6,46 @@ const NullableBoolean = z.boolean().nullable().optional();
 const NullableStringArray = z.array(z.string()).nullable().optional();
 
 export const ZendeskConfigSchema = z.object({
+  mode: z
+    .enum(["api_key", "oauth"])
+    .default("oauth")
+    .describe(
+      "Authentication mode (default oauth). api_key uses subdomain, email and API token; oauth connects a Zendesk account through the gateway's OAuth client (oauth.providers.zendesk).",
+    ),
   subdomain: z
     .string()
     .regex(
       /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/,
       "Zendesk subdomain must be a single valid DNS label",
     )
-    .describe("Zendesk subdomain, e.g. \"acme\" for acme.zendesk.com."),
+    .optional()
+    .describe("Zendesk subdomain, e.g. \"acme\" for acme.zendesk.com. Required in api_key mode."),
   email: z
     .string()
-    .describe("Email address of the Zendesk account used to authenticate with the API token."),
+    .optional()
+    .describe("Email address of the Zendesk account used to authenticate with the API token. Required in api_key mode."),
   apiKey: z
     .string()
+    .optional()
     .describe(
-      "Zendesk API token for the account email. Generate one in Zendesk Admin Center under Apps and integrations > APIs > Zendesk API.",
+      "Zendesk API token for the account email. Generate one in Zendesk Admin Center under Apps and integrations > APIs > Zendesk API. Required in api_key mode.",
     ),
   timeoutMs: z
     .number()
     .optional()
     .default(30_000)
     .describe("Request timeout in milliseconds for Zendesk API calls. Defaults to 30000."),
+}).superRefine((config, ctx) => {
+  if (config.mode !== "api_key") return;
+  for (const field of ["subdomain", "email", "apiKey"] as const) {
+    if (!config[field]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} is required when mode is api_key`,
+      });
+    }
+  }
 });
 export type ZendeskConfig = z.infer<typeof ZendeskConfigSchema>;
 

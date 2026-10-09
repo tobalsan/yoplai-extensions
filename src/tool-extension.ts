@@ -23,6 +23,8 @@ export type ResolvedOAuth =
       account?: string;
       scopes: string[];
       expiresAt?: number;
+      /** Provider API base URL, for providers with per-tenant hosts. */
+      apiBaseUrl?: string;
     }
   | {
       connected: false;
@@ -71,6 +73,8 @@ export interface ToolExtensionDefinition {
   agentConfigSchema?: z.ZodTypeAny;
   requiredSecrets: string[];
   advancedConfigFields?: string[];
+  /** Fields hidden from the config form when the agent uses OAuth (e.g. API-key credentials). */
+  oauthHiddenFields?: string[];
   /** UI labels for config fields, emitted as JSON Schema `title`. */
   configFieldTitles?: Record<string, string>;
   configRoute?: { path: string };
@@ -79,7 +83,7 @@ export interface ToolExtensionDefinition {
    * receives `config.oauth` with a fresh access token (or a not-connected
    * signal) resolved by the host at tool-build time.
    */
-  oauth?: OAuthRequirement | ((config: ResolvedToolExtensionConfig) => OAuthRequirement);
+  oauth?: OAuthRequirement | ((config: ResolvedToolExtensionConfig) => OAuthRequirement | undefined);
   createTools(config: ResolvedToolExtensionConfig): ToolExtensionTool[];
 }
 
@@ -142,7 +146,11 @@ function resolveConfig(
     merged: { ...root, ...agentConfig },
   };
   definition.configSchema.parse(resolved.merged);
-  for (const secretName of definition.requiredSecrets) {
+  // An OAuth-mode agent authenticates with a token, not with secrets.
+  const usesOAuth = typeof definition.oauth === "function"
+    ? definition.oauth(resolved) !== undefined
+    : definition.oauth !== undefined;
+  for (const secretName of usesOAuth ? [] : definition.requiredSecrets) {
     const value = resolved.merged[secretName];
     if (typeof value !== "string" || value.length === 0) {
       throw new Error(
@@ -161,6 +169,7 @@ async function resolveOAuthForDefinition(
 ): Promise<ResolvedOAuth | undefined> {
   if (!definition.oauth) return undefined;
   const requirement = typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
+  if (!requirement) return undefined;
   if (!context.resolveOAuth) {
     return {
       connected: false,
@@ -211,6 +220,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
     requiredSecrets: definition.requiredSecrets,
     oauth: definition.oauth,
     advancedConfigFields: definition.advancedConfigFields,
+    oauthHiddenFields: definition.oauthHiddenFields,
     configJsonSchema: withFieldTitles(zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }), definition.configFieldTitles),
     configRoute: definition.configRoute,
     createTools: definition.createTools,
@@ -275,9 +285,11 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
         execute: async (params: unknown, toolContext?: { userId?: string }) => {
           if (!definition.oauth || !context.resolveOAuth) return tool.execute(params, { agentId: agent.id });
           // Re-resolve per call so the token matches this call's requester.
+          const requirement = typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
+          if (!requirement) return tool.execute(params, { agentId: agent.id });
           const oauth = await context.resolveOAuth(
             agent,
-            typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth,
+            requirement,
             toolContext?.userId ?? context.userId
           );
           const callTimeTool = definition

@@ -102,4 +102,16 @@ describe("ZendeskClient", () => {
 
     await expect(client.listTickets({})).rejects.toBeInstanceOf(ZendeskRateLimitError);
   });
+
+  it("sends a bearer token against the given base URL", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tickets: [] }), { status: 200 }),
+    );
+    const client = new ZendeskClient({ accessToken: "tok", baseUrl: "https://acme.zendesk.com/" });
+
+    await client.listTickets({});
+
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toMatch(/^https:\/\/acme\.zendesk\.com\/api\/v2\/tickets\.json/);
+    expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
+  });
 });
