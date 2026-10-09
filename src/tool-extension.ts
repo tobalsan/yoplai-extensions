@@ -56,9 +56,10 @@ export interface ResolvedToolExtensionConfig {
 export interface ToolExtensionTool {
   name: string;
   description: string;
+  annotations?: { readOnlyHint?: boolean };
   parameters: z.ZodTypeAny;
   jsonSchemaParameters?: Record<string, unknown>;
-  execute(params: unknown): Promise<unknown>;
+  execute(params: unknown, context?: { agentId: string }): Promise<unknown>;
 }
 
 export interface ToolExtensionDefinition {
@@ -264,6 +265,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       return definition.createTools(resolved).map((tool) => ({
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
+        ...(tool.annotations ? { annotations: tool.annotations } : {}),
         parameters: expandTypeArrays(
           tool.jsonSchemaParameters ??
             zodToJsonSchema(tool.parameters, {
@@ -271,7 +273,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
             })
         ) as Record<string, unknown>,
         execute: async (params: unknown, toolContext?: { userId?: string }) => {
-          if (!definition.oauth || !context.resolveOAuth) return tool.execute(params);
+          if (!definition.oauth || !context.resolveOAuth) return tool.execute(params, { agentId: agent.id });
           // Re-resolve per call so the token matches this call's requester.
           const oauth = await context.resolveOAuth(
             agent,
@@ -286,7 +288,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
               `OAuth tool "${getMountedToolName(definition, tool.name)}" is no longer available`
             );
           }
-          return callTimeTool.execute(params);
+          return callTimeTool.execute(params, { agentId: agent.id });
         },
       }));
     },

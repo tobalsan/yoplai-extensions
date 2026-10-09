@@ -4,6 +4,8 @@
 
 ### Added
 
+- Google Calendar extension with nine MCP-compatible tools for events, invitations, and availability using host-managed Google OAuth (ALG-473).
+
 - MCP servers now appear as individual extension cards, and agent members can add HTTP(S) servers from the extension list with immediate OAuth authorization or direct no-auth connection (ALG-469).
 
 - MCP OAuth connections and removals record redacted settings audit events when the host supports auditing (ALG-470).
