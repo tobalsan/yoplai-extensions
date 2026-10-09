@@ -4,18 +4,22 @@ import extension from "../index.js";
 import { ZendeskConfigSchema } from "../models.js";
 
 describe("zendesk extension", () => {
-  it("creates 3 tools", () => {
+  it("creates 7 tools", () => {
     const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { subdomain: "acme", email: "agent@acme.com", apiKey: "secret" },
     });
 
-    expect(tools).toHaveLength(3);
+    expect(tools).toHaveLength(7);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_tickets",
       "search_tickets",
       "get_ticket",
+      "update_ticket",
+      "add_internal_note",
+      "list_groups",
+      "list_agents",
     ]);
   });
 
@@ -63,8 +67,9 @@ describe("zendesk extension modes", () => {
 
   it("declares an oauth requirement unless mode is api_key (oauth is the default)", () => {
     const oauth = extension.oauth as (config: { global: object; agent: object; merged: object }) => unknown;
-    expect(oauth({ global: {}, agent: {}, merged: { mode: "oauth" } })).toEqual({ provider: "zendesk", scopes: ["read"] });
-    expect(oauth({ global: {}, agent: {}, merged: {} })).toEqual({ provider: "zendesk", scopes: ["read"] });
+    const requirement = { provider: "zendesk", scopes: ["read", "tickets:write"] };
+    expect(oauth({ global: {}, agent: {}, merged: { mode: "oauth" } })).toEqual(requirement);
+    expect(oauth({ global: {}, agent: {}, merged: {} })).toEqual(requirement);
     expect(oauth({ global: {}, agent: {}, merged: { mode: "api_key" } })).toBeUndefined();
   });
 
@@ -100,7 +105,15 @@ describe("zendesk extension modes", () => {
       message: "Zendesk is not connected",
       authorizeUrl: "https://gw/api/oauth/zendesk/authorize?agent=a1",
     });
-    for (const [tool, params] of [[tools[0], {}], [tools[1], { query: "x" }], [tools[2], { ticketId: 1 }]] as const) {
+    for (const [tool, params] of [
+      [tools[0], {}],
+      [tools[1], { query: "x" }],
+      [tools[2], { ticketId: 1 }],
+      [tools[3], { ticketId: 1, status: "open" }],
+      [tools[4], { ticketId: 1, body: "note" }],
+      [tools[5], {}],
+      [tools[6], { groupId: 1 }],
+    ] as const) {
       expect(await tool.execute(params, {})).toEqual({
         connected: false,
         provider: "zendesk",
@@ -120,11 +133,15 @@ describe("zendesk extension modes", () => {
       connected: true,
       provider: "zendesk",
       accessToken: "tok",
-      scopes: ["read"],
+      scopes: ["read", "tickets:write"],
       apiBaseUrl: "https://acme.zendesk.com",
     });
     await tools[0].execute({}, { userId: "alice" });
-    expect(resolveOAuth).toHaveBeenLastCalledWith(agent, { provider: "zendesk", scopes: ["read"] }, "alice");
+    expect(resolveOAuth).toHaveBeenLastCalledWith(
+      agent,
+      { provider: "zendesk", scopes: ["read", "tickets:write"] },
+      "alice",
+    );
     expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("https://acme.zendesk.com/api/v2/tickets.json");
     expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
   });

@@ -102,6 +102,40 @@ export const TicketSchema = z
   .passthrough();
 export type Ticket = z.infer<typeof TicketSchema>;
 
+/** Compact shapes (unknown keys stripped) so agent/group lists stay small in model context. */
+export const GroupSchema = z.object({
+  id: NullableNumber,
+  name: NullableString,
+  description: NullableString,
+  default: NullableBoolean,
+  deleted: NullableBoolean,
+});
+export type Group = z.infer<typeof GroupSchema>;
+
+export const UserSchema = z.object({
+  id: NullableNumber,
+  name: NullableString,
+  email: NullableString,
+  role: NullableString,
+  active: NullableBoolean,
+  suspended: NullableBoolean,
+  defaultGroupId: NullableNumber,
+});
+export type User = z.infer<typeof UserSchema>;
+
+export const ListGroupsParamsSchema = z.object({
+  pageSize: z.number().int().positive().max(100).optional().default(100),
+  pageCursor: z.string().optional(),
+});
+export type ListGroupsParams = z.infer<typeof ListGroupsParamsSchema>;
+
+export const ListAgentsParamsSchema = z.object({
+  groupId: z.number().int().optional().describe("Only list members of this group."),
+  pageSize: z.number().int().positive().max(100).optional().default(100),
+  pageCursor: z.string().optional(),
+});
+export type ListAgentsParams = z.infer<typeof ListAgentsParamsSchema>;
+
 export const ListTicketsParamsSchema = z.object({
   pageSize: z.number().int().positive().max(100).optional().default(20),
   pageCursor: z.string().optional(),
@@ -121,20 +155,41 @@ export const SearchTicketsParamsSchema = z.object({
 });
 export type SearchTicketsParams = z.infer<typeof SearchTicketsParamsSchema>;
 
+const TicketIdSchema = z
+  .union([z.number().int(), z.string()])
+  .transform((value, ctx) => {
+    const parsed = typeof value === "string" ? Number(value) : value;
+    if (!Number.isInteger(parsed)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.invalid_type,
+        expected: "integer",
+        received: typeof value === "string" ? "string" : "number",
+      });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+
 export const GetTicketParamsSchema = z.object({
-  ticketId: z
-    .union([z.number().int(), z.string()])
-    .transform((value, ctx) => {
-      const parsed = typeof value === "string" ? Number(value) : value;
-      if (!Number.isInteger(parsed)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.invalid_type,
-          expected: "integer",
-          received: typeof value === "string" ? "string" : "number",
-        });
-        return z.NEVER;
-      }
-      return parsed;
-    }),
+  ticketId: TicketIdSchema,
 });
 export type GetTicketParams = z.infer<typeof GetTicketParamsSchema>;
+
+/** Triage fields. "new" and "closed" cannot be set through the API, so they are excluded. */
+export const UpdateTicketParamsSchema = z.object({
+  ticketId: TicketIdSchema,
+  status: z.enum(["open", "pending", "hold", "solved"]).optional(),
+  priority: TicketPrioritySchema.optional(),
+  type: TicketTypeSchema.optional(),
+  assigneeId: z.number().int().optional().describe("Zendesk user id of the agent to assign."),
+  groupId: z.number().int().optional().describe("Zendesk group id to route the ticket to."),
+  addTags: z.array(z.string().min(1)).optional().describe("Tags to add; existing tags are kept."),
+  removeTags: z.array(z.string().min(1)).optional().describe("Tags to remove."),
+});
+export type UpdateTicketParams = z.infer<typeof UpdateTicketParamsSchema>;
+
+export const AddInternalNoteParamsSchema = z.object({
+  ticketId: TicketIdSchema,
+  body: z.string().min(1).describe("Note text. Visible to agents only, never to the requester."),
+});
+export type AddInternalNoteParams = z.infer<typeof AddInternalNoteParamsSchema>;

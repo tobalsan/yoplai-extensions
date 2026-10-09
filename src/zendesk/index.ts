@@ -1,8 +1,12 @@
 import { ZendeskClient } from "./client.js";
 import {
+  AddInternalNoteParamsSchema,
   GetTicketParamsSchema,
+  ListAgentsParamsSchema,
+  ListGroupsParamsSchema,
   ListTicketsParamsSchema,
   SearchTicketsParamsSchema,
+  UpdateTicketParamsSchema,
   ZendeskConfigSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
@@ -28,21 +32,27 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
 export default defineToolExtension({
   id: "zendesk",
   displayName: "Zendesk",
-  description: "Read-only Zendesk extension for tickets, comments, and ticket search.",
-  systemPrompt: `Use this extension for read-only access to Zendesk support tickets.
+  description: "Zendesk extension for reading, searching, and triaging tickets, and adding internal notes.",
+  systemPrompt: `Use this extension to read, search, and triage Zendesk support tickets and add internal notes.
 
 Available tools:
 - zendesk_list_tickets: list tickets with cursor-based pagination (pageSize up to 100, pageCursor from prior response). Returns newest tickets first by default; pass sort to override (id, -id, updated_at, -updated_at, status, -status)
 - zendesk_search_tickets: search tickets by Zendesk search query (e.g. "status:open priority:high"), with offset pagination and optional sort
 - zendesk_get_ticket: fetch a single ticket by id, with comments included
+- zendesk_update_ticket: triage a ticket — set status (open, pending, hold, solved), priority, type, assigneeId, groupId, and add/remove tags. Only the fields you pass change.
+- zendesk_add_internal_note: add a private note to a ticket. Internal notes are visible to agents only, never to the requester.
+- zendesk_list_groups: list support groups (teams) with their ids, cursor-paginated
+- zendesk_list_agents: list agents and admins (assignable users) with their ids and default group; pass groupId to list one team's members
 
 Common workflows:
 - To find tickets matching criteria, use zendesk_search_tickets with a query like "status:open requester:user@example.com".
 - To browse all tickets, use zendesk_list_tickets and follow nextPageCursor across pages.
 - To inspect a specific ticket including its conversation, use zendesk_get_ticket — comments are merged into the response.
+- To triage, read the ticket first with zendesk_get_ticket, then apply changes with zendesk_update_ticket and record your reasoning with zendesk_add_internal_note.
 
 Notes:
-- This extension is read-only. It cannot create, update, or delete tickets.
+- This extension cannot create or delete tickets, and cannot post public replies to requesters.
+- Assignee and group ids are numeric Zendesk ids. Look them up with zendesk_list_groups / zendesk_list_agents; never guess them.
 - Ticket ids are numeric.
 - In oauth mode the requester's connected Zendesk account is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
   configSchema: ZendeskConfigSchema,
@@ -50,7 +60,7 @@ Notes:
   advancedConfigFields: ["timeoutMs"],
   oauthHiddenFields: ["mode", "subdomain", "email", "apiKey", "timeoutMs"],
   oauth: (config) =>
-    config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read"] } : undefined,
+    config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read", "tickets:write"] } : undefined,
   createTools(config) {
     const resolved = ZendeskConfigSchema.parse(config.merged);
     const oauth = config.oauth;
@@ -87,6 +97,31 @@ Notes:
         description: "Get a ticket by id, with comments included.",
         parameters: GetTicketParamsSchema,
         execute: async (params) => (client ? client.getTicket(params) : notConnected(oauth)),
+      },
+      {
+        name: "update_ticket",
+        description:
+          "Triage a ticket: set status, priority, type, assignee, group, and add/remove tags. Only passed fields change.",
+        parameters: UpdateTicketParamsSchema,
+        execute: async (params) => (client ? client.updateTicket(params) : notConnected(oauth)),
+      },
+      {
+        name: "add_internal_note",
+        description: "Add a private internal note to a ticket (agents only, not visible to the requester).",
+        parameters: AddInternalNoteParamsSchema,
+        execute: async (params) => (client ? client.addInternalNote(params) : notConnected(oauth)),
+      },
+      {
+        name: "list_groups",
+        description: "List support groups (teams) with their ids, for routing tickets.",
+        parameters: ListGroupsParamsSchema,
+        execute: async (params) => (client ? client.listGroups(params) : notConnected(oauth)),
+      },
+      {
+        name: "list_agents",
+        description: "List agents and admins (assignable users) with their ids; pass groupId to list one team's members.",
+        parameters: ListAgentsParamsSchema,
+        execute: async (params) => (client ? client.listAgents(params) : notConnected(oauth)),
       },
     ];
   },

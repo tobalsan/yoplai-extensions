@@ -1,11 +1,19 @@
 import {
+  AddInternalNoteParamsSchema,
   CommentSchema,
   GetTicketParamsSchema,
+  GroupSchema,
+  ListAgentsParamsSchema,
+  ListGroupsParamsSchema,
   ListTicketsParamsSchema,
   SearchTicketsParamsSchema,
   TicketSchema,
+  UpdateTicketParamsSchema,
+  UserSchema,
   type Comment,
+  type Group,
   type Ticket,
+  type User,
 } from "./models.js";
 import {
   ZendeskAuthError,
@@ -73,7 +81,7 @@ export class ZendeskClient {
   ): Promise<JsonValue> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of query ?? []) {
-      url.searchParams.set(key, value);
+      url.searchParams.append(key, value);
     }
 
     const payload = body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
@@ -252,5 +260,65 @@ export class ZendeskClient {
     );
 
     return { ticket: { ...ticket, comments } };
+  }
+
+  async updateTicket(input: unknown): Promise<{ ticket: Ticket }> {
+    const { ticketId, addTags, removeTags, ...fields } = UpdateTicketParamsSchema.parse(input);
+    const ticket = {
+      ...fields,
+      ...(addTags ? { additionalTags: addTags } : {}),
+      ...(removeTags ? { removeTags } : {}),
+    };
+    if (Object.keys(ticket).length === 0) {
+      throw new ZendeskValidationError("update_ticket needs at least one field to change");
+    }
+    return this.putTicket(ticketId, ticket);
+  }
+
+  async addInternalNote(input: unknown): Promise<{ ticket: Ticket }> {
+    const { ticketId, body } = AddInternalNoteParamsSchema.parse(input);
+    return this.putTicket(ticketId, { comment: { body, public: false } });
+  }
+
+  async listGroups(input: unknown = {}): Promise<{ groups: Group[]; nextPageCursor?: string; hasMore?: boolean }> {
+    const { pageSize, pageCursor } = ListGroupsParamsSchema.parse(input);
+    const page = await this.listPage("/api/v2/groups.json", "groups", pageSize, pageCursor);
+    return { groups: page.items.map((group) => GroupSchema.parse(group)), ...page.meta };
+  }
+
+  /** Agents and admins (the users tickets can be assigned to), optionally scoped to one group. */
+  async listAgents(input: unknown = {}): Promise<{ agents: User[]; nextPageCursor?: string; hasMore?: boolean }> {
+    const { groupId, pageSize, pageCursor } = ListAgentsParamsSchema.parse(input);
+    const path = groupId === undefined ? "/api/v2/users.json" : `/api/v2/groups/${groupId}/users.json`;
+    const page = await this.listPage(path, "users", pageSize, pageCursor, [
+      ["role[]", "agent"],
+      ["role[]", "admin"],
+    ]);
+    return { agents: page.items.map((user) => UserSchema.parse(user)), ...page.meta };
+  }
+
+  private async listPage(
+    path: string,
+    key: string,
+    pageSize: number,
+    pageCursor: string | undefined,
+    extraQuery: Array<[string, string]> = [],
+  ): Promise<{ items: unknown[]; meta: { nextPageCursor?: string; hasMore?: boolean } }> {
+    const query: Array<[string, string]> = [["page[size]", String(pageSize)], ...extraQuery];
+    if (pageCursor) query.push(["page[after]", pageCursor]);
+    const data = (await this.request("GET", path, query)) as Record<string, unknown> & {
+      meta?: { afterCursor?: string; hasMore?: boolean };
+    };
+    return {
+      items: (data[key] as unknown[] | undefined) ?? [],
+      meta: { nextPageCursor: data.meta?.afterCursor ?? undefined, hasMore: data.meta?.hasMore ?? undefined },
+    };
+  }
+
+  private async putTicket(ticketId: number, ticket: Record<string, unknown>): Promise<{ ticket: Ticket }> {
+    const data = (await this.request("PUT", `/api/v2/tickets/${ticketId}.json`, undefined, { ticket })) as {
+      ticket: unknown;
+    };
+    return { ticket: TicketSchema.parse(data.ticket) };
   }
 }
