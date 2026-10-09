@@ -328,6 +328,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
     const personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
     const team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
+    const accountOf = (connection: typeof personal, scope: CredentialScope) => connection && server.type === "http" ? oauth?.backfillAccount(agentId, server.name, server.url, scope, connection) : undefined;
+    const [personalAccount, teamAccount] = await Promise.all([accountOf(personal, { type: "personal", userId: requesterUserId ?? "" }), accountOf(team, { type: "team" })]);
     const scopeState = (connection: typeof personal) => connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected";
     const config = configForAgent(agentId);
     const raw = config && fs.existsSync(config.path) ? readRawConfig(config.path) : undefined;
@@ -371,7 +373,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? await siteIcon } : iconUrl ? { iconUrl } : {}),
       auth,
       state: connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected",
-      ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team) } : {}),
+      ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team), ...(personalAccount ? { personalAccount } : {}), ...(teamAccount ? { teamAccount } : {}) } : {}),
       readOnly: !managed,
     };
   }
@@ -690,7 +692,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         if (server.headers) return { name: server.name, url: server.url, auth: "static", state: "static" };
         if (!await isOAuthServer(agent, server)) return { name: server.name, url: server.url, auth: "static", state: "static" };
         const connection = await store.read(agent, server.name, scope);
-        return { name: server.name, url: server.url, auth: "oauth", state: connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected", ...(connection ? { connectedAt: connection.connectedAt, expiresAt: connection.expiresAt } : {}) };
+        const account = connection ? await store.backfillAccount(agent, server.name, server.url, scope, connection) : undefined;
+        return { name: server.name, url: server.url, auth: "oauth", state: connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected", ...(connection ? { connectedAt: connection.connectedAt, expiresAt: connection.expiresAt, ...(account ? { account } : {}) } : {}) };
       }));
       return c.json({ servers, canConfigureTeam: canConfigureTeam(c) });
     });

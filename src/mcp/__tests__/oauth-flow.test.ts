@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const resolveAccountLabel = vi.hoisted(() => vi.fn());
+vi.mock("../account.js", () => ({ resolveAccountLabel }));
+
 let hostCredentials = credentials();
 const dirs: string[] = [];
-afterEach(async () => { hostCredentials = credentials();
+afterEach(async () => { hostCredentials = credentials(); resolveAccountLabel.mockReset();
   vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js");
   vi.resetModules();
   await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -27,10 +30,12 @@ describe("MCP OAuth flow", () => {
     dirs.push(dataDir);
     const store = new McpOAuthStore(dataDir, "http://gateway.test/api/mcp/oauth/callback", hostCredentials);
     const started = await store.begin("casey", "claap", "https://api.claap.io/mcp");
+    resolveAccountLabel.mockResolvedValueOnce("me@example.test");
     await store.finish(started.state, "code");
 
     expect(exchange).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ authorizationCode: "code", codeVerifier: "verifier" }));
-    await expect(store.read("casey", "claap")).resolves.toMatchObject({ tokens: { access_token: "access" }, state: "connected" });
+    expect(resolveAccountLabel).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: "https://api.claap.io/mcp", authorizationServerUrl: "https://auth.test" }));
+    await expect(store.read("casey", "claap")).resolves.toMatchObject({ tokens: { access_token: "access" }, state: "connected", account: "me@example.test" });
     const notified = await store.begin("casey", "claap", "https://api.claap.io/mcp", undefined, { type: "personal", userId: "user-a" }, async () => { throw new Error("notification failed"); }, { actorUserId: "user-a", actorEmail: "user@example.test" });
     const onConnected = vi.fn();
     await expect(store.finish(notified.state, "code", onConnected)).rejects.toThrow("notification failed");
@@ -183,6 +188,33 @@ describe("MCP OAuth flow", () => {
 
     await expect(store.refreshAccessToken("casey", "claap")).resolves.toBe("fresh");
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("keeps rotated tokens and the account when an account label is saved during refresh", async () => {
+    let release!: (tokens: unknown) => void;
+    const refresh = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverAuthorizationServerMetadata: vi.fn().mockResolvedValue({ token_endpoint: "https://auth.test/token" }),
+      refreshAuthorization: refresh,
+      discoverOAuthServerInfo: vi.fn(), registerClient: vi.fn(), startAuthorization: vi.fn(), exchangeAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
+    const connection = {
+      client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
+      tokens: { access_token: "old", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-07-22T00:00:00.000Z", authorizationServerUrl: "https://auth.test", state: "connected" as const,
+    };
+    await store.write("casey", "claap", connection);
+    const refreshing = store.refreshAccessToken("casey", "claap");
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    await store.write("casey", "claap", { ...connection, account: "me@example.test" });
+    release({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
+
+    await expect(refreshing).resolves.toBe("fresh");
+    await expect(store.read("casey", "claap")).resolves.toMatchObject({ account: "me@example.test", tokens: { access_token: "fresh", refresh_token: "refresh-2" } });
   });
 
   it("rejects an expired pending authorization state", async () => {

@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 
+import { resolveAccountLabel } from "./account.js";
 import type { McpStaticOAuthClient } from "./loader.js";
 
 export type CredentialScope = { type: "team" } | { type: "personal"; userId: string };
@@ -66,6 +67,8 @@ export interface OAuthConnection {
   authorizationServerUrl: string;
   expiresAt?: string;
   state?: OAuthState;
+  /** Email or name of the connected account, when the provider reveals it. */
+  account?: string;
 }
 
 export interface AuditActor {
@@ -120,6 +123,7 @@ const oauthFetch: typeof fetch = async (input, init) => {
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
   private readonly refreshes = new Map<string, Promise<string | undefined>>();
+  private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly hostProviders?: HostOAuthProviders) {}
 
@@ -274,10 +278,36 @@ export class McpOAuthStore {
     if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000) throw new Error("OAuth state is invalid or expired");
     const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
     const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
-    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected" }, pending.scope, pending.identity);
+    const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
+    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", ...(account ? { account } : {}) }, pending.scope, pending.identity);
     onConnected?.(pending);
     await pending.onComplete?.(pending.server);
     return pending;
+  }
+
+  /** Resolves and persists the account label of a connection that predates it; one attempt per credential per process, waiting at most `waitMs`. */
+  backfillAccount(agent: string, server: string, url: string, scope: CredentialScope, connection: OAuthConnection, waitMs = 2_000): Promise<string | undefined> {
+    if (connection.account || connection.state === "needs_reconnect") return Promise.resolve(connection.account);
+    const key = JSON.stringify([this.key(agent, server, scope), connection.connectedAt]);
+    const lookup = this.accountLookups.get(key) ?? this.startAccountLookup(key, agent, server, url, scope, connection);
+    // Slow lookups keep running and persist; this request just returns without the label.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([lookup, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); })]).finally(() => clearTimeout(timer));
+  }
+
+  private startAccountLookup(key: string, agent: string, server: string, url: string, scope: CredentialScope, connection: OAuthConnection): Promise<string | undefined> {
+    const lookup = (async () => {
+      const token = await this.accessToken(agent, server, 60_000, undefined, scope);
+      const latest = await this.read(agent, server, scope);
+      if (!token || !latest || latest.connectedAt !== connection.connectedAt) return undefined;
+      const account = await resolveAccountLabel({ serverUrl: url, authorizationServerUrl: latest.authorizationServerUrl, tokens: { ...latest.tokens, access_token: token } });
+      const current = account ? await this.read(agent, server, scope) : undefined;
+      // Skip while a refresh is in flight; refresh keeps account-only changes, so a later status call retries.
+      if (account && current?.connectedAt === connection.connectedAt && current.state !== "needs_reconnect" && !this.refreshes.has(JSON.stringify(this.key(agent, server, scope)))) await this.write(agent, server, { ...current, account }, scope);
+      return account;
+    })().catch(() => undefined);
+    this.accountLookups.set(key, lookup);
+    return lookup;
   }
 
   async accessToken(agent: string, server: string, skewMs = 60_000, requesterUserId?: string, exactScope?: CredentialScope): Promise<string | undefined> {
@@ -326,7 +356,9 @@ export class McpOAuthStore {
     connection: OAuthConnection,
     scope: CredentialScope,
   ): Promise<string | undefined> {
-    const unchanged = async () => JSON.stringify(await this.read(agent, server, scope)) === JSON.stringify(connection);
+    // An account label written meanwhile is not a competing grant: compare without it and keep it on save.
+    const comparable = (value?: OAuthConnection) => value ? JSON.stringify({ ...value, account: undefined }) : undefined;
+    const unchanged = async () => { const latest = await this.read(agent, server, scope); return latest && comparable(latest) === comparable(connection) ? latest : undefined; };
     if (!connection.tokens.refresh_token) {
       if (await unchanged()) await this.markNeedsReconnect(agent, server, scope);
       return undefined;
@@ -340,8 +372,9 @@ export class McpOAuthStore {
         })(),
         new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("OAuth refresh timed out")), 10_000); }),
       ]).finally(() => { if (timeout) clearTimeout(timeout); });
-      if (!await unchanged()) return undefined;
-      await this.write(agent, server, { ...connection, tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
+      const latest = await unchanged();
+      if (!latest) return undefined;
+      await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
       return tokens.access_token;
     } catch (error) {
       console.error(`[mcp] OAuth refresh failed for server "${server}"`);
