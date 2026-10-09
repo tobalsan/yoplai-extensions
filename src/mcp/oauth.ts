@@ -40,7 +40,7 @@ function identityOf({ url, clientId }: McpServerIdentity): string {
 export type HostOAuthProviders = () => Record<string, { clientId?: string; clientSecret?: string } | undefined> | undefined;
 
 /** Authorization server host -> host `oauth.providers` key. */
-const KNOWN_ISSUER_PROVIDERS: Record<string, string> = { "accounts.google.com": "google" };
+const KNOWN_ISSUER_PROVIDERS: Record<string, string> = { "accounts.google.com": "google", "mcp.hubspot.com": "hubspot" };
 
 function providerNameForIssuer(authorizationServerUrl: string): string | undefined {
   try { return KNOWN_ISSUER_PROVIDERS[new URL(authorizationServerUrl).host.toLowerCase()]; } catch { return undefined; }

@@ -97,6 +97,21 @@ describe("MCP OAuth flow", () => {
     expect(mocks.startAuthorization).toHaveBeenCalledWith("https://accounts.google.com/", expect.objectContaining({ scope: "mine", clientInformation: expect.objectContaining({ client_id: "own" }) }));
   });
 
+  it("uses the host hubspot provider for the HubSpot MCP issuer", async () => {
+    const mocks = {
+      ...googleServer(),
+      discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://mcp.hubspot.com", authorizationServerMetadata: { issuer: "https://mcp.hubspot.com", authorization_endpoint: "https://mcp.hubspot.com/oauth/authorize/user", token_endpoint: "https://mcp.hubspot.com/oauth/v3/token" }, resourceMetadata: { resource: "https://mcp.hubspot.com", authorization_servers: ["https://mcp.hubspot.com"], scopes_supported: [] } }),
+      startAuthorization: vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://mcp.hubspot.com/oauth/authorize/user"), codeVerifier: "verifier" }),
+    };
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ hubspot: { clientId: "hid", clientSecret: "hsecret" } }));
+    await store.begin("connie", "hubspot", "https://mcp.hubspot.com");
+    expect(mocks.startAuthorization).toHaveBeenCalledWith("https://mcp.hubspot.com", expect.objectContaining({ clientInformation: expect.objectContaining({ client_id: "hid", client_secret: "hsecret" }) }));
+  });
+
   it("keeps a clear error when no client can be resolved", async () => {
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => googleServer());
     const { McpOAuthStore } = await import("../oauth.js");
