@@ -5,7 +5,7 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
-import { loadMcpConfigFile, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
+import { parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
@@ -279,7 +279,7 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
-type McpRuntimeConfig = { oauth?: { providers?: Record<string, { clientId?: string; clientSecret?: string }> }; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
+type McpRuntimeConfig = { agents?: Array<{ id: string }>; oauth?: { providers?: Record<string, { clientId?: string; clientSecret?: string }> }; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
 export interface CredentialConnectHost {
   registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; actorEmail?: string; impersonatorUserId?: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
   requestLink(toolContext: unknown, target: { kind: "extension-oauth"; extensionId: string; targetId: string }): Promise<string | undefined>;
@@ -307,14 +307,44 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   let resolveIcon: ReturnType<typeof createIconResolver> | undefined;
   let unregister: (() => void) | undefined;
 
-  function loadedForAgent(agentId: string): LoadedMcpConfig | undefined {
-    const agent = runtime?.getAgent(agentId);
-    if (!agent || !runtime) return undefined;
-    const root = runtime.getConfig();
+  function catalogPath(): string { return path.join(runtime?.getDataDir() ?? "", "mcp.json"); }
+
+  /** Shared catalog entries (HTTP only); an unreadable catalog is treated as empty. */
+  function catalogServers(): Record<string, Record<string, unknown>> {
+    try {
+      const servers = readRawConfig(catalogPath()).mcpServers as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(servers).filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]) && typeof entry[1].url === "string"));
+    } catch { return {}; }
+  }
+
+  /**
+   * Agent mcp.json servers plus catalog servers. A local entry with the same key or URL hides the catalog one.
+   * `loaded` holds what actually runs: local servers and catalog servers the agent enabled via `sharedServers`.
+   */
+  function mergedForAgent(agent: AgentLike, root: { extensions?: Record<string, unknown>; env?: Record<string, string> }) {
     const resolved = resolveExtensionConfig(agent, root);
     const configPath = resolveConfigPath(agent, resolved);
-    if (!fs.existsSync(configPath)) return undefined;
-    return loadMcpConfigFile(configPath, resolveInterpolationEnv(agent, root, resolved));
+    const localText = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
+    const catalog = !runtime || configPath === catalogPath() ? {} : catalogServers();
+    if (localText === undefined && !Object.keys(catalog).length) return undefined;
+    const local = localText === undefined ? { mcpServers: {} } : readRawConfig(configPath);
+    const localServers = Object.values(local.mcpServers as Record<string, unknown>);
+    const visible = Object.fromEntries(Object.entries(catalog).filter(([key, entry]) => {
+      if (Object.hasOwn(local.mcpServers as object, key)) return false;
+      try { const url = new URL(entry.url as string); return !localServers.some((item) => isRecord(item) && typeof item.url === "string" && sameServerUrl(item.url, url)); }
+      catch { return false; }
+    }));
+    const enabled = new Set(Array.isArray(local.sharedServers) ? local.sharedServers.filter((item): item is string => typeof item === "string") : []);
+    const all = parseMcpConfig(JSON.stringify({ mcpServers: { ...(local.mcpServers as object), ...visible } }), resolveInterpolationEnv(agent, root, resolved));
+    const shared = new Set(Object.keys(visible));
+    const loaded: LoadedMcpConfig = { servers: all.servers.filter((server) => !shared.has(server.name) || enabled.has(server.name)), errors: all.errors };
+    const fingerprint = crypto.createHash("sha256").update(JSON.stringify([localText ?? "", Object.entries(visible).filter(([key]) => enabled.has(key))])).digest("hex");
+    return { configPath, all, loaded, shared, enabled, fingerprint };
+  }
+
+  function loadedForAgent(agentId: string): LoadedMcpConfig | undefined {
+    const agent = runtime?.getAgent(agentId);
+    return agent && runtime ? mergedForAgent(agent, runtime.getConfig())?.loaded : undefined;
   }
 
   function configForAgent(agentId: string): { agent: AgentLike; path: string } | undefined {
@@ -323,8 +353,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     return { agent, path: resolveConfigPath(agent, resolveExtensionConfig(agent, runtime.getConfig())) };
   }
 
-  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string) {
-    const oauthServer = server.type === "http" && !server.headers && await isOAuthServer(agentId, server);
+  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }) {
+    const active = !shared || shared.enabled;
+    const oauthServer = active && server.type === "http" && !server.headers && await isOAuthServer(agentId, server);
     const auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
     const personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
     const team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
@@ -332,9 +363,10 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const [personalAccount, teamAccount] = await Promise.all([accountOf(personal, { type: "personal", userId: requesterUserId ?? "" }), accountOf(team, { type: "team" })]);
     const scopeState = (connection: typeof personal) => connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected";
     const config = configForAgent(agentId);
-    const raw = config && fs.existsSync(config.path) ? readRawConfig(config.path) : undefined;
+    const rawPath = shared ? catalogPath() : config?.path;
+    const raw = rawPath && fs.existsSync(rawPath) ? readRawConfig(rawPath) : undefined;
     const rawServer = isRecord(raw?.mcpServers) ? raw.mcpServers[server.name] : undefined;
-    const managed = isRecord(rawServer) && rawServer.yoplaiManaged === true;
+    const managed = !shared && isRecord(rawServer) && rawServer.yoplaiManaged === true;
     let connected = false;
     let iconUrl: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
@@ -344,7 +376,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     let description = rawText("description");
     const siteIcon = server.type === "http" ? resolveIcon?.(server.url) : undefined;
     const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
-    try {
+    if (active) try {
       const manager = await getManager(key, agentId, [server], requesterUserId);
       const tools = await manager.listTools();
       connected = manager.hasClient(server.name) && tools.some((tool) => tool.server === server.name);
@@ -375,6 +407,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       state: connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected",
       ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team), ...(personalAccount ? { personalAccount } : {}), ...(teamAccount ? { teamAccount } : {}) } : {}),
       readOnly: !managed,
+      ...(shared ? { shared: true, enabled: shared.enabled } : {}),
+      ...(!shared && (rawText("displayName") || rawText("description")) ? { manualLabel: { displayName: rawText("displayName"), description: rawText("description") } } : {}),
     };
   }
 
@@ -425,8 +459,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     finally { oauthProbes.delete(probeKey); }
   }
 
-  async function resetManagers(agent: string): Promise<void> {
-    const keys = [...managers.keys()].filter((key) => key.startsWith(`${agent}:`));
+  async function resetManagers(agent?: string): Promise<void> {
+    const keys = [...managers.keys()].filter((key) => !agent || key.startsWith(`${agent}:`));
     for (const key of keys) {
       const pending = managers.get(key);
       managers.delete(key);
@@ -536,6 +570,29 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const roles = Array.isArray(role) ? role : [role];
       return roles.some((value) => value === "admin" || value === "superadmin");
     }
+    function isSuperadmin(c: RouteContext): boolean {
+      if (!multiUserEnabled()) return true;
+      const auth = c.get?.("multiUserAuthContext");
+      const role = isRecord(auth) && isRecord(auth.user) ? auth.user.role : undefined;
+      return (Array.isArray(role) ? role : [role]).includes("superadmin");
+    }
+    const capText = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : undefined;
+    /** Sets or clears (empty) only the yoplai label fields present in `input`. */
+    function applyLabel(entry: Record<string, unknown>, input: Record<string, unknown>): void {
+      for (const [field, max] of [["displayName", 100], ["description", 500]] as const) {
+        if (!(field in input)) continue;
+        const value = capText(input[field], max);
+        if (value) entry[field] = value; else delete entry[field];
+      }
+    }
+    function catalogCard(name: string, entry: Record<string, unknown>) {
+      return { name, url: entry.url as string, ...(typeof entry.displayName === "string" ? { displayName: entry.displayName } : {}), ...(typeof entry.description === "string" ? { description: entry.description } : {}) };
+    }
+    /** Catalog routes are superadmin-only; returns an error response or undefined when allowed. */
+    function catalogDenied(c: RouteContext) {
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      return isSuperadmin(c) ? undefined : c.text("Superadmin access required", 403);
+    }
     function requestedScope(c: RouteContext): CredentialScope | undefined {
       const id = userId(c);
       if (c.req.query("scope") === "team" && (id || !multiUserEnabled())) return { type: "team" };
@@ -563,9 +620,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const agentId = c.req.query("agent");
       if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
       if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
-      const loaded = loadedForAgent(agentId);
-      const servers = loaded ? await Promise.all(loaded.servers.map((server) => serverCard(agentId, server, userId(c)))) : [];
-      return c.json({ servers, canConfigureTeam: canConfigureTeam(c) });
+      const agent = runtime?.getAgent(agentId);
+      const merged = agent && runtime ? mergedForAgent(agent, runtime.getConfig()) : undefined;
+      const servers = merged ? await Promise.all(merged.all.servers.map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined))) : [];
+      return c.json({ servers, canConfigureTeam: canConfigureTeam(c), canEditLabels: isSuperadmin(c) });
     });
     app.post("/mcp/servers", async (c) => {
       const agentId = c.req.query("agent");
@@ -583,7 +641,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
       const existing = readRawConfig(config.path).mcpServers;
       if (isRecord(existing) && Object.values(existing).some((entry) => isRecord(entry) && typeof entry.url === "string" && sameServerUrl(entry.url, url))) return c.text("This MCP server has already been added.", 409);
-      const taken = (candidate: string) => isRecord(existing) && Object.hasOwn(existing, candidate);
+      const catalog = catalogServers();
+      const taken = (candidate: string) => (isRecord(existing) && Object.hasOwn(existing, candidate)) || Object.hasOwn(catalog, candidate);
       const base = siteLabel(url.hostname);
       let name = base;
       for (let n = 2; taken(name); n++) name = `${base}_${n}`;
@@ -616,6 +675,140 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       } catch (error) {
         if (flow) oauth?.cancel(flow.state);
         return c.text(error instanceof Error ? error.message : "Unable to add MCP server", 400);
+      }
+    });
+    app.get("/mcp/catalog", async (c) => {
+      const denied = catalogDenied(c);
+      if (denied) return denied;
+      const servers = await Promise.all(Object.entries(catalogServers()).map(async ([name, entry]) => ({ ...catalogCard(name, entry), iconUrl: await resolveIcon?.(entry.url as string) })));
+      return c.json({ servers });
+    });
+    app.post("/mcp/catalog", async (c) => {
+      const denied = catalogDenied(c);
+      if (denied) return denied;
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!isRecord(input) || typeof input.url !== "string") return c.text("URL is required", 400);
+      for (const field of ["command", "args", "env"]) if (field in input) return c.text(`"${field}" is not allowed; only HTTP servers can be shared`, 400);
+      let url: URL;
+      try { url = new URL(input.url); }
+      catch { return c.text("Invalid MCP server URL", 400); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return c.text("MCP server URL must be HTTP or HTTPS without embedded credentials", 400);
+      try {
+        const root = readRawConfig(catalogPath());
+        const servers = root.mcpServers as Record<string, unknown>;
+        if (Object.values(servers).some((entry) => isRecord(entry) && typeof entry.url === "string" && sameServerUrl(entry.url, url))) return c.text("This MCP server is already in the catalog.", 409);
+        const base = siteLabel(url.hostname);
+        let name = base;
+        for (let n = 2; Object.hasOwn(servers, name); n++) name = `${base}_${n}`;
+        const entry: Record<string, unknown> = { url: url.toString() };
+        applyLabel(entry, input);
+        servers[name] = entry;
+        fs.mkdirSync(path.dirname(catalogPath()), { recursive: true });
+        writeRawConfig(catalogPath(), root);
+        await resetManagers();
+        audit({ ...actor(c), action: "mcp.server.add", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "catalog", secret: "set" }] });
+        return c.json({ server: { ...catalogCard(name, entry), iconUrl: await resolveIcon?.(entry.url as string) } });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to add catalog server", 400);
+      }
+    });
+    app.post("/mcp/catalog/update", async (c) => {
+      const denied = catalogDenied(c);
+      if (denied) return denied;
+      const name = c.req.query("server");
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!name || !isRecord(input)) return c.text("Server and label are required", 400);
+      try {
+        const root = readRawConfig(catalogPath());
+        const entry = (root.mcpServers as Record<string, unknown>)[name];
+        if (!Object.hasOwn(root.mcpServers as object, name) || !isRecord(entry)) return c.text("Unknown catalog server", 404);
+        applyLabel(entry, input);
+        writeRawConfig(catalogPath(), root);
+        audit({ ...actor(c), action: "mcp.server.update", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "catalog", secret: "set" }] });
+        return c.json({ server: catalogCard(name, entry) });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to update catalog server", 400);
+      }
+    });
+    app.post("/mcp/catalog/remove", async (c) => {
+      const denied = catalogDenied(c);
+      if (denied) return denied;
+      const name = c.req.query("server");
+      try {
+        const root = readRawConfig(catalogPath());
+        const servers = root.mcpServers as Record<string, unknown>;
+        if (!name || !Object.hasOwn(servers, name)) return c.text("Unknown catalog server", 404);
+        delete servers[name];
+        writeRawConfig(catalogPath(), root);
+        // A later server reusing this key must be opted in afresh.
+        for (const { id } of runtime?.getConfig().agents ?? []) {
+          const config = configForAgent(id);
+          if (!config || !fs.existsSync(config.path)) continue;
+          const agentRoot = readRawConfig(config.path);
+          if (!Array.isArray(agentRoot.sharedServers) || !agentRoot.sharedServers.includes(name)) continue;
+          agentRoot.sharedServers = agentRoot.sharedServers.filter((item) => item !== name);
+          writeRawConfig(config.path, agentRoot);
+        }
+        await resetManagers();
+        audit({ ...actor(c), action: "mcp.server.remove", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "catalog", secret: "removed" }] });
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to remove catalog server", 400);
+      }
+    });
+    app.post("/mcp/servers/shared", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!isRecord(input) || typeof input.enabled !== "boolean") return c.text("enabled is required", 400);
+      try {
+        const merged = mergedForAgent(config.agent, runtime!.getConfig());
+        const server = merged?.all.servers.find((item) => item.name === name);
+        if (!merged || !server || !merged.shared.has(name)) return c.text("Unknown shared MCP server", 404);
+        const root = readRawConfig(config.path);
+        const list = (Array.isArray(root.sharedServers) ? root.sharedServers : []).filter((item) => item !== name);
+        if (input.enabled) list.push(name);
+        root.sharedServers = list;
+        fs.mkdirSync(path.dirname(config.path), { recursive: true });
+        writeRawConfig(config.path, root);
+        await resetManagers(agentId);
+        audit({ ...actor(c), action: input.enabled ? "mcp.server.enable" : "mcp.server.disable", agentId, targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "sharedServers", secret: input.enabled ? "set" : "removed" }] });
+        return c.json({ server: await serverCard(agentId, server, userId(c), { enabled: input.enabled }) });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to update shared MCP server", 400);
+      }
+    });
+    app.post("/mcp/servers/label", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const config = agentId ? configForAgent(agentId) : undefined;
+      if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
+      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      if (!isSuperadmin(c)) return c.text("Superadmin access required", 403);
+      let input: unknown;
+      try { input = await c.req.json?.(); }
+      catch { return c.text("Invalid JSON body", 400); }
+      if (!isRecord(input)) return c.text("displayName or description is required", 400);
+      try {
+        const root = readRawConfig(config.path);
+        const servers = root.mcpServers as Record<string, unknown>;
+        const entry = Object.hasOwn(servers, name) ? servers[name] : undefined;
+        if (!isRecord(entry)) return c.text("Unknown MCP server", 404);
+        applyLabel(entry, input);
+        writeRawConfig(config.path, root);
+        audit({ ...actor(c), action: "mcp.server.update", agentId, targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "label", secret: "set" }] });
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.text(error instanceof Error ? error.message : "Unable to save MCP server label", 400);
       }
     });
     app.post("/mcp/servers/remove", async (c) => {
@@ -738,8 +931,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
   },
   getSystemPromptContributions(agent: AgentLike, context?: { config: { extensions?: Record<string, unknown> } }) {
     if (!context) return undefined;
-    const configPath = resolveConfigPath(agent, resolveExtensionConfig(agent, context.config));
-    return fs.existsSync(configPath) ? [baseExtension.systemPrompt] : undefined;
+    try { return mergedForAgent(agent, context.config) ? [baseExtension.systemPrompt] : undefined; } catch { return [baseExtension.systemPrompt]; }
   },
   validateAgentConfigs(config: { agents: AgentLike[]; extensions?: Record<string, unknown> }) {
     const errors: string[] = [];
@@ -771,11 +963,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     if (!context) return [];
     const extensionConfig = resolveExtensionConfig(agent, context.config);
     const configPath = resolveConfigPath(agent, extensionConfig);
-    if (!fs.existsSync(configPath)) return [];
-
-    const rawConfig = fs.readFileSync(configPath, "utf8");
-    const revision = crypto.createHash("sha256").update(rawConfig).digest("hex");
-    const loaded = parseMcpConfig(rawConfig, resolveInterpolationEnv(agent, context.config, extensionConfig));
+    const merged = mergedForAgent(agent, context.config);
+    if (!merged) return [];
+    const revision = merged.fingerprint;
+    const loaded = merged.loaded;
     logConfigErrors(loaded);
     const manager = await getManager(`${agent.id}:${configPath}:${revision}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, context.userId);
     const definitions = await manager.listTools();
@@ -785,7 +976,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       execute: async (params: unknown, execution?: { userId?: string }) => {
-        if (!fs.existsSync(configPath) || crypto.createHash("sha256").update(fs.readFileSync(configPath, "utf8")).digest("hex") !== revision) {
+        let now: string | undefined;
+        try { now = mergedForAgent(agent, context.config)?.fingerprint; } catch { /* treated as changed */ }
+        if (now !== revision) {
           return { connected: false, provider: "mcp", reason: "configuration_changed", message: "MCP server settings changed. Reload the agent's tools." };
         }
         const definition = definitions[index]!;
