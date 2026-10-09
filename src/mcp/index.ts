@@ -194,6 +194,20 @@ function saveLabel(filePath: string, name: string, label: { title?: string; desc
   } catch { /* label is best-effort */ }
 }
 
+/**
+ * Records a shared catalog server's reported name as `serverTitle`, apart from the superadmin's
+ * `displayName` override, so non-MCP surfaces (Top extensions) can label it without connecting.
+ */
+function saveServerTitle(filePath: string, name: string, title: string): void {
+  try {
+    const root = readRawConfig(filePath);
+    const entry = isRecord(root.mcpServers) ? root.mcpServers[name] : undefined;
+    if (!isRecord(entry)) return;
+    entry.serverTitle = title;
+    writeRawConfig(filePath, root);
+  } catch { /* label is best-effort */ }
+}
+
 function extensionHub(agentId: string): string {
   return `/agents/${encodeURIComponent(agentId)}/edit`;
 }
@@ -385,6 +399,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         ({ title, description } = manager.getServerInfo(server.name));
         if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
       }
+      if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
       const icon = manager.getServerIcon(server.name);
       if (icon) {
         try {

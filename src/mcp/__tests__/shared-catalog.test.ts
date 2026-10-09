@@ -91,6 +91,19 @@ describe("shared MCP catalog", () => {
     await t.extension.stop();
   });
 
+  it("records the reported name of an enabled shared server as serverTitle, never over an admin label", async () => {
+    const t = await setup({ "mcp.json": { mcpServers: {}, sharedServers: ["docs", "named"] } }, { mcpServers: {
+      docs: { url: "https://docs.example.test/mcp" },
+      named: { url: "https://named.example.test/mcp", displayName: "Admin name" },
+    } });
+    const list = await t.call("GET /mcp/servers", ctx("user", undefined, { agent: "a1" }));
+    expect(list.servers.map((s: any) => s.title)).toEqual(["Reported", "Admin name"]);
+    const catalog = (await t.read(path.join(t.home, "mcp.json"))).mcpServers;
+    expect(catalog.docs).toEqual({ url: "https://docs.example.test/mcp", serverTitle: "Reported" });
+    expect(catalog.named).toEqual({ url: "https://named.example.test/mcp", displayName: "Admin name" });
+    await t.extension.stop();
+  });
+
   it("lets a local server with the same key or URL hide the catalog entry and keeps other fields", async () => {
     const t = await setup({ "mcp.json": { keep: 1, mcpServers: { claap: { url: "https://api.claap.io/mcp" }, mine: { url: "https://dup.example.test/mcp/" } } } }, { mcpServers: {
       claap: { url: "https://other.example.test/mcp" }, dup: { url: "https://DUP.example.test/mcp" }, extra: { url: "https://extra.example.test/mcp" } } });
