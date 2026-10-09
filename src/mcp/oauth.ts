@@ -69,6 +69,8 @@ export interface OAuthConnection {
   state?: OAuthState;
   /** Email or name of the connected account, when the provider reveals it. */
   account?: string;
+  /** Normalized url+clientId the grant was issued for; a different current identity invalidates it. */
+  identity?: string;
 }
 
 export interface AuditActor {
@@ -145,12 +147,14 @@ export class McpOAuthStore {
 
   async resolve(agent: string, server: string, requesterUserId?: string): Promise<{ connection: OAuthConnection; scope: CredentialScope } | undefined> {
     await this.read(agent, server, TEAM);
+    const current = this.sharedIdentity(agent, server);
+    const bound = (connection: OAuthConnection) => !current || !connection.identity || connection.identity === current;
     const personal = requesterUserId ? await this.read(agent, server, { type: "personal", userId: requesterUserId }) : undefined;
     if (personal) return { connection: personal, scope: { type: "personal", userId: requesterUserId! } };
     const result = this.credentials?.resolve<OAuthConnection>({ agentId: agent, integration: `mcp:${server}`, connectUrl: `/agents/${encodeURIComponent(agent)}/edit` });
-    if (result?.connected) return { connection: result.payload, scope: result.scope };
+    if (result?.connected && bound(result.payload)) return { connection: result.payload, scope: result.scope };
     const legacy = await this.readLegacy(agent, server);
-    return legacy ? { connection: legacy, scope: TEAM } : undefined;
+    return legacy && bound(legacy) ? { connection: legacy, scope: TEAM } : undefined;
   }
 
   private async readLegacy(agent: string, server: string): Promise<OAuthConnection | undefined> {
@@ -162,7 +166,21 @@ export class McpOAuthStore {
     return path.join(this.dataDir, "mcp", "oauth", filePart(agent), `${filePart(server)}.json`);
   }
 
+  /** Drops a grant issued for another url/client; stamps the current identity on grants that predate it. */
+  private bind(agent: string, server: string, connection: OAuthConnection | undefined, scope: CredentialScope, identity?: McpServerIdentity): OAuthConnection | undefined {
+    const current = connection && this.sharedIdentity(agent, server, identity);
+    if (!connection || !current) return connection;
+    if (connection.identity) return connection.identity === current ? connection : undefined;
+    const stamped = { ...connection, identity: current };
+    try { this.credentials?.save(this.key(agent, server, scope, identity), stamped); } catch { /* best effort */ }
+    return stamped;
+  }
+
   async read(agent: string, server: string, scope: CredentialScope = TEAM, identity?: McpServerIdentity): Promise<OAuthConnection | undefined> {
+    return this.bind(agent, server, await this.readStored(agent, server, scope, identity), scope, identity);
+  }
+
+  private async readStored(agent: string, server: string, scope: CredentialScope, identity?: McpServerIdentity): Promise<OAuthConnection | undefined> {
     const key = this.key(agent, server, scope, identity);
     const stored = this.credentials?.get<OAuthConnection | Tombstone>(key);
     if (stored && "tombstone" in stored) return undefined;
@@ -279,7 +297,7 @@ export class McpOAuthStore {
     const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
     const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
     const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
-    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", ...(account ? { account } : {}) }, pending.scope, pending.identity);
+    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
     onConnected?.(pending);
     await pending.onComplete?.(pending.server);
     return pending;
