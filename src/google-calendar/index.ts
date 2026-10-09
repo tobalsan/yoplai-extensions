@@ -11,7 +11,7 @@ const messages: Record<string, string> = {
 };
 const readOnly = new Set(["list_calendars", "list_events", "get_event", "search_events", "suggest_time"]);
 export default defineToolExtension({
-  id: "calendar",
+  id: "googleCalendar",
   displayName: "Google Calendar",
   description: "Google Calendar tools using your personal or shared team Google connection.",
   configSchema: CalendarConfigSchema,
@@ -21,7 +21,7 @@ export default defineToolExtension({
     const oauth = config.oauth;
     const connected = oauth?.connected ? oauth : undefined;
     const client = connected ? new CalendarClient(connected.accessToken) : undefined;
-    const disconnected = (reason: string, message = messages[reason], agentId?: string) => ({ connected: false, provider: "google", reason, message, authorizeUrl: oauth && !oauth.connected ? oauth.authorizeUrl ?? (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/calendar` : "/agents") : (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/calendar` : "/agents") });
+    const disconnected = (reason: string, message = messages[reason], agentId?: string) => ({ connected: false, provider: "google", reason, message, authorizeUrl: oauth && !oauth.connected ? oauth.authorizeUrl ?? (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents") : (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents") });
     return Object.entries(toolSchemas).map(([name, schema]) => ({
       name,
       description: schema.description ?? name,

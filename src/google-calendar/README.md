@@ -1,7 +1,7 @@
 # Google Calendar extension
 
 Google Calendar events and availability via host-managed Google OAuth. Enable
-`calendar: {}` under an agent's `extensions`, then connect from its Google
+`googleCalendar: {}` under an agent's `extensions`, then connect from its Google
 Calendar settings using **Just me** or **Whole team**. Only admins can configure
 the team connection; the host uses the requester's personal connection first,
 then the team's connection. Gmail, Drive, and Calendar on the same agent share
@@ -19,14 +19,14 @@ in the extension configuration; this extension stores no tokens or calendar data
 ```bash
 pnpm install
 pnpm build
-ln -sfn "$PWD/dist/calendar" "$YOPLAI_HOME/extensions/calendar"
+ln -sfn "$PWD/dist/google-calendar" "$YOPLAI_HOME/extensions/google-calendar"
 ```
 
 Set `YOPLAI_HOME` to your host's configuration directory before installing.
 
 ## Tools
 
-Names mount with the `calendar_` prefix. The first five tools are read-only.
+Names mount with the `googleCalendar_` prefix. The first five tools are read-only.
 
 | Name | Behavior |
 | --- | --- |

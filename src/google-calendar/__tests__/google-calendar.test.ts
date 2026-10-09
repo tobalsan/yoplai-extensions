@@ -113,21 +113,21 @@ describe("extension identity and auth signals", () => {
   const config = { global: {}, agent: {}, merged: {}, oauth: { connected: true as const, provider: "google", accessToken: "token", account: "me@example.com", scopes: [] } };
   it.each([[401, {}, "expired"], [403, {}, "insufficient_scope"], [429, {}, "rate_limited"], [403, { error: { errors: [{ reason: "rateLimitExceeded" }] } }, "rate_limited"]])("maps HTTP %s without raw errors", async (status, payload, reason) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(payload, status as number)));
-    const tools = calendar.getAgentTools({ id: "agent", extensions: { calendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    const tools = calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
     expect(await (await tools)[0].execute({})).toMatchObject({ connected: false, reason });
   });
   it("includes account and mounts all nine tools with read-only hints", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async input => json(String(input).includes("userinfo") ? { email: "me@example.com" } : { items: [] })));
-    const tools = await calendar.getAgentTools({ id: "agent", extensions: { calendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
     expect(tools).toHaveLength(9);
-    for (const tool of tools) expect(tool.annotations?.readOnlyHint).toBe(["list_calendars", "list_events", "get_event", "search_events", "suggest_time"].some(name => tool.name === `calendar_${name}`));
-    expect(tools.map(tool => tool.name)).toEqual(Object.keys(toolSchemas).map(name => `calendar_${name}`));
-    expect(await tools.find(tool => tool.name === "calendar_list_calendars")!.execute({})).toMatchObject({ account: "me@example.com" });
+    for (const tool of tools) expect(tool.annotations?.readOnlyHint).toBe(["list_calendars", "list_events", "get_event", "search_events", "suggest_time"].some(name => tool.name === `googleCalendar_${name}`));
+    expect(tools.map(tool => tool.name)).toEqual(Object.keys(toolSchemas).map(name => `googleCalendar_${name}`));
+    expect(await tools.find(tool => tool.name === "googleCalendar_list_calendars")!.execute({})).toMatchObject({ account: "me@example.com" });
   });
   it("does not mutate on wrong account", async () => {
     const fetcher = vi.fn().mockResolvedValue(json({ email: "wrong@example.com" })); vi.stubGlobal("fetch", fetcher);
-    const tools = await calendar.getAgentTools({ id: "agent", extensions: { calendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
-    expect(await tools.find(tool => tool.name === "calendar_delete_event")!.execute({ eventId: "id" })).toMatchObject({ reason: "wrong_account" });
+    const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    expect(await tools.find(tool => tool.name === "googleCalendar_delete_event")!.execute({ eventId: "id" })).toMatchObject({ reason: "wrong_account" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
@@ -186,11 +186,11 @@ it("rejects RSVP when calendar self is another account and token user is absent"
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 it("returns a clear connect link for disconnected and expired grants", async () => {
-  const tools = await calendar.getAgentTools({ id: "agent /", extensions: { calendar: {} } }, { config: {} });
-  expect(await tools[0].execute({})).toMatchObject({ connected: false, authorizeUrl: "/agents/agent%20%2F/extensions/calendar" });
+  const tools = await calendar.getAgentTools({ id: "agent /", extensions: { googleCalendar: {} } }, { config: {} });
+  expect(await tools[0].execute({})).toMatchObject({ connected: false, authorizeUrl: "/agents/agent%20%2F/extensions/googleCalendar" });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({}, 401)));
-  const connectedTools = await calendar.getAgentTools({ id: "agent /", extensions: { calendar: {} } }, { config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "token", scopes: [] }) });
-  expect(await connectedTools[0].execute({})).toMatchObject({ reason: "expired", authorizeUrl: "/agents/agent%20%2F/extensions/calendar" });
+  const connectedTools = await calendar.getAgentTools({ id: "agent /", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "token", scopes: [] }) });
+  expect(await connectedTools[0].execute({})).toMatchObject({ reason: "expired", authorizeUrl: "/agents/agent%20%2F/extensions/googleCalendar" });
 });
 it.each([true, false])("clears old nested time representation on allDay conversion %s", async allDay => {
   const existing = allDay ? { start: { dateTime: "2026-10-08T10:00:00Z", timeZone: "UTC" }, end: { dateTime: "2026-10-08T11:00:00Z", timeZone: "UTC" } } : { start: { date: "2026-10-08" }, end: { date: "2026-10-09" } };
