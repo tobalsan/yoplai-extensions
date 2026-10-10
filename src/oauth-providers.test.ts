@@ -40,7 +40,7 @@ describe("oauthProviders", () => {
 
   it("declares notion with basic auth and token-response account", () => {
     const [provider] = notion.oauthProviders ?? [];
-    expect(provider).toMatchObject({ id: "notion", tokenAuth: "basic", defaultScopes: [] });
+    expect(provider).toMatchObject({ id: "notion", tokenAuth: "basic", tokenRequestFormat: "json", defaultScopes: [] });
     expect(provider?.accountFromTokenResponse?.({ owner: { user: { person: { email: "n@n.n" } } }, workspace_name: "W" })).toBe("n@n.n");
     expect(provider?.accountFromTokenResponse?.({ workspace_name: "W" })).toBe("W");
     expect(provider?.accountFromTokenResponse?.({})).toBeUndefined();

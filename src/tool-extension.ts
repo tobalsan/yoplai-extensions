@@ -35,6 +35,11 @@ export interface OAuthProviderDescriptor {
    * (default) or "basic" (HTTP Basic header, not in the body).
    */
   tokenAuth?: "body" | "basic";
+  /**
+   * Encoding of token exchange, refresh and revoke request bodies: "form"
+   * (default, application/x-www-form-urlencoded) or "json" (application/json).
+   */
+  tokenRequestFormat?: "form" | "json";
   /** Extract a human-readable account label from a parsed userinfo response. */
   extractAccount?(userInfo: unknown): string | undefined;
   /** Extract the account label from the token response; preferred over `userInfoUrl`. */

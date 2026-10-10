@@ -6,6 +6,8 @@ Self-contained agent tool packages for external APIs, used with [Yoplai](https:/
 
 Extensions that use OAuth ship their provider descriptor via `oauthProviders` (see `OAuthProviderDescriptor` in `src/tool-extension.ts`); the host registers it at load. The flow, client secrets (`oauth.providers.<id>`) and token store stay in the host.
 
+Descriptors may set `tokenRequestFormat: "json"` for providers (e.g. Notion) whose token, refresh and revoke endpoints accept JSON only; default is form-encoded.
+
 ## Extension catalog
 
 The source directory is the build/install directory name. The extension ID is the key used under `extensions` in Yoplai configuration; the two differ where noted.
