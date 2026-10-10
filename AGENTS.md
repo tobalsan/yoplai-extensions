@@ -6,7 +6,7 @@ This repo contains standalone Yoplai tool extensions: self-contained agent tool 
 
 ## Extension Contract
 
-See the authoritative Yoplai unified extension model in `/Users/agents/code/yoplai/docs/llms.md`. Do not copy that large host-runtime document into this repository; keep extension-specific guidance local.
+See the authoritative Yoplai unified extension model in `/Users/agents/code/algodyn/yoplai/platform/docs/llms.md`. Do not copy that large host-runtime document into this repository; keep extension-specific guidance local.
 
 Key points:
 - Each tool extension exports a default extension object from its `index.ts`
