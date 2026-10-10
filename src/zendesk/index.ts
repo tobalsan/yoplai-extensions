@@ -10,7 +10,7 @@ import {
   ZendeskConfigSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
-import type { ResolvedOAuth } from "../tool-extension.js";
+import type { OAuthProviderDescriptor, ResolvedOAuth } from "../tool-extension.js";
 
 export { ZendeskConfigSchema };
 
@@ -28,6 +28,21 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
       oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
   };
 }
+
+/** Zendesk descriptor. URLs are per-tenant: `{subdomain}` comes from oauth.providers.zendesk.subdomain. */
+const zendeskOAuthProvider: OAuthProviderDescriptor = {
+  id: "zendesk",
+  displayName: "Zendesk",
+  authorizeUrl: "https://{subdomain}.zendesk.com/oauth/authorizations/new",
+  tokenUrl: "https://{subdomain}.zendesk.com/oauth/tokens",
+  userInfoUrl: "https://{subdomain}.zendesk.com/api/v2/users/me.json",
+  apiBaseUrl: "https://{subdomain}.zendesk.com",
+  defaultScopes: ["read"],
+  extractAccount(userInfo) {
+    const email = (userInfo as { user?: { email?: unknown } } | null)?.user?.email;
+    return typeof email === "string" ? email : undefined;
+  },
+};
 
 export default defineToolExtension({
   id: "zendesk",
@@ -59,6 +74,7 @@ Notes:
   requiredSecrets: ["apiKey"],
   advancedConfigFields: ["timeoutMs"],
   oauthHiddenFields: ["mode", "subdomain", "email", "apiKey", "timeoutMs"],
+  oauthProviders: [zendeskOAuthProvider],
   oauth: (config) =>
     config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read", "tickets:write"] } : undefined,
   createTools(config) {

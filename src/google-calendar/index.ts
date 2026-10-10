@@ -1,4 +1,5 @@
 import { defineToolExtension } from "../tool-extension.js";
+import { googleOAuthProvider } from "../google-oauth-provider.js";
 import { CalendarClient, CalendarRequestError } from "./client.js";
 import { CalendarConfigSchema, toolSchemas } from "./models.js";
 
@@ -16,6 +17,7 @@ export default defineToolExtension({
   description: "Google Calendar tools using your personal or shared team Google connection.",
   configSchema: CalendarConfigSchema,
   requiredSecrets: [],
+  oauthProviders: [googleOAuthProvider],
   oauth: { provider: "google", scopes: ["calendar.events", "calendar.calendarlist.readonly", "calendar.freebusy", "userinfo.email"].map(scope => `https://www.googleapis.com/auth/${scope}`) },
   createTools(config) {
     const oauth = config.oauth;

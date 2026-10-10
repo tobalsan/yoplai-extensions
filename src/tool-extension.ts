@@ -11,6 +11,37 @@ export interface OAuthRequirement {
 }
 
 /**
+ * OAuth provider descriptor shipped by an extension. The host registers it at
+ * extension load; the OAuth flow, secrets and token store stay in the host.
+ * URLs may contain a `{subdomain}` placeholder.
+ */
+export interface OAuthProviderDescriptor {
+  /** Stable id used in routes and storage, e.g. "google". */
+  id: string;
+  displayName: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  /** RFC 7009 revocation endpoint, best-effort called on disconnect. */
+  revokeUrl?: string;
+  /** Endpoint fetched after token exchange to identify the connected account. */
+  userInfoUrl?: string;
+  defaultScopes: string[];
+  /** Base URL of the provider's API, handed to extensions that need it. */
+  apiBaseUrl?: string;
+  /** Extra query params appended to the authorize URL. */
+  authorizeParams?: Record<string, string>;
+  /**
+   * How client credentials reach the token (and revoke) endpoint: "body"
+   * (default) or "basic" (HTTP Basic header, not in the body).
+   */
+  tokenAuth?: "body" | "basic";
+  /** Extract a human-readable account label from a parsed userinfo response. */
+  extractAccount?(userInfo: unknown): string | undefined;
+  /** Extract the account label from the token response; preferred over `userInfoUrl`. */
+  accountFromTokenResponse?(token: unknown): string | undefined;
+}
+
+/**
  * Structured OAuth resolution injected by the host: a fresh access token when
  * connected, or a clear not-connected signal — never a raw secret, never a
  * thrown 401.
@@ -84,6 +115,8 @@ export interface ToolExtensionDefinition {
    * signal) resolved by the host at tool-build time.
    */
   oauth?: OAuthRequirement | ((config: ResolvedToolExtensionConfig) => OAuthRequirement | undefined);
+  /** Static OAuth provider descriptors, registered by the host at load time. */
+  oauthProviders?: OAuthProviderDescriptor[];
   createTools(config: ResolvedToolExtensionConfig): ToolExtensionTool[];
 }
 
@@ -219,6 +252,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
     systemPrompt: definition.systemPrompt,
     requiredSecrets: definition.requiredSecrets,
     oauth: definition.oauth,
+    oauthProviders: definition.oauthProviders,
     advancedConfigFields: definition.advancedConfigFields,
     oauthHiddenFields: definition.oauthHiddenFields,
     configJsonSchema: withFieldTitles(zodToJsonSchema(definition.configSchema, { $refStrategy: "none" }), definition.configFieldTitles),

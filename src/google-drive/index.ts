@@ -1,4 +1,5 @@
 import { defineToolExtension } from "../tool-extension.js";
+import { googleOAuthProvider } from "../google-oauth-provider.js";
 import type { ResolvedOAuth } from "../tool-extension.js";
 import { z } from "zod";
 import { GoogleDriveClient, GoogleDriveRequestError } from "./client.js";
@@ -58,6 +59,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
   configSchema: GoogleDriveConfigSchema,
   configFieldTitles: { allowWrite: "Enable creating and writing files" },
   requiredSecrets: [],
+  oauthProviders: [googleOAuthProvider],
   oauth: (config) => ({
     provider: "google",
     scopes: [

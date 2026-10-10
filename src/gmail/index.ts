@@ -1,4 +1,5 @@
 import { defineToolExtension } from "../tool-extension.js";
+import { googleOAuthProvider } from "../google-oauth-provider.js";
 import type { ResolvedOAuth } from "../tool-extension.js";
 import { GmailClient, GmailRequestError } from "./client.js";
 import {
@@ -33,6 +34,7 @@ export default defineToolExtension({
   systemPrompt: "Use Gmail-compatible query syntax. Gmail content is returned only for this tool call; never repeat it unnecessarily.",
   configSchema: GmailConfigSchema,
   requiredSecrets: [],
+  oauthProviders: [googleOAuthProvider],
   oauth: {
     provider: "google",
     scopes: [

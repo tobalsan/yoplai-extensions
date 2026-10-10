@@ -21,7 +21,7 @@ import {
   ValidateParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
-import type { ResolvedOAuth, ToolExtensionTool } from "../tool-extension.js";
+import type { OAuthProviderDescriptor, ResolvedOAuth, ToolExtensionTool } from "../tool-extension.js";
 
 /** Documented not-connected signal — never a raw 401. */
 function notConnected(oauth: ResolvedOAuth | undefined) {
@@ -38,6 +38,25 @@ function notConnected(oauth: ResolvedOAuth | undefined) {
   };
 }
 
+
+/** Notion descriptor. Client credentials go in a Basic header; the account comes from the token response. */
+const notionOAuthProvider: OAuthProviderDescriptor = {
+  id: "notion",
+  displayName: "Notion",
+  authorizeUrl: "https://api.notion.com/v1/oauth/authorize",
+  authorizeParams: { owner: "user" },
+  tokenUrl: "https://api.notion.com/v1/oauth/token",
+  revokeUrl: "https://api.notion.com/v1/oauth/revoke",
+  tokenAuth: "basic",
+  defaultScopes: [],
+  apiBaseUrl: "https://api.notion.com",
+  accountFromTokenResponse(token) {
+    const response = token as { owner?: { user?: { person?: { email?: unknown } } }; workspace_name?: unknown } | null;
+    const email = response?.owner?.user?.person?.email;
+    if (typeof email === "string") return email;
+    return typeof response?.workspace_name === "string" ? response.workspace_name : undefined;
+  },
+};
 
 export default defineToolExtension({
   id: "notion",
@@ -70,6 +89,7 @@ In oauth mode the requester's connected Notion workspace is used. If a tool repo
   requiredSecrets: ["apiKey"],
   advancedConfigFields: ["notionVersion", "timeoutMs"],
   oauthHiddenFields: ["mode", "apiKey", "notionVersion", "timeoutMs"],
+  oauthProviders: [notionOAuthProvider],
   oauth: (config) => (config.merged.mode !== "api_key" ? { provider: "notion" } : undefined),
   createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
