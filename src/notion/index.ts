@@ -21,6 +21,22 @@ import {
   ValidateParamsSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
+import type { ResolvedOAuth, ToolExtensionTool } from "../tool-extension.js";
+
+/** Documented not-connected signal — never a raw 401. */
+function notConnected(oauth: ResolvedOAuth | undefined) {
+  return {
+    connected: false,
+    provider: "notion",
+    reason: oauth && !oauth.connected ? oauth.reason : "not_connected",
+    message:
+      oauth && !oauth.connected
+        ? oauth.message
+        : "Notion is not connected. Connect a Notion workspace in the agent's Notion settings.",
+    authorizeUrl:
+      oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
+  };
+}
 
 
 export default defineToolExtension({
@@ -48,15 +64,21 @@ Tools:
 - notion_download_and_extract_file: download a file URL and extract text from PDF or DOCX
 - notion_validate: verify auth and API reachability
 
-Return and consume JSON-serializable data only.`,
+Return and consume JSON-serializable data only.
+In oauth mode the requester's connected Notion workspace is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
   configSchema: NotionConfigSchema,
   requiredSecrets: ["apiKey"],
   advancedConfigFields: ["notionVersion", "timeoutMs"],
+  oauthHiddenFields: ["mode", "apiKey", "notionVersion", "timeoutMs"],
+  oauth: (config) => (config.merged.mode !== "api_key" ? { provider: "notion" } : undefined),
   createTools(config) {
     const resolved = NotionConfigSchema.parse(config.merged);
-    const client = new NotionClient(resolved);
+    const oauth = config.oauth;
+    // OAuth mode uses the connected workspace's bearer token; api_key mode uses the integration secret.
+    const apiKey = resolved.mode === "oauth" ? (oauth?.connected === true ? oauth.accessToken : undefined) : resolved.apiKey;
+    const client = new NotionClient({ ...resolved, apiKey: apiKey ?? "" });
 
-    return [
+    const tools: ToolExtensionTool[] = [
       {
         name: "list_data_sources",
         description:
@@ -227,7 +249,7 @@ Return and consume JSON-serializable data only.`,
       {
         name: "validate",
         description:
-          "Verify the configured API key and connectivity by fetching the current bot user. Use to diagnose auth/config issues; it does not read or write any Notion content.",
+          "Verify the configured credentials and connectivity by fetching the current bot user. Use to diagnose auth/config issues; it does not read or write any Notion content.",
         parameters: ValidateParamsSchema,
         execute: async (params) => {
           ValidateParamsSchema.parse(params);
@@ -235,5 +257,6 @@ Return and consume JSON-serializable data only.`,
         },
       },
     ];
+    return apiKey ? tools : tools.map((tool) => ({ ...tool, execute: async () => notConnected(oauth) }));
   },
 });

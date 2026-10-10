@@ -18,7 +18,7 @@ The source directory is the build/install directory name. The extension ID is th
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
 | [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Explicit `enabled: true` and `mcp.json` |
-| [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | Integration API key |
+| [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | OAuth (`oauth.providers.notion`, default) or integration API key |
 | [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads and guarded draft/quote writes | API token |
 | `pipedrive` | `pipedrive` | Read-only Pipedrive CRM and custom-field normalization | Company domain and API token |
 | `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, and internal notes | Subdomain, email, and API key |

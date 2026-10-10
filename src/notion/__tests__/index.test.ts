@@ -18,9 +18,11 @@ describe("notion extension", () => {
   it("parses config defaults", () => {
     expect(
       NotionConfigSchema.parse({
+        mode: "api_key",
         apiKey: "secret",
       }),
     ).toEqual({
+      mode: "api_key",
       apiKey: "secret",
       notionVersion: "2026-03-11",
       timeoutMs: 30_000,
@@ -32,6 +34,7 @@ describe("notion extension", () => {
       global: {},
       agent: {},
       merged: {
+        mode: "api_key",
         apiKey: "secret",
       },
     });
@@ -75,5 +78,66 @@ describe("notion extension", () => {
       error: expect.objectContaining({ code: "SIGNED_URL_EXPIRED", status: 403, retryable: false }),
     });
   });
+});
 
+describe("notion extension modes", () => {
+  const mount = async (agentConfig: Record<string, unknown>, oauth?: unknown) => {
+    const resolveOAuth = vi.fn(async () => oauth as never);
+    const agent = { id: "a1", extensions: { notion: { enabled: true, ...agentConfig } } };
+    const tools = await extension.getAgentTools(agent, { config: { extensions: {} }, resolveOAuth });
+    return { tools, resolveOAuth, agent };
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("declares an oauth requirement unless mode is api_key (oauth is the default)", () => {
+    const oauth = extension.oauth as (config: { global: object; agent: object; merged: object }) => unknown;
+    expect(oauth({ global: {}, agent: {}, merged: {} })).toEqual({ provider: "notion" });
+    expect(oauth({ global: {}, agent: {}, merged: { mode: "api_key" } })).toBeUndefined();
+  });
+
+  it("requires apiKey only in api_key mode", () => {
+    expect(NotionConfigSchema.safeParse({ mode: "api_key" }).success).toBe(false);
+    expect(NotionConfigSchema.parse({}).mode).toBe("oauth");
+  });
+
+  it("api_key mode works without calling the OAuth host", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    const { tools, resolveOAuth } = await mount({ mode: "api_key", apiKey: "k" });
+    await tools.find((tool) => tool.name.endsWith("validate"))!.execute({}, { userId: "alice" });
+    expect(resolveOAuth).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer k" });
+  });
+
+  it("oauth mode returns the structured not-connected result", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const notConnected = {
+      connected: false,
+      provider: "notion",
+      reason: "not_connected",
+      message: "Notion is not connected",
+      authorizeUrl: "https://gw/api/oauth/notion/authorize?agent=a1",
+    };
+    const { tools } = await mount({}, notConnected);
+    for (const tool of tools) {
+      expect(await tool.execute({}, {})).toEqual(notConnected);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("oauth mode calls the API with the bearer token when connected", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    const { tools, resolveOAuth, agent } = await mount({}, {
+      connected: true,
+      provider: "notion",
+      accessToken: "tok",
+      scopes: [],
+    });
+    await tools.find((tool) => tool.name.endsWith("validate"))!.execute({}, { userId: "alice" });
+    expect(resolveOAuth).toHaveBeenLastCalledWith(agent, { provider: "notion" }, "alice");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.notion.com/v1/users/me");
+    expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
+  });
 });

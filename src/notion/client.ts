@@ -180,7 +180,9 @@ function extractHeadingText(block: unknown): string | undefined {
   return extractRichTextText(heading.rich_text);
 }
 
-export interface NotionClientOptions extends NotionConfig {}
+export interface NotionClientOptions extends Omit<NotionConfig, "mode" | "apiKey"> {
+  apiKey: string;
+}
 
 export class NotionClient {
   readonly apiKey: string;

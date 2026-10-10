@@ -121,9 +121,18 @@ const HeadingTypeArrayInput = z.union([
 ]);
 
 export const NotionConfigSchema = z.object({
-  apiKey: z.string().describe(
-    "Notion integration secret from an internal integration at notion.so/my-integrations. Starts with `ntn_` or `secret_`.",
-  ),
+  mode: z
+    .enum(["api_key", "oauth"])
+    .default("oauth")
+    .describe(
+      "Authentication mode (default oauth). api_key uses an internal integration secret; oauth connects a Notion workspace through the gateway's OAuth client (oauth.providers.notion).",
+    ),
+  apiKey: z
+    .string()
+    .optional()
+    .describe(
+      "Notion integration secret from an internal integration at notion.so/my-integrations. Starts with `ntn_` or `secret_`. Required in api_key mode.",
+    ),
   notionVersion: z
     .string()
     .optional()
@@ -136,6 +145,10 @@ export const NotionConfigSchema = z.object({
     .optional()
     .default(30_000)
     .describe("Request timeout in milliseconds for calls to the Notion API. Defaults to 30000."),
+}).superRefine((config, ctx) => {
+  if (config.mode === "api_key" && !config.apiKey) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["apiKey"], message: "apiKey is required in api_key mode" });
+  }
 });
 
 export const ListDataSourcesParamsSchema = z

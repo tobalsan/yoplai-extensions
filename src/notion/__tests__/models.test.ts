@@ -21,9 +21,11 @@ describe("notion models", () => {
   it("parses config defaults", () => {
     expect(
       NotionConfigSchema.parse({
+        mode: "api_key",
         apiKey: "secret",
       }),
     ).toEqual({
+      mode: "api_key",
       apiKey: "secret",
       notionVersion: "2026-03-11",
       timeoutMs: 30_000,
