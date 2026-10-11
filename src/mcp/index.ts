@@ -565,6 +565,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const auth = c.get?.("multiUserAuthContext");
       return isRecord(auth) && isRecord(auth.user) && typeof auth.user.id === "string" ? auth.user.id : undefined;
     }
+    /** 401 response when multi-user is enabled and the request has no user; undefined otherwise. */
+    function authRequired(c: RouteContext): unknown {
+      return multiUserEnabled() && !userId(c) ? c.text("Authentication required", 401) : undefined;
+    }
     /** Whole-team MCP setup (shared mcp.json, team OAuth grants) is admin-only. */
     function canConfigureTeam(c: RouteContext): boolean {
       if (!multiUserEnabled()) return true;
@@ -593,7 +597,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     }
     /** Catalog routes are superadmin-only; returns an error response or undefined when allowed. */
     function catalogDenied(c: RouteContext) {
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       return isSuperadmin(c) ? undefined : c.text("Superadmin access required", 403);
     }
     function requestedScope(c: RouteContext): CredentialScope | undefined {
@@ -611,7 +616,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     app.get("/mcp/servers/personal-status", async (c) => {
       const agentId = c.req.query("agent");
       if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       let url: URL;
       try { url = new URL(c.req.query("url") ?? ""); }
       catch { return c.text("Invalid MCP server URL", 400); }
@@ -622,7 +628,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     app.get("/mcp/servers", async (c) => {
       const agentId = c.req.query("agent");
       if (!agentId || !configForAgent(agentId)) return c.text("Unknown agent", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       const agent = runtime?.getAgent(agentId);
       const merged = agent && runtime ? mergedForAgent(agent, runtime.getConfig()) : undefined;
       const servers = merged ? await Promise.all(merged.all.servers.map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined))) : [];
@@ -632,7 +639,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const agentId = c.req.query("agent");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !config) return c.text("Unknown agent", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       let input: unknown;
       try { input = await c.req.json?.(); }
       catch { return c.text("Invalid JSON body", 400); }
@@ -768,7 +776,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const name = c.req.query("server");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       let input: unknown;
       try { input = await c.req.json?.(); }
       catch { return c.text("Invalid JSON body", 400); }
@@ -795,7 +804,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const name = c.req.query("server");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       if (!isSuperadmin(c)) return c.text("Superadmin access required", 403);
       let input: unknown;
       try { input = await c.req.json?.(); }
@@ -819,7 +829,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const name = c.req.query("server");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       try {
         const root = readRawConfig(config.path);
@@ -839,7 +850,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const name = c.req.query("server");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       try {
         const rawServer = readRawConfig(config.path).mcpServers as Record<string, unknown>;
         const server = Object.hasOwn(rawServer, name) ? rawServer[name] : undefined;
@@ -855,7 +867,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const name = c.req.query("server");
       const config = agentId ? configForAgent(agentId) : undefined;
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
-      if (multiUserEnabled() && !userId(c)) return c.text("Authentication required", 401);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
       if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       let input: unknown;
       try { input = await c.req.json?.(); }
