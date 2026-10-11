@@ -168,6 +168,36 @@ describe("MCP OAuth flow", () => {
     });
   });
 
+  it("coalesces a concurrent accessToken and forced refreshAccessToken", async () => {
+    let release!: (tokens: unknown) => void;
+    const refresh = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverAuthorizationServerMetadata: vi.fn().mockResolvedValue({ token_endpoint: "https://auth.test/token" }),
+      refreshAuthorization: refresh,
+      discoverOAuthServerInfo: vi.fn(), registerClient: vi.fn(), startAuthorization: vi.fn(), exchangeAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
+    await store.write("casey", "claap", {
+      client: { client_id: "client", redirect_uris: ["http://gateway.test/callback"] },
+      tokens: { access_token: "expired", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-07-22T00:00:00.000Z", authorizationServerUrl: "https://auth.test",
+      expiresAt: "2020-01-01T00:00:00.000Z", state: "connected",
+    });
+
+    const viaAccess = store.accessToken("casey", "claap");
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    const viaForced = store.refreshAccessToken("casey", "claap");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refresh).toHaveBeenCalledOnce();
+    release({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
+
+    await expect(Promise.all([viaAccess, viaForced])).resolves.toEqual(["fresh", "fresh"]);
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it("forces a refresh even when the access token has not expired", async () => {
     const refresh = vi.fn().mockResolvedValue({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
