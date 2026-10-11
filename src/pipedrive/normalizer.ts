@@ -6,7 +6,7 @@ import { type FieldMeta, type FieldRegistry } from "./models.js";
  * override / supplement the fetched dealField registry so built-in fields
  * resolve to readable names too.
  */
-export const SYSTEM_FIELD_OVERRIDES: Record<string, FieldMeta> = {
+const SYSTEM_FIELD_OVERRIDES: Record<string, FieldMeta> = {
   owner_id: { name: "Owner", type: "user", options: null, is_multiple: false },
   user_id: { name: "Owner", type: "user", options: null, is_multiple: false },
   creator_user_id: { name: "Creator", type: "user", options: null, is_multiple: false },
