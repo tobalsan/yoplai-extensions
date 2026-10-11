@@ -1,5 +1,5 @@
 import { defineToolExtension, notConnected } from "../tool-extension.js";
-import { googleOAuthProvider } from "../google-oauth-provider.js";
+import { googleFailureReason, googleOAuthProvider } from "../google-oauth-provider.js";
 import { z } from "zod";
 import { GoogleDriveClient, GoogleDriveRequestError } from "./client.js";
 import {
@@ -21,6 +21,12 @@ import {
 } from "./models.js";
 
 /** Documented not-connected signal — never a raw 401. */
+const FAILURE_MESSAGES = {
+  rate_limited: "Google Drive is temporarily rate limited. Wait and retry.",
+  insufficient_scope: "Google Drive needs additional Google permission. Reconnect Google and approve the configured access.",
+  expired: "Google access has expired. Reconnect Google to continue.",
+};
+
 const NOT_CONNECTED_MESSAGE =
   "Google Drive is not connected. Connect a Google account (Just me or Whole team) in the agent's Google Drive settings.";
 
@@ -188,15 +194,8 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
           return await tool.execute(params);
         } catch (error) {
           if (error instanceof GoogleDriveRequestError && [401, 403, 429].includes(error.status)) {
-            const rateLimited = error.status === 429 || (error.status === 403 && /rate.?limit|quota|daily.?limit/i.test(error.responseBody));
-            return {
-              connected: false,
-              provider: "google",
-              reason: rateLimited ? "rate_limited" : error.status === 403 ? "insufficient_scope" : "expired",
-              message: rateLimited ? "Google Drive is temporarily rate limited. Wait and retry."
-                : error.status === 403 ? "Google Drive needs additional Google permission. Reconnect Google and approve the configured access."
-                : "Google access has expired. Reconnect Google to continue.",
-            };
+            const reason = googleFailureReason(error.status, error.responseBody)!;
+            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
           }
           throw error;
         }
