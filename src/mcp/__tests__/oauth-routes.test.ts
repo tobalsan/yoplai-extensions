@@ -1,24 +1,18 @@
 import { credentials } from "./credentials.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMcpExtension } from "../index.js";
 import { McpOAuthStore } from "../oauth.js";
+import { routeApp, routeContext, tempDirs } from "./harness.js";
 
 let hostCredentials = credentials();
-const dirs: string[] = [];
-afterEach(async () => { hostCredentials = credentials(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js"); vi.resetModules(); vi.useRealTimers(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
+const dirs = tempDirs();
+afterEach(async () => { hostCredentials = credentials(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js"); vi.resetModules(); vi.useRealTimers(); await dirs.cleanup(); });
 
-function app() {
-  const routes = new Map<string, (c: any) => Promise<unknown>>();
-  return { routes, get(path: string, handler: (c: any) => Promise<unknown>) { routes.set(`GET ${path}`, handler); }, post(path: string, handler: (c: any) => Promise<unknown>) { routes.set(`POST ${path}`, handler); } };
-}
-
-function context(query: Record<string, string>) {
-  return { get: () => ({ user: { id: "user-a", email: "user@example.test" }, impersonator: { id: "admin-a" } }), req: { query: (name: string) => name === "scope" ? (query[name] ?? "team") : query[name] }, json: (body: unknown) => body, text: (body: string, status?: number) => ({ body, status }), html: (body: string, status?: number) => ({ body, status }), redirect: (url: string) => ({ redirect: url }) };
-}
+const app = routeApp;
+const context = (query: Record<string, string>) => routeContext(query, { user: { id: "user-a", email: "user@example.test" }, impersonator: { id: "admin-a" } });
 
 describe("MCP OAuth routes", () => {
   it("allows single-user team access while personal and multi-user scopes require identity", async () => {
@@ -35,7 +29,7 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
   });
   it("keeps team connections read-only for non-admins", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
     const extension = createMcpExtension();
@@ -54,7 +48,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("reports 401 URL-only servers as disconnected OAuth and excludes stdio", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" }, static: { url: "https://static.test/mcp", headers: { Authorization: "Bearer key" } }, local: { command: "node" } } }));
     const fetchMock = vi.fn().mockResolvedValue({ status: 401 });
     vi.stubGlobal("fetch", fetchMock);
@@ -70,7 +64,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("treats a 200 initialize with protected-resource authorization servers as OAuth", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1" }, plain: { url: "https://plain.test/mcp" } } }));
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
@@ -89,7 +83,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("falls back to root protected-resource metadata", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { root: { url: "https://root.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => { const url = String(input); return url === "https://root.test/.well-known/oauth-protected-resource"
       ? new Response(JSON.stringify({ resource: "https://root.test", authorization_servers: ["https://auth.test"] }), { status: 200 })
@@ -101,7 +95,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("does not use root metadata when path metadata fails with a server error, matching connection discovery", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { broken: { url: "https://broken.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL) => {
       const url = String(input);
@@ -116,7 +110,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("loads OAuth status from the merged root config path", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     const configPath = path.join(work, "root-mcp.json");
     await fs.writeFile(configPath, JSON.stringify({ mcpServers: { rooted: { url: "https://root.test/mcp", headers: { Authorization: "Bearer key" } } } }));
     const extension = createMcpExtension();
@@ -155,7 +149,7 @@ describe("MCP OAuth routes", () => {
       discoverAuthorizationServerMetadata: vi.fn(),
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     const rootConfigPath = path.join(work, "root-mcp.json");
     const agentConfigPath = path.join(work, "agent-mcp.json");
     await fs.writeFile(rootConfigPath, JSON.stringify({ mcpServers: { wrong: { url: "https://wrong.test/mcp" } } }));
@@ -193,7 +187,7 @@ describe("MCP OAuth routes", () => {
       exchangeAuthorization: vi.fn(), refreshAuthorization: vi.fn(), discoverAuthorizationServerMetadata: vi.fn(),
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(work);
+    const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     const extension = createExtension();
     await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
@@ -206,7 +200,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("disconnects locally even when upstream revocation is unavailable", async () => {
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(dataDir);
+    const dataDir = await dirs.make("mcp-route-");
     const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
     await store.write("casey", "claap", { client: { client_id: "client", redirect_uris: ["http://localhost:4000/api/mcp/oauth/callback"] }, tokens: { access_token: "token", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" });
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
@@ -222,7 +216,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("keeps disconnect successful when the audit recorder fails", async () => {
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(dataDir);
+    const dataDir = await dirs.make("mcp-route-");
     const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
     await store.write("casey", "claap", { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "private-token", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -238,7 +232,7 @@ describe("MCP OAuth routes", () => {
 
   it("returns while revocation hangs and the next requester call falls back or refuses", async () => {
     vi.useFakeTimers();
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-route-")); dirs.push(dataDir);
+    const dataDir = await dirs.make("mcp-route-");
     const store = new McpOAuthStore(dataDir, "http://localhost:4000/api/mcp/oauth/callback", hostCredentials);
     const connection = { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "team", token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.test" };
     await store.write("casey", "claap", connection);

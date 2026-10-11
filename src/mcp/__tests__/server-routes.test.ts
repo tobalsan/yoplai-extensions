@@ -1,28 +1,21 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { credentials } from "./credentials.js";
 import { createMcpExtension } from "../index.js";
+import { routeApp, tempDirs } from "./harness.js";
 
-const dirs: string[] = [];
+const dirs = tempDirs();
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js");
   vi.resetModules();
-  await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await dirs.cleanup();
 });
 
-function app() {
-  const routes = new Map<string, (context: any) => Promise<any>>();
-  return {
-    routes,
-    get(path: string, handler: (context: any) => Promise<any>) { routes.set(`GET ${path}`, handler); },
-    post(path: string, handler: (context: any) => Promise<any>) { routes.set(`POST ${path}`, handler); },
-  };
-}
+const app = routeApp;
 
 function context(query: Record<string, string>, body?: unknown) {
   return {
@@ -37,7 +30,7 @@ function context(query: Record<string, string>, body?: unknown) {
 
 describe("MCP server cards and self-service routes", () => {
   it("lists existing stdio and HTTP servers, adds no-auth HTTP, and removes only the selected raw config", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     const file = path.join(dir, "mcp.json");
     const original = { futureField: { keep: true }, mcpServers: {
       local: { command: "node", args: ["server.js"], env: { TOKEN: "${MCP_TOKEN}" }, future: 7 },
@@ -76,7 +69,7 @@ describe("MCP server cards and self-service routes", () => {
   });
 
   it("keeps a server disconnected when a stored token cannot establish tools", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { offline: { url: "https://offline.example.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const extension = createMcpExtension(async () => { throw new Error("offline"); });
@@ -88,7 +81,7 @@ describe("MCP server cards and self-service routes", () => {
   });
 
   it("retries a previously failed manager so a recovered card has callable tools", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { recover: { url: "https://recover.example.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     let online = false;
@@ -114,7 +107,7 @@ describe("MCP server cards and self-service routes", () => {
   });
 
   it("returns a disconnected card when a server connection hangs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { slow: { command: "slow" } } }));
     const extension = createMcpExtension(async () => new Promise(() => {}));
     await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
@@ -127,7 +120,7 @@ describe("MCP server cards and self-service routes", () => {
   });
 
   it("bounds a hanging HTTP probe and connection before returning a card", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { slow: { url: "https://slow.example.test/mcp" } } }));
     const fetchMock = vi.fn(() => new Promise(() => {}));
     vi.stubGlobal("fetch", fetchMock);
@@ -146,7 +139,7 @@ describe("MCP server cards and self-service routes", () => {
   });
 
   it("returns a connected card without waiting for a stuck close", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { ready: { url: "https://ready.example.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const extension = createMcpExtension(async (server) => ({
@@ -169,7 +162,7 @@ describe("MCP server cards and self-service routes", () => {
       refreshAuthorization: vi.fn(), discoverAuthorizationServerMetadata: vi.fn(),
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
     const extension = createExtension();
     await extension.start({ credentials: credentials(), getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
@@ -193,7 +186,7 @@ describe("MCP server cards and self-service routes", () => {
       refreshAuthorization: vi.fn(), discoverAuthorizationServerMetadata: vi.fn(),
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
     const factory = vi.fn(async (server: { name: string }, token?: string) => {
       if (!token) throw new Error("missing token");
@@ -221,7 +214,7 @@ describe("MCP server cards and self-service routes", () => {
 
 describe("MCP server config routes", () => {
   it("masks secrets, keeps masked values, rejects stdio edits, preserves other fields, audits", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-config-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-config-");
     const file = path.join(dir, "mcp.json");
     const original = { futureField: 1, mcpServers: {
       local: { command: "node", env: { TOKEN: "secret" } },
@@ -254,7 +247,7 @@ describe("MCP server config routes", () => {
   });
 
   it("names added servers after their site, dedupes, and stores the server-reported title", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     const file = path.join(dir, "mcp.json");
     await fs.writeFile(file, JSON.stringify({ mcpServers: {} }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
@@ -278,7 +271,7 @@ describe("MCP server config routes", () => {
   });
 
   it("uses displayName and description from any server entry, including stdio", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: {
       aimx: { command: "node", args: ["server.js"], displayName: "AIMX Mail", description: "Agent mailboxes" },
     } }));
@@ -296,7 +289,7 @@ describe("MCP server config routes", () => {
   });
 
   it("labels known hosted MCP servers that report generic server info", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1", yoplaiManaged: true } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
@@ -316,7 +309,7 @@ describe("MCP server config routes", () => {
   });
 
   it("renders a styled, escaped OAuth result page", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
     const extension = createMcpExtension();
     await extension.start({ credentials: credentials(), getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
@@ -329,7 +322,7 @@ describe("MCP server config routes", () => {
   });
 
   it("rejects adding a server URL that is already configured", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-")); dirs.push(dir);
+    const dir = await dirs.make("mcp-servers-");
     const file = path.join(dir, "mcp.json");
     await fs.writeFile(file, JSON.stringify({ mcpServers: { docs: { url: "https://docs.example.test/mcp" } } }));
     const extension = createMcpExtension();

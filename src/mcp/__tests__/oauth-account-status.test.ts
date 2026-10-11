@@ -1,6 +1,5 @@
 import { credentials } from "./credentials.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,19 +8,17 @@ vi.mock("../account.js", () => ({ resolveAccountLabel }));
 
 import { createMcpExtension } from "../index.js";
 import { McpOAuthStore } from "../oauth.js";
+import { routeApp, routeContext, tempDirs } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => { resolveAccountLabel.mockReset(); vi.unstubAllGlobals(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
+const dirs = tempDirs();
+afterEach(async () => { resolveAccountLabel.mockReset(); vi.unstubAllGlobals(); await dirs.cleanup(); });
 
-function app() {
-  const routes = new Map<string, (c: any) => Promise<any>>();
-  return { routes, get(p: string, handler: (c: any) => Promise<any>) { routes.set(`GET ${p}`, handler); }, post(p: string, handler: (c: any) => Promise<any>) { routes.set(`POST ${p}`, handler); } };
-}
-const context = (query: Record<string, string>) => ({ get: () => ({ user: { id: "user-a" } }), req: { query: (name: string) => name === "scope" ? (query[name] ?? "team") : query[name] }, json: (body: unknown) => body, text: (body: string, status?: number) => ({ body, status }) });
+const app = routeApp;
+const context = routeContext;
 
 describe("OAuth status account", () => {
   it("backfills a missing account once, persists it, and reports it", async () => {
-    const work = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-account-")); dirs.push(work);
+    const work = await dirs.make("mcp-account-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
     const hostCredentials = credentials();
