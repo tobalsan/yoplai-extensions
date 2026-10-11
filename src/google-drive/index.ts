@@ -1,4 +1,5 @@
 import { defineToolExtension, notConnected } from "../tool-extension.js";
+import type { ToolExtensionTool } from "../tool-extension.js";
 import { googleFailureReason, googleOAuthProvider } from "../google-oauth-provider.js";
 import { z } from "zod";
 import { GoogleDriveClient, GoogleDriveRequestError } from "./client.js";
@@ -69,122 +70,43 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     const oauth = config.oauth;
     const connected = oauth?.connected === true ? oauth : undefined;
 
-    const tools: import("../tool-extension.js").ToolExtensionTool[] = [
-      {
-        name: "list_files",
-        description:
-          "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.",
-        parameters: ListFilesParamsSchema,
-        execute: async (params) => {
-          const parsed = ListFilesParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          const client = new GoogleDriveClient(connected.accessToken);
-          return client.listFiles(parsed);
-        },
-      },
-      {
-        name: "search_files",
-        description:
-          "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.",
-        parameters: SearchFilesParamsSchema,
-        execute: async (params) => {
-          const parsed = SearchFilesParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          const client = new GoogleDriveClient(connected.accessToken);
-          return client.searchFiles(parsed);
-        },
-      },
-      {
-        name: "read_file",
-        description:
-          "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.",
-        parameters: ReadFileParamsSchema,
-        execute: async (params) => {
-          const parsed = ReadFileParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          const client = new GoogleDriveClient(connected.accessToken);
-          return client.readFile(parsed);
-        },
-      },
-      {
-        name: "sheets_list_spreadsheets",
-        description: "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.",
-        parameters: SheetsListSpreadsheetsParamsSchema,
-        execute: async (params) => {
-          const parsed = SheetsListSpreadsheetsParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return new GoogleDriveClient(connected.accessToken).sheetsListSpreadsheets(parsed);
-        },
-      },
-      {
-        name: "sheets_inspect",
-        description: "Inspect a spreadsheet's tabs, dimensions, and detected headers.",
-        parameters: SheetsInspectParamsSchema,
-        execute: async (params) => {
-          const parsed = SheetsInspectParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return new GoogleDriveClient(connected.accessToken).sheetsInspect(parsed);
-        },
-      },
-      {
-        name: "sheets_read_sheet",
-        description: "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.",
-        parameters: SheetsReadSheetParamsSchema,
-        execute: async (params) => {
-          const parsed = SheetsReadSheetParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return new GoogleDriveClient(connected.accessToken).sheetsReadSheet(parsed);
-        },
-      },
-      {
-        name: "sheets_read_range",
-        description: "Read an arbitrary A1 range from a spreadsheet as raw values.",
-        parameters: SheetsReadRangeParamsSchema,
-        execute: async (params) => {
-          const parsed = SheetsReadRangeParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return new GoogleDriveClient(connected.accessToken).sheetsReadRange(parsed);
-        },
-      },
-      {
-        name: "validate",
-        description:
-          "Validate the Google Drive connection. Returns connected + the Google account when a fresh token is available, or a clear not-connected signal otherwise.",
-        parameters: ValidateParamsSchema,
-        execute: async (params) => {
-          ValidateParamsSchema.parse(params);
-          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-
-          const client = new GoogleDriveClient(connected.accessToken);
-          const user = await client.about();
-          return {
-            connected: true,
-            provider: "google",
-            account: user.emailAddress ?? connected.account,
-            displayName: user.displayName,
-            scopes: connected.scopes,
-          };
-        },
-      },
-    ];
-    function writeTool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>) => Promise<unknown>) {
+    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>): ToolExtensionTool {
       return {
         name, description, parameters: schema,
         execute: async (params: unknown) => {
           const parsed = schema.parse(params);
           if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return action(new GoogleDriveClient(connected.accessToken), parsed);
+          return action(new GoogleDriveClient(connected.accessToken), parsed, connected);
         },
       };
     }
+    const tools: ToolExtensionTool[] = [
+      tool("list_files", "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.", ListFilesParamsSchema, (client, params) => client.listFiles(params)),
+      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params)),
+      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params)),
+      tool("sheets_list_spreadsheets", "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.", SheetsListSpreadsheetsParamsSchema, (client, params) => client.sheetsListSpreadsheets(params)),
+      tool("sheets_inspect", "Inspect a spreadsheet's tabs, dimensions, and detected headers.", SheetsInspectParamsSchema, (client, params) => client.sheetsInspect(params)),
+      tool("sheets_read_sheet", "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.", SheetsReadSheetParamsSchema, (client, params) => client.sheetsReadSheet(params)),
+      tool("sheets_read_range", "Read an arbitrary A1 range from a spreadsheet as raw values.", SheetsReadRangeParamsSchema, (client, params) => client.sheetsReadRange(params)),
+      tool("validate", "Validate the Google Drive connection. Returns connected + the Google account when a fresh token is available, or a clear not-connected signal otherwise.", ValidateParamsSchema, async (client, _params, connected) => {
+        const user = await client.about();
+        return {
+          connected: true,
+          provider: "google",
+          account: user.emailAddress ?? connected.account,
+          displayName: user.displayName,
+          scopes: connected.scopes,
+        };
+      }),
+    ];
     if (config.merged.allowWrite === true) {
       tools.push(
-        writeTool("create_folder", "Create a Drive folder, optionally inside a parent folder.", CreateFolderParamsSchema, (client, params) => client.createFolder(params)),
-        writeTool("create_file", "Create a text/CSV file; optionally convert it to a Google Doc or Sheet.", CreateFileParamsSchema, (client, params) => client.createFile(params)),
-        writeTool("update_file_content", "Overwrite a file's content; Google Docs accept text and Sheets accept CSV. Read the target first.", UpdateFileContentParamsSchema, (client, params) => client.updateFileContent(params)),
-        writeTool("rename_move_file", "Rename or move a Drive file. Supply name and/or parent changes.", RenameMoveFileParamsSchema, (client, params) => client.renameMoveFile(params)),
-        writeTool("sheets_update_range", "Update Google Sheet cells using an A1 range and row arrays; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsUpdateRangeParamsSchema, (client, params) => client.sheetsUpdateRange(params)),
-        writeTool("sheets_append_rows", "Append row arrays to a Google Sheet table using an A1 range; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsAppendRowsParamsSchema, (client, params) => client.sheetsAppendRows(params)),
+        tool("create_folder", "Create a Drive folder, optionally inside a parent folder.", CreateFolderParamsSchema, (client, params) => client.createFolder(params)),
+        tool("create_file", "Create a text/CSV file; optionally convert it to a Google Doc or Sheet.", CreateFileParamsSchema, (client, params) => client.createFile(params)),
+        tool("update_file_content", "Overwrite a file's content; Google Docs accept text and Sheets accept CSV. Read the target first.", UpdateFileContentParamsSchema, (client, params) => client.updateFileContent(params)),
+        tool("rename_move_file", "Rename or move a Drive file. Supply name and/or parent changes.", RenameMoveFileParamsSchema, (client, params) => client.renameMoveFile(params)),
+        tool("sheets_update_range", "Update Google Sheet cells using an A1 range and row arrays; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsUpdateRangeParamsSchema, (client, params) => client.sheetsUpdateRange(params)),
+        tool("sheets_append_rows", "Append row arrays to a Google Sheet table using an A1 range; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsAppendRowsParamsSchema, (client, params) => client.sheetsAppendRows(params)),
       );
     }
     return tools.map((tool) => ({
