@@ -8,6 +8,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import type { McpServerConfig } from "./loader.js";
+import { withTimeout as withDeadline } from "./timeout.js";
+
+const withTimeout = <T>(task: Promise<T>, message: string): Promise<T> => withDeadline(task, 10_000, message);
 
 export interface McpToolDefinition {
   server: string;
@@ -51,18 +54,6 @@ export interface McpClientHandle {
   close(): Promise<void>;
   getServerIcon?(): string | undefined;
   getServerInfo?(): McpServerLabel;
-}
-
-async function withTimeout<T>(task: Promise<T>, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 10_000); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;

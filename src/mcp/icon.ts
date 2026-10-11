@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { raceTimeout } from "./timeout.js";
 
 /** Site label for a host, used as a readable server key: `mcp.linear.app` → `linear`, `claap.io` → `claap`. */
 export function siteLabel(hostname: string): string {
@@ -17,17 +18,11 @@ function rootDomain(hostname: string): string | undefined {
 }
 
 async function fetchOk(url: string): Promise<Response | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const response = await Promise.race([
-      fetch(url, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) }),
-      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), TIMEOUT_MS); }),
-    ]);
+    const response = await raceTimeout(fetch(url, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) }), TIMEOUT_MS);
     return response?.ok ? response : undefined;
   } catch {
     return undefined;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

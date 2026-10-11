@@ -5,8 +5,9 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
-import { parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
+import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools } from "./tool-adapter.js";
+import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
@@ -131,10 +132,7 @@ const EditableHttpServerSchema = z
   .object({
     url: z.string().url(),
     headers: z.record(z.string()).optional(),
-    oauth: z
-      .object({ clientId: z.string().min(1), clientSecret: z.string().min(1).optional(), scopes: z.array(z.string()).optional() })
-      .strict()
-      .optional(),
+    oauth: McpStaticOAuthClientSchema.strict().optional(),
   })
   .passthrough();
 
@@ -210,18 +208,6 @@ function saveServerTitle(filePath: string, name: string, title: string): void {
 
 function extensionHub(agentId: string): string {
   return `/agents/${encodeURIComponent(agentId)}/edit`;
-}
-
-async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function resolveExtensionConfig(

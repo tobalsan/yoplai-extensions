@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { raceTimeout, withTimeout } from "./timeout.js";
 
 import {
   discoverOAuthServerInfo,
@@ -309,8 +310,7 @@ export class McpOAuthStore {
     const key = JSON.stringify([this.key(agent, server, scope), connection.connectedAt]);
     const lookup = this.accountLookups.get(key) ?? this.startAccountLookup(key, agent, server, url, scope, connection);
     // Slow lookups keep running and persist; this request just returns without the label.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    return Promise.race([lookup, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); })]).finally(() => clearTimeout(timer));
+    return raceTimeout(lookup, waitMs);
   }
 
   private startAccountLookup(key: string, agent: string, server: string, url: string, scope: CredentialScope, connection: OAuthConnection): Promise<string | undefined> {
@@ -375,14 +375,10 @@ export class McpOAuthStore {
       return undefined;
     }
     try {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const tokens = await Promise.race([
-        (async () => {
-          const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
-          return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token! });
-        })(),
-        new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("OAuth refresh timed out")), 10_000); }),
-      ]).finally(() => { if (timeout) clearTimeout(timeout); });
+      const tokens = await withTimeout((async () => {
+        const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
+        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token! });
+      })(), 10_000, "OAuth refresh timed out");
       const latest = await unchanged();
       if (!latest) return undefined;
       await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
