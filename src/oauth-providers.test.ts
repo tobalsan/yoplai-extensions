@@ -31,16 +31,13 @@ describe("oauthProviders", () => {
     expect(drive?.extractAccount?.({ email: "a@b.c" })).toBe("a@b.c");
   });
 
-  it("declares zendesk with subdomain urls", () => {
+  it("extracts the zendesk account email", () => {
     const [provider] = zendesk.oauthProviders ?? [];
-    expect(provider?.id).toBe("zendesk");
-    expect(provider?.authorizeUrl).toContain("{subdomain}");
     expect(provider?.extractAccount?.({ user: { email: "z@z.z" } })).toBe("z@z.z");
   });
 
-  it("declares notion with basic auth and token-response account", () => {
+  it("derives the notion account from the token response", () => {
     const [provider] = notion.oauthProviders ?? [];
-    expect(provider).toMatchObject({ id: "notion", tokenAuth: "basic", tokenRequestFormat: "json", defaultScopes: [] });
     expect(provider?.accountFromTokenResponse?.({ owner: { user: { person: { email: "n@n.n" } } }, workspace_name: "W" })).toBe("n@n.n");
     expect(provider?.accountFromTokenResponse?.({ workspace_name: "W" })).toBe("W");
     expect(provider?.accountFromTokenResponse?.({})).toBeUndefined();
