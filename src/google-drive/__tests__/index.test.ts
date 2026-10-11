@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import extension from "../index.js";
-import { GoogleDriveClient, GoogleDriveRequestError } from "../client.js";
+import { GoogleDriveClient } from "../client.js";
 import type { ResolvedOAuth } from "../../tool-extension.js";
+
+// Fails every Drive HTTP call; retry-after 0 keeps 429 retries instant.
+function stubDriveFailure(status: number, body: string): void {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status, headers: { "retry-after": "0" } })));
+}
 
 describe("googleDrive extension", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("exports the expected extension contract with an oauth requirement", () => {
@@ -160,12 +166,11 @@ describe("write mode", () => {
   });
 
   it("turns API permission refusals into insufficient_scope", async () => {
-    vi.spyOn(GoogleDriveClient.prototype, "createFolder").mockRejectedValue(new GoogleDriveRequestError("Forbidden", 403, "files", "permission denied"));
+    stubDriveFailure(403, "permission denied");
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
       connected: true, provider: "google", accessToken: "token", scopes: [],
     } });
     await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toMatchObject({ reason: "insufficient_scope" });
-    vi.restoreAllMocks();
   });
 
   it.each([
@@ -174,7 +179,7 @@ describe("write mode", () => {
     [403, "userRateLimitExceeded quota", "rate_limited", "Google Drive is temporarily rate limited. Wait and retry."],
     [403, "forbidden", "insufficient_scope", "Google Drive needs additional Google permission. Reconnect Google and approve the configured access."],
   ])("maps API status %s (%s) to %s", async (status, body, reason, message) => {
-    vi.spyOn(GoogleDriveClient.prototype, "createFolder").mockRejectedValue(new GoogleDriveRequestError("x", status, "files", body));
+    stubDriveFailure(status, body);
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
       connected: true, provider: "google", accessToken: "token", scopes: [],
     } });
