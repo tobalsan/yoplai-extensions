@@ -38,6 +38,11 @@ describe("Calendar HTTP boundary", () => {
     expect(url.searchParams.get("pageToken")).toBe("page");
     expect(result.nextPageToken).toBe("next");
   });
+  it("surfaces Google's HTTP status and reason when a calendar is not accessible", async () => {
+    const client = new CalendarClient("token", async () => json({ error: { status: "NOT_FOUND", message: "Not Found", errors: [{ reason: "notFound" }] } }, 404));
+    const error = await client.list_events({ calendarId: "nobody@example.com" }).catch(caught => caught);
+    expect(error).toMatchObject({ status: 404, reason: "request_failed", message: "Google Calendar request failed (request_failed, HTTP 404: NOT_FOUND notFound - Not Found)" });
+  });
   it("creates status events with required properties and guest mapping", async () => {
     let body: Record<string, unknown> = {};
     const client = new CalendarClient("token", async (_, init) => { body = JSON.parse(String(init?.body)); return json(body); });

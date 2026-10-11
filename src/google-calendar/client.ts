@@ -6,7 +6,7 @@ type Params<K extends keyof typeof toolSchemas> = z.infer<(typeof toolSchemas)[K
 function validatePageSize(size?: number) { if (size !== undefined && (!Number.isInteger(size) || size < 1 || size > 250)) throw new Error("pageSize must be between 1 and 250"); }
 const BASE = "https://www.googleapis.com/calendar/v3";
 export class CalendarRequestError extends Error {
-  constructor(readonly status: number, readonly reason: string) { super(`Google Calendar request failed (${reason})`); }
+  constructor(readonly status: number, readonly reason: string, detail = "") { super(`Google Calendar request failed (${reason}, HTTP ${status}${detail ? `: ${detail}` : ""})`); }
 }
 export class CalendarClient {
   constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -99,10 +99,10 @@ export class CalendarClient {
       return await Promise.race([timeout, (async () => {
         const response = await this.fetchImpl(path.startsWith("https://") ? path : `${BASE}${path}`, { ...init, signal: controller.signal, headers: { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
         if (!response.ok) {
-          let reason = "";
-          try { const payload = await response.json() as { error?: { status?: string; errors?: Array<{ reason?: string }> } }; reason = `${payload.error?.status ?? ""} ${payload.error?.errors?.map(item => item.reason).join(" ") ?? ""}`; } catch { /* An empty response still maps from its HTTP status. */ }
+          let reason = "", detail = "";
+          try { const payload = await response.json() as { error?: { status?: string; message?: string; errors?: Array<{ reason?: string }> } }; reason = `${payload.error?.status ?? ""} ${payload.error?.errors?.map(item => item.reason).join(" ") ?? ""}`; detail = [reason.trim(), payload.error?.message].filter(Boolean).join(" - "); } catch { /* An empty response still maps from its HTTP status. */ }
           const mapped = response.status === 401 ? "expired" : response.status === 429 || response.status === 403 && /rate.?limit|quota|daily.?limit|resource_exhausted/i.test(reason) ? "rate_limited" : response.status === 403 ? "insufficient_scope" : "request_failed";
-          throw new CalendarRequestError(response.status, mapped);
+          throw new CalendarRequestError(response.status, mapped, detail);
         }
         if (response.status === 204) return {};
         return await response.json() as Record<string, unknown>;
