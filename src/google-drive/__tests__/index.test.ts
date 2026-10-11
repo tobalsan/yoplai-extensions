@@ -167,4 +167,17 @@ describe("write mode", () => {
     await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toMatchObject({ reason: "insufficient_scope" });
     vi.restoreAllMocks();
   });
+
+  it.each([
+    [401, "", "expired", "Google access has expired. Reconnect Google to continue."],
+    [429, "", "rate_limited", "Google Drive is temporarily rate limited. Wait and retry."],
+    [403, "userRateLimitExceeded quota", "rate_limited", "Google Drive is temporarily rate limited. Wait and retry."],
+    [403, "forbidden", "insufficient_scope", "Google Drive needs additional Google permission. Reconnect Google and approve the configured access."],
+  ])("maps API status %s (%s) to %s", async (status, body, reason, message) => {
+    vi.spyOn(GoogleDriveClient.prototype, "createFolder").mockRejectedValue(new GoogleDriveRequestError("x", status, "files", body));
+    const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
+      connected: true, provider: "google", accessToken: "token", scopes: [],
+    } });
+    await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toEqual({ connected: false, provider: "google", reason, message });
+  });
 });

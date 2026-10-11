@@ -9,25 +9,14 @@ import {
   UpdateTicketParamsSchema,
   ZendeskConfigSchema,
 } from "./models.js";
-import { defineToolExtension } from "../tool-extension.js";
-import type { OAuthProviderDescriptor, ResolvedOAuth } from "../tool-extension.js";
+import { defineToolExtension, notConnected } from "../tool-extension.js";
+import type { OAuthProviderDescriptor } from "../tool-extension.js";
 
 export { ZendeskConfigSchema };
 
 /** Documented not-connected signal — never a raw 401. */
-function notConnected(oauth: ResolvedOAuth | undefined) {
-  return {
-    connected: false,
-    provider: "zendesk",
-    reason: oauth && !oauth.connected ? oauth.reason : "not_connected",
-    message:
-      oauth && !oauth.connected
-        ? oauth.message
-        : "Zendesk is not connected. Connect a Zendesk account in the agent's Zendesk settings.",
-    authorizeUrl:
-      oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
-  };
-}
+const NOT_CONNECTED_MESSAGE =
+  "Zendesk is not connected. Connect a Zendesk account in the agent's Zendesk settings.";
 
 /** Zendesk descriptor. URLs are per-tenant: `{subdomain}` comes from oauth.providers.zendesk.subdomain. */
 const zendeskOAuthProvider: OAuthProviderDescriptor = {
@@ -100,44 +89,44 @@ Notes:
         name: "list_tickets",
         description: "List tickets with cursor-based pagination. Returns newest tickets first by default.",
         parameters: ListTicketsParamsSchema,
-        execute: async (params) => (client ? client.listTickets(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.listTickets(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "search_tickets",
         description: "Search tickets using Zendesk search syntax.",
         parameters: SearchTicketsParamsSchema,
-        execute: async (params) => (client ? client.searchTickets(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.searchTickets(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "get_ticket",
         description: "Get a ticket by id, with comments included.",
         parameters: GetTicketParamsSchema,
-        execute: async (params) => (client ? client.getTicket(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.getTicket(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "update_ticket",
         description:
           "Triage a ticket: set status, priority, type, assignee, group, and add/remove tags. Only passed fields change.",
         parameters: UpdateTicketParamsSchema,
-        execute: async (params) => (client ? client.updateTicket(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.updateTicket(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "add_internal_note",
         description: "Add a private internal note to a ticket (agents only, not visible to the requester).",
         parameters: AddInternalNoteParamsSchema,
-        execute: async (params) => (client ? client.addInternalNote(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.addInternalNote(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "list_groups",
         description: "List support groups (teams) with their ids, for routing tickets.",
         parameters: ListGroupsParamsSchema,
-        execute: async (params) => (client ? client.listGroups(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.listGroups(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "list_agents",
         description: "List agents and admins (assignable users) with their ids; pass groupId to list one team's members.",
         parameters: ListAgentsParamsSchema,
-        execute: async (params) => (client ? client.listAgents(params) : notConnected(oauth)),
+        execute: async (params) => (client ? client.listAgents(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
     ];
   },

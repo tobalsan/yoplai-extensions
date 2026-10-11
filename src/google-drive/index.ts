@@ -1,6 +1,5 @@
-import { defineToolExtension } from "../tool-extension.js";
+import { defineToolExtension, notConnected } from "../tool-extension.js";
 import { googleOAuthProvider } from "../google-oauth-provider.js";
-import type { ResolvedOAuth } from "../tool-extension.js";
 import { z } from "zod";
 import { GoogleDriveClient, GoogleDriveRequestError } from "./client.js";
 import {
@@ -22,19 +21,8 @@ import {
 } from "./models.js";
 
 /** Documented not-connected signal — never a raw 401. */
-function notConnected(oauth: ResolvedOAuth | undefined) {
-  return {
-    connected: false,
-    provider: "google",
-    reason: oauth && !oauth.connected ? oauth.reason : "not_connected",
-    message:
-      oauth && !oauth.connected
-        ? oauth.message
-        : "Google Drive is not connected. Connect a Google account (Just me or Whole team) in the agent's Google Drive settings.",
-    authorizeUrl:
-      oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
-  };
-}
+const NOT_CONNECTED_MESSAGE =
+  "Google Drive is not connected. Connect a Google account (Just me or Whole team) in the agent's Google Drive settings.";
 
 export default defineToolExtension({
   id: "googleDrive",
@@ -83,7 +71,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: ListFilesParamsSchema,
         execute: async (params) => {
           const parsed = ListFilesParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           const client = new GoogleDriveClient(connected.accessToken);
           return client.listFiles(parsed);
         },
@@ -95,7 +83,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: SearchFilesParamsSchema,
         execute: async (params) => {
           const parsed = SearchFilesParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           const client = new GoogleDriveClient(connected.accessToken);
           return client.searchFiles(parsed);
         },
@@ -107,7 +95,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: ReadFileParamsSchema,
         execute: async (params) => {
           const parsed = ReadFileParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           const client = new GoogleDriveClient(connected.accessToken);
           return client.readFile(parsed);
         },
@@ -118,7 +106,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: SheetsListSpreadsheetsParamsSchema,
         execute: async (params) => {
           const parsed = SheetsListSpreadsheetsParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           return new GoogleDriveClient(connected.accessToken).sheetsListSpreadsheets(parsed);
         },
       },
@@ -128,7 +116,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: SheetsInspectParamsSchema,
         execute: async (params) => {
           const parsed = SheetsInspectParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           return new GoogleDriveClient(connected.accessToken).sheetsInspect(parsed);
         },
       },
@@ -138,7 +126,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: SheetsReadSheetParamsSchema,
         execute: async (params) => {
           const parsed = SheetsReadSheetParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           return new GoogleDriveClient(connected.accessToken).sheetsReadSheet(parsed);
         },
       },
@@ -148,7 +136,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: SheetsReadRangeParamsSchema,
         execute: async (params) => {
           const parsed = SheetsReadRangeParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           return new GoogleDriveClient(connected.accessToken).sheetsReadRange(parsed);
         },
       },
@@ -159,7 +147,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         parameters: ValidateParamsSchema,
         execute: async (params) => {
           ValidateParamsSchema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
 
           const client = new GoogleDriveClient(connected.accessToken);
           const user = await client.about();
@@ -178,7 +166,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         name, description, parameters: schema,
         execute: async (params: unknown) => {
           const parsed = schema.parse(params);
-          if (!connected) return notConnected(oauth);
+          if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
           return action(new GoogleDriveClient(connected.accessToken), parsed);
         },
       };

@@ -1,6 +1,5 @@
-import { defineToolExtension } from "../tool-extension.js";
+import { defineToolExtension, notConnected } from "../tool-extension.js";
 import { googleOAuthProvider } from "../google-oauth-provider.js";
-import type { ResolvedOAuth } from "../tool-extension.js";
 import { GmailClient, GmailRequestError } from "./client.js";
 import {
   CreateDraftParamsSchema,
@@ -16,16 +15,8 @@ import {
   UpdateDraftParamsSchema,
 } from "./models.js";
 
-function notConnected(oauth: ResolvedOAuth | undefined) {
-  const disconnected = oauth && !oauth.connected ? oauth : undefined;
-  return {
-    connected: false,
-    provider: "google",
-    reason: disconnected?.reason ?? "not_connected",
-    message: disconnected?.message ?? "Gmail is not connected. Connect a Google account (Just me or Whole team) in the agent's Gmail settings.",
-    authorizeUrl: disconnected && "authorizeUrl" in disconnected ? disconnected.authorizeUrl : undefined,
-  };
-}
+const NOT_CONNECTED_MESSAGE =
+  "Gmail is not connected. Connect a Google account (Just me or Whole team) in the agent's Gmail settings.";
 
 export default defineToolExtension({
   id: "gmail",
@@ -52,7 +43,7 @@ export default defineToolExtension({
       action: (client: GmailClient, value: T) => Promise<unknown>,
     ) => async (value: unknown) => {
       if (!client || !connected) {
-        return notConnected(oauth);
+        return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
       }
 
       const parsed = schema.parse(value);
