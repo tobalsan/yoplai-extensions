@@ -14,7 +14,11 @@ export class CalendarClient {
   private path(calendarId = "primary", eventId?: string) { return `/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ""}`; }
   private async zone(calendarId = "primary", explicit?: string): Promise<string> {
     if (explicit) { new Intl.DateTimeFormat("en", { timeZone: explicit }); return explicit; }
-    const calendar = await this.request(`/users/me/calendarList/${encodeURIComponent(calendarId)}`);
+    // calendarList only holds calendars the user added to their list; other readable calendars 404 there, but events.list reports their time zone.
+    const calendar = await this.request(`/users/me/calendarList/${encodeURIComponent(calendarId)}`).catch(error => {
+      if (error instanceof CalendarRequestError && error.status === 404) return this.request(`${this.path(calendarId)}?maxResults=1`);
+      throw error;
+    });
     if (typeof calendar.timeZone !== "string") throw new Error("Calendar did not return a time zone");
     return calendar.timeZone;
   }

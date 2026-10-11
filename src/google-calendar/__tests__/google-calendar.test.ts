@@ -38,6 +38,18 @@ describe("Calendar HTTP boundary", () => {
     expect(url.searchParams.get("pageToken")).toBe("page");
     expect(result.nextPageToken).toBe("next");
   });
+  it("lists events on a readable calendar missing from the user's calendarList", async () => {
+    const calls: string[] = [];
+    const client = new CalendarClient("token", async input => {
+      const url = new URL(String(input)); calls.push(url.pathname + url.search);
+      if (url.pathname.includes("/calendarList/")) return json({ error: { status: "NOT_FOUND", message: "Not Found", errors: [{ reason: "notFound" }] } }, 404);
+      return json(url.searchParams.get("maxResults") === "1" ? { timeZone: "America/New_York", items: [] } : { items: [{ id: "event" }] });
+    });
+    const result = await client.list_events({ calendarId: "colleague@example.com", startTime: "2026-10-12T09:00:00", endTime: "2026-10-12T10:00:00" });
+    expect(calls[1]).toBe("/calendar/v3/calendars/colleague%40example.com/events?maxResults=1");
+    expect(new URL(`https://x${calls[2]}`).searchParams.get("timeMin")).toBe("2026-10-12T13:00:00.000Z");
+    expect(result.events).toHaveLength(1);
+  });
   it("surfaces Google's HTTP status and reason when a calendar is not accessible", async () => {
     const client = new CalendarClient("token", async () => json({ error: { status: "NOT_FOUND", message: "Not Found", errors: [{ reason: "notFound" }] } }, 404));
     const error = await client.list_events({ calendarId: "nobody@example.com" }).catch(caught => caught);
