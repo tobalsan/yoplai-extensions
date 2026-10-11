@@ -485,15 +485,16 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const selectedScopes = new Map<string, CredentialScope>();
       const manager = new McpClientManager(
         servers,
+        {
         clientFactory,
-        async (server) => {
+        tokenProvider: async (server) => {
           if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server)) return undefined;
           const selected = await oauth.resolve(agentId, server.name, requesterUserId);
           if (!selected) return undefined;
           selectedScopes.set(server.name, selected.scope);
           return oauth.accessToken(agentId, server.name, 60_000, requesterUserId, selected.scope);
         },
-        async (server) => {
+        onAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
             const scope = selectedScopes.get(server.name);
@@ -501,13 +502,14 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           }
           return false;
         },
-        async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
-        (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
-        async (server) => {
+        requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
+        notConnectedResponse: (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
+        onUnrecoverableAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             const scope = selectedScopes.get(server.name);
             if (scope) await oauth?.markNeedsReconnect(agentId, server.name, scope);
           }
+        }
         }
       );
       await manager.connect();

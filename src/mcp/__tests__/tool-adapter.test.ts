@@ -7,15 +7,17 @@ describe("MCP tool adapter", () => {
   it("namespaces server and tool names and preserves JSON schema parameters", async () => {
     const manager = new McpClientManager(
       [{ type: "stdio", name: "github-main", command: "node" }],
-      async () => ({
-        async listTools() {
-          return [];
-        },
-        async callTool(name, args) {
-          return { name, args };
-        },
-        async close() {},
-      })
+      {
+        clientFactory: async () => ({
+          async listTools() {
+            return [];
+          },
+          async callTool(name, args) {
+            return { name, args };
+          },
+          async close() {},
+        }),
+      }
     );
     await manager.connect();
     const tool = {
