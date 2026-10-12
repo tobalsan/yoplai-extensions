@@ -1,4 +1,5 @@
 import mammoth from "mammoth";
+import * as XLSX from "xlsx";
 
 import {
   DRIVE_ABOUT_URL,
@@ -85,6 +86,32 @@ function looksLikeDocx(name: string, mimeType?: string | null): boolean {
     hint.includes(".docx") ||
     hint.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
   );
+}
+
+const SPREADSHEET_MIMES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
+  "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+  "application/vnd.ms-excel",
+  "application/vnd.oasis.opendocument.spreadsheet",
+]);
+
+function looksLikeSpreadsheet(name: string, mimeType?: string | null): boolean {
+  return SPREADSHEET_MIMES.has((mimeType ?? "").toLowerCase()) || /\.(xlsx|xlsm|xlsb|xls|ods)$/i.test(name);
+}
+
+/** Every sheet as CSV under a `## Sheet: <name>` heading (formatted cell values, blank rows dropped). */
+function spreadsheetToText(buffer: Buffer): string {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  return workbook.SheetNames.map((name) => {
+    const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[name], { blankrows: false });
+    return `## Sheet: ${name}\n${csv.trim()}`;
+  }).join("\n\n");
+}
+
+/** NUL bytes never occur in real text files; their presence means undecodable binary. */
+function looksBinary(buffer: Buffer): boolean {
+  return buffer.subarray(0, 8000).includes(0);
 }
 
 function normalizeText(text: string): string {
@@ -390,6 +417,14 @@ export class GoogleDriveClient {
     if (looksLikeDocx(name, mimeType)) {
       const result = await mammoth.extractRawText({ buffer });
       return normalizeText(result.value);
+    }
+
+    if (looksLikeSpreadsheet(name, mimeType)) {
+      return normalizeText(spreadsheetToText(buffer));
+    }
+
+    if (looksBinary(buffer)) {
+      return `[Binary file (${mimeType ?? "unknown type"}): no text extractor for this format.]`;
     }
 
     return normalizeText(buffer.toString("utf8"));

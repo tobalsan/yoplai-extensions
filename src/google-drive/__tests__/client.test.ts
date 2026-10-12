@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as XLSX from "xlsx";
+
 import { GoogleDriveClient, type DriveFetch } from "../client.js";
 
 const { mammothExtractRawTextMock } = vi.hoisted(() => ({
@@ -199,6 +201,40 @@ describe("GoogleDriveClient", () => {
 
     expect(mammothExtractRawTextMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ name: "cv.docx", text: "Resume text", exported: false });
+  });
+
+  function workbookBytes(bookType: XLSX.BookType): Buffer {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Report_ID", "Quota", "Start"], ["DAILY_CONTROL_TOWER", 4850000, new Date(Date.UTC(2026, 7, 1))]], { cellDates: true }), "REPORT_REGISTRY");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Rule", "Value"], ["Pipeline_Divisor", 3]]), "GLOBAL_RULES");
+    return XLSX.write(wb, { type: "buffer", bookType }) as Buffer;
+  }
+
+  function fileFetch(name: string, mimeType: string, bytes: Buffer) {
+    return vi
+      .fn<DriveFetch>()
+      .mockResolvedValueOnce(jsonResponse({ id: "x1", name, mimeType }))
+      .mockResolvedValueOnce(new Response(new Uint8Array(bytes), { status: 200 }));
+  }
+
+  it.each([
+    ["config.xlsm", "application/vnd.ms-excel.sheet.macroenabled.12", "xlsm"],
+    ["book.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"],
+    ["legacy.xls", "application/vnd.ms-excel", "biff8"],
+    ["noext", "application/vnd.oasis.opendocument.spreadsheet", "ods"],
+  ] as const)("extracts every sheet of %s as CSV", async (name, mime, bookType) => {
+    const result = await makeClient(fileFetch(name, mime, workbookBytes(bookType))).readFile({ fileId: "x1" });
+
+    expect(result.text).toContain("## Sheet: REPORT_REGISTRY\nReport_ID,Quota,Start\nDAILY_CONTROL_TOWER,4850000,");
+    expect(result.text).toMatch(/DAILY_CONTROL_TOWER,4850000,.*(2026|8\/1\/26)/);
+    expect(result.text).toContain("## Sheet: GLOBAL_RULES\nRule,Value\nPipeline_Divisor,3");
+  });
+
+  it("returns a clear note instead of garbage for unsupported binary files", async () => {
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0xff, 0xfe]);
+    const result = await makeClient(fileFetch("thing.bin", "application/octet-stream", bytes)).readFile({ fileId: "x1" });
+
+    expect(result.text).toBe("[Binary file (application/octet-stream): no text extractor for this format.]");
   });
 
   it("surfaces a clean error (not a raw response) on HTTP failure", async () => {
