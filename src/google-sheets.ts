@@ -1,4 +1,4 @@
-/** Pure Sheets helpers ported from the gsheets extension. */
+/** Pure Sheets policy shared by the gsheets (service account) and google-drive (OAuth) clients. */
 type SheetValues = string[][];
 
 const SPREADSHEET_URL_RE = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
@@ -28,7 +28,7 @@ export function trimTrailingEmptyCells(row: unknown[]): string[] {
   return trimmed;
 }
 
-export function headerRowScore(row: unknown[]): number {
+function headerRowScore(row: unknown[]): number {
   const trimmed = trimTrailingEmptyCells(row);
   const nonEmpty = trimmed.map((cell) => cell.trim()).filter(Boolean);
   if (nonEmpty.length < 2) return -1;
