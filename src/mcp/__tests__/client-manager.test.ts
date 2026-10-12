@@ -16,7 +16,7 @@ describe("McpClientManager", () => {
         { type: "stdio", name: "good", command: "node" },
         { type: "http", name: "bad", url: "https://example.com/mcp" },
       ],
-      async (server): Promise<McpClientHandle> => {
+      { clientFactory: async (server): Promise<McpClientHandle> => {
         if (server.name === "bad") throw new Error("connection refused");
         return {
           async listTools() {
@@ -35,7 +35,7 @@ describe("McpClientManager", () => {
           },
           async close() {},
         };
-      }
+      } }
     );
 
     await manager.connect();
@@ -53,7 +53,7 @@ describe("McpClientManager", () => {
     const close = vi.fn(async () => undefined);
     const manager = new McpClientManager(
       [{ type: "stdio", name: "broken", command: "node" }],
-      async (): Promise<McpClientHandle> => ({
+      { clientFactory: async (): Promise<McpClientHandle> => ({
         async listTools() {
           throw new Error("discovery failed");
         },
@@ -61,7 +61,7 @@ describe("McpClientManager", () => {
           return undefined;
         },
         close,
-      })
+      }) }
     );
 
     await manager.connect();
@@ -75,7 +75,7 @@ describe("McpClientManager", () => {
   it("keeps discovery failure isolated when closing the failed client also fails", async () => {
     const manager = new McpClientManager(
       [{ type: "stdio", name: "broken", command: "node" }],
-      async (): Promise<McpClientHandle> => ({
+      { clientFactory: async (): Promise<McpClientHandle> => ({
         async listTools() {
           throw new Error("discovery failed");
         },
@@ -85,7 +85,7 @@ describe("McpClientManager", () => {
         async close() {
           throw new Error("close failed");
         },
-      })
+      }) }
     );
 
     await manager.connect();
@@ -142,12 +142,14 @@ describe("McpClientManager", () => {
     const marked: string[] = [];
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      async (_server, token) => {
-        expect(token).toBe("fresh-token");
-        throw new Error("401 Unauthorized");
-      },
-      async () => "fresh-token",
-      async (server) => { marked.push(server.name); return false; }
+      {
+        clientFactory: async (_server, token) => {
+          expect(token).toBe("fresh-token");
+          throw new Error("401 Unauthorized");
+        },
+        tokenProvider: async () => "fresh-token",
+        onAuthFailure: async (server) => { marked.push(server.name); return false; },
+      }
     );
 
     await manager.connect();
@@ -159,11 +161,11 @@ describe("McpClientManager", () => {
   it("returns the structured not-connected response after a tool 401", async () => {
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
-      undefined,
-      async () => false,
-      undefined,
-      (server) => ({ connected: false, server, reason: "needs_reconnect" })
+      {
+        clientFactory: async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
+        onAuthFailure: async () => false,
+        notConnectedResponse: (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+      }
     );
     await manager.connect();
     await manager.listTools();
@@ -188,9 +190,7 @@ describe("McpClientManager", () => {
     });
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      factory,
-      async () => tokens[0],
-      refresh
+      { clientFactory: factory, tokenProvider: async () => tokens[0], onAuthFailure: refresh }
     );
 
     await manager.connect();
@@ -214,7 +214,8 @@ describe("McpClientManager", () => {
     }));
     const refresh = vi.fn(async () => { token = "fresh-token"; return true; });
     const manager = new McpClientManager(
-      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }], factory, async () => token, refresh
+      [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
+      { clientFactory: factory, tokenProvider: async () => token, onAuthFailure: refresh }
     );
     await manager.connect();
     await manager.listTools();
@@ -230,16 +231,16 @@ describe("McpClientManager", () => {
     const terminal = vi.fn(async () => undefined);
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      async (): Promise<McpClientHandle> => ({
-        async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
-        async callTool() { throw new Error("401 Unauthorized"); },
-        async close() {},
-      }),
-      undefined,
-      async () => true,
-      undefined,
-      (server) => ({ connected: false, server, reason: "needs_reconnect" }),
-      terminal
+      {
+        clientFactory: async (): Promise<McpClientHandle> => ({
+          async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+          async callTool() { throw new Error("401 Unauthorized"); },
+          async close() {},
+        }),
+        onAuthFailure: async () => true,
+        notConnectedResponse: (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+        onUnrecoverableAuthFailure: terminal,
+      }
     );
 
     await manager.connect();
@@ -253,16 +254,15 @@ describe("McpClientManager", () => {
     const terminal = vi.fn(async () => undefined);
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      async (): Promise<McpClientHandle> => ({
-        async listTools() { throw new Error("401 Unauthorized"); },
-        async callTool() { return undefined; },
-        async close() {},
-      }),
-      undefined,
-      async () => true,
-      undefined,
-      undefined,
-      terminal
+      {
+        clientFactory: async (): Promise<McpClientHandle> => ({
+          async listTools() { throw new Error("401 Unauthorized"); },
+          async callTool() { return undefined; },
+          async close() {},
+        }),
+        onAuthFailure: async () => true,
+        onUnrecoverableAuthFailure: terminal,
+      }
     );
 
     await manager.connect();
@@ -276,20 +276,20 @@ describe("McpClientManager", () => {
     let connections = 0;
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
-      async (): Promise<McpClientHandle> => {
-        connections += 1;
-        if (connections === 2) throw new Error("401 Unauthorized");
-        return {
-          async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
-          async callTool() { throw new Error("401 Unauthorized"); },
-          async close() {},
-        };
-      },
-      undefined,
-      async () => true,
-      undefined,
-      (server) => ({ connected: false, server, reason: "needs_reconnect" }),
-      terminal
+      {
+        clientFactory: async (): Promise<McpClientHandle> => {
+          connections += 1;
+          if (connections === 2) throw new Error("401 Unauthorized");
+          return {
+            async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+            async callTool() { throw new Error("401 Unauthorized"); },
+            async close() {},
+          };
+        },
+        onAuthFailure: async () => true,
+        notConnectedResponse: (server) => ({ connected: false, server, reason: "needs_reconnect" }),
+        onUnrecoverableAuthFailure: terminal,
+      }
     );
 
     await manager.connect();
