@@ -1,20 +1,20 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpExtension } from "../index.js";
 import { McpOAuthStore, type OAuthConnection } from "../oauth.js";
 import { credentials } from "./credentials.js";
+import { tempDirs } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => { vi.unstubAllGlobals(); vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
+const dirs = tempDirs();
+afterEach(async () => { vi.unstubAllGlobals(); vi.restoreAllMocks(); await dirs.cleanup(); });
 
 const URL_A = "https://claap.example.test/mcp";
 const personal = (userId: string) => ({ type: "personal" as const, userId });
 function connection(token: string, state: OAuthConnection["state"] = "connected"): OAuthConnection {
   return { client: { client_id: "client", redirect_uris: ["http://localhost/callback"] }, tokens: { access_token: token, token_type: "Bearer" }, connectedAt: new Date().toISOString(), authorizationServerUrl: "https://auth.example.test", state };
 }
-async function directory() { const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-shared-")); dirs.push(dir); return dir; }
+const directory = () => dirs.make("mcp-shared-");
 function context(userId: string | undefined, query: Record<string, string>) {
   return {
     get: () => userId ? { user: { id: userId, role: "user" } } : {},
