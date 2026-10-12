@@ -1,6 +1,5 @@
-import { defineToolExtension } from "../tool-extension.js";
-import { googleOAuthProvider } from "../google-oauth-provider.js";
-import type { ResolvedOAuth } from "../tool-extension.js";
+import { defineToolExtension, notConnected } from "../tool-extension.js";
+import { googleFailureReason, googleOAuthProvider } from "../google-oauth-provider.js";
 import { GmailClient, GmailRequestError } from "./client.js";
 import {
   CreateDraftParamsSchema,
@@ -16,16 +15,14 @@ import {
   UpdateDraftParamsSchema,
 } from "./models.js";
 
-function notConnected(oauth: ResolvedOAuth | undefined) {
-  const disconnected = oauth && !oauth.connected ? oauth : undefined;
-  return {
-    connected: false,
-    provider: "google",
-    reason: disconnected?.reason ?? "not_connected",
-    message: disconnected?.message ?? "Gmail is not connected. Connect a Google account (Just me or Whole team) in the agent's Gmail settings.",
-    authorizeUrl: disconnected && "authorizeUrl" in disconnected ? disconnected.authorizeUrl : undefined,
-  };
-}
+const FAILURE_MESSAGES = {
+  expired: "Gmail access has expired. Reconnect Google to continue.",
+  rate_limited: "Gmail is temporarily rate limited. Wait and retry.",
+  insufficient_scope: "Gmail needs additional Google permission. Reconnect Google and approve Gmail access.",
+};
+
+const NOT_CONNECTED_MESSAGE =
+  "Gmail is not connected. Connect a Google account (Just me or Whole team) in the agent's Gmail settings.";
 
 export default defineToolExtension({
   id: "gmail",
@@ -52,7 +49,7 @@ export default defineToolExtension({
       action: (client: GmailClient, value: T) => Promise<unknown>,
     ) => async (value: unknown) => {
       if (!client || !connected) {
-        return notConnected(oauth);
+        return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
       }
 
       const parsed = schema.parse(value);
@@ -78,33 +75,9 @@ export default defineToolExtension({
           account: account || connected.account || null,
         };
       } catch (error) {
-        if (error instanceof GmailRequestError && error.status === 401) {
-          return {
-            connected: false,
-            provider: "google",
-            reason: "expired",
-            message: "Gmail access has expired. Reconnect Google to continue.",
-          };
-        }
-        if (
-          error instanceof GmailRequestError
-          && error.status === 403
-          && /rate.?limit|quota|daily.?limit/i.test(error.reason ?? "")
-        ) {
-          return {
-            connected: false,
-            provider: "google",
-            reason: "rate_limited",
-            message: "Gmail is temporarily rate limited. Wait and retry.",
-          };
-        }
-        if (error instanceof GmailRequestError && error.status === 403) {
-          return {
-            connected: false,
-            provider: "google",
-            reason: "insufficient_scope",
-            message: "Gmail needs additional Google permission. Reconnect Google and approve Gmail access.",
-          };
+        if (error instanceof GmailRequestError && (error.status === 401 || error.status === 403)) {
+          const reason = googleFailureReason(error.status, error.reason ?? "")!;
+          return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
         }
         throw error;
       }

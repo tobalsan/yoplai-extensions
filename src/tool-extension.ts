@@ -125,7 +125,7 @@ export interface ToolExtensionDefinition {
   createTools(config: ResolvedToolExtensionConfig): ToolExtensionTool[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -139,7 +139,7 @@ function stripEnabled(value: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-function resolveEnvRefs(value: unknown): unknown {
+export function resolveEnvRefs(value: unknown): unknown {
   if (typeof value === "string" && value.startsWith("$env:")) {
     const envName = value.slice("$env:".length);
     const envValue = process.env[envName];
@@ -185,9 +185,7 @@ function resolveConfig(
   };
   definition.configSchema.parse(resolved.merged);
   // An OAuth-mode agent authenticates with a token, not with secrets.
-  const usesOAuth = typeof definition.oauth === "function"
-    ? definition.oauth(resolved) !== undefined
-    : definition.oauth !== undefined;
+  const usesOAuth = oauthRequirement(definition, resolved) !== undefined;
   for (const secretName of usesOAuth ? [] : definition.requiredSecrets) {
     const value = resolved.merged[secretName];
     if (typeof value !== "string" || value.length === 0) {
@@ -199,14 +197,32 @@ function resolveConfig(
   return resolved;
 }
 
+function oauthRequirement(
+  definition: ToolExtensionDefinition,
+  resolved: ResolvedToolExtensionConfig
+): OAuthRequirement | undefined {
+  return typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
+}
+
+/** Standard "not connected" tool result; `fallbackMessage` applies when no host OAuth state is available. */
+export function notConnected(provider: string, fallbackMessage: string, oauth?: ResolvedOAuth) {
+  const disconnected = oauth && !oauth.connected ? oauth : undefined;
+  return {
+    connected: false,
+    provider,
+    reason: disconnected?.reason ?? "not_connected",
+    message: disconnected?.message ?? fallbackMessage,
+    authorizeUrl: disconnected && "authorizeUrl" in disconnected ? disconnected.authorizeUrl : undefined,
+  };
+}
+
 async function resolveOAuthForDefinition(
   definition: ToolExtensionDefinition,
   agent: { id: string },
   context: ToolExtensionHookContext,
   resolved: ResolvedToolExtensionConfig
 ): Promise<ResolvedOAuth | undefined> {
-  if (!definition.oauth) return undefined;
-  const requirement = typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
+  const requirement = oauthRequirement(definition, resolved);
   if (!requirement) return undefined;
   if (!context.resolveOAuth) {
     return {
@@ -324,7 +340,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
         execute: async (params: unknown, toolContext?: { userId?: string }) => {
           if (!definition.oauth || !context.resolveOAuth) return tool.execute(params, { agentId: agent.id });
           // Re-resolve per call so the token matches this call's requester.
-          const requirement = typeof definition.oauth === "function" ? definition.oauth(resolved) : definition.oauth;
+          const requirement = oauthRequirement(definition, resolved);
           if (!requirement) return tool.execute(params, { agentId: agent.id });
           const oauth = await context.resolveOAuth(
             agent,

@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import extension from "../index.js";
-import { GoogleDriveClient, GoogleDriveRequestError } from "../client.js";
+import { GoogleDriveClient } from "../client.js";
 import type { ResolvedOAuth } from "../../tool-extension.js";
 
-describe("googleDrive extension", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+// Fails every Drive HTTP call; retry-after 0 keeps 429 retries instant.
+function stubDriveFailure(status: number, body: string): void {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status, headers: { "retry-after": "0" } })));
+}
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("googleDrive extension", () => {
   it("exports the expected extension contract with an oauth requirement", () => {
     expect(extension.id).toBe("googleDrive");
     expect(extension.displayName).toBe("Google Drive");
@@ -160,11 +166,23 @@ describe("write mode", () => {
   });
 
   it("turns API permission refusals into insufficient_scope", async () => {
-    vi.spyOn(GoogleDriveClient.prototype, "createFolder").mockRejectedValue(new GoogleDriveRequestError("Forbidden", 403, "files", "permission denied"));
+    stubDriveFailure(403, "permission denied");
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
       connected: true, provider: "google", accessToken: "token", scopes: [],
     } });
     await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toMatchObject({ reason: "insufficient_scope" });
-    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [401, "", "expired", "Google access has expired. Reconnect Google to continue."],
+    [429, "", "rate_limited", "Google Drive is temporarily rate limited. Wait and retry."],
+    [403, "userRateLimitExceeded quota", "rate_limited", "Google Drive is temporarily rate limited. Wait and retry."],
+    [403, "forbidden", "insufficient_scope", "Google Drive needs additional Google permission. Reconnect Google and approve the configured access."],
+  ])("maps API status %s (%s) to %s", async (status, body, reason, message) => {
+    stubDriveFailure(status, body);
+    const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
+      connected: true, provider: "google", accessToken: "token", scopes: [],
+    } });
+    await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toEqual({ connected: false, provider: "google", reason, message });
   });
 });

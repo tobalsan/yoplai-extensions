@@ -20,24 +20,12 @@ import {
   UpdatePagePropertiesParamsSchema,
   ValidateParamsSchema,
 } from "./models.js";
-import { defineToolExtension } from "../tool-extension.js";
-import type { OAuthProviderDescriptor, ResolvedOAuth, ToolExtensionTool } from "../tool-extension.js";
+import { defineToolExtension, notConnected } from "../tool-extension.js";
+import type { OAuthProviderDescriptor, ToolExtensionTool } from "../tool-extension.js";
 
 /** Documented not-connected signal — never a raw 401. */
-function notConnected(oauth: ResolvedOAuth | undefined) {
-  return {
-    connected: false,
-    provider: "notion",
-    reason: oauth && !oauth.connected ? oauth.reason : "not_connected",
-    message:
-      oauth && !oauth.connected
-        ? oauth.message
-        : "Notion is not connected. Connect a Notion workspace in the agent's Notion settings.",
-    authorizeUrl:
-      oauth && !oauth.connected && "authorizeUrl" in oauth ? oauth.authorizeUrl : undefined,
-  };
-}
-
+const NOT_CONNECTED_MESSAGE =
+  "Notion is not connected. Connect a Notion workspace in the agent's Notion settings.";
 
 /** Notion descriptor. Client credentials go in a Basic header; the account comes from the token response. */
 const notionOAuthProvider: OAuthProviderDescriptor = {
@@ -278,6 +266,6 @@ In oauth mode the requester's connected Notion workspace is used. If a tool repo
         },
       },
     ];
-    return apiKey ? tools : tools.map((tool) => ({ ...tool, execute: async () => notConnected(oauth) }));
+    return apiKey ? tools : tools.map((tool) => ({ ...tool, execute: async () => notConnected("notion", NOT_CONNECTED_MESSAGE, oauth) }));
   },
 });
