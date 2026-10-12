@@ -103,4 +103,22 @@ describe("GmailClient", () => {
     await expect(client.createLabel({ displayName: "Projects", color: { textColor: "#000000", backgroundColor: "#ffffff" } })).resolves.toMatchObject({ labelId: "LABEL", name: "Projects" });
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ name: "Projects", color: { textColor: "#000000", backgroundColor: "#ffffff" } });
   });
+  it("falls back to the HTML part as text when a message has no plain-text body", async () => {
+    const html = "<html><head><style>p{color:red}</style></head><body><h1>Pipeline&nbsp;Health</h1><p>Weighted: 1&#160;681&nbsp;378 &euro;</p><table><tr><td>Stage</td><td>EUR</td></tr></table><script>x()</script></body></html>";
+    const payload = { mimeType: "multipart/mixed", parts: [{ mimeType: "multipart/related", parts: [{ mimeType: "text/html", body: { data: Buffer.from(html).toString("base64url") } }] }] };
+    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload }] })));
+    const thread = await client.getThread({ threadId: "t1" });
+    const text = thread.messages[0].plaintextBody;
+    expect(text).toContain("Pipeline Health");
+    expect(text).toContain("Weighted: 1\u00a0681 378");
+    expect(text).toContain("Stage\tEUR");
+    expect(text).not.toMatch(/<|color:red|x\(\)/);
+  });
+
+  it("prefers the plain-text part when both exist", async () => {
+    const enc = (v: string) => Buffer.from(v).toString("base64url");
+    const payload = { mimeType: "multipart/alternative", parts: [{ mimeType: "text/plain", body: { data: enc("plain version") } }, { mimeType: "text/html", body: { data: enc("<p>html version</p>") } }] };
+    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload }] })));
+    await expect(client.getThread({ threadId: "t1" })).resolves.toMatchObject({ messages: [{ plaintextBody: "plain version" }] });
+  });
 });

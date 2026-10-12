@@ -22,10 +22,35 @@ function header(message: GmailMessage, name: string): string {
 function decode(data: string | undefined): string {
   return data ? Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8") : "";
 }
-function body(part: GmailPart | undefined): string {
+function partOf(part: GmailPart | undefined, mimeType: string): string {
   if (!part) return "";
-  if (part.mimeType === "text/plain" && part.body?.data) return decode(part.body.data);
-  return (part.parts ?? []).map(body).find(Boolean) ?? "";
+  if (part.mimeType === mimeType && part.body?.data) return decode(part.body.data);
+  return (part.parts ?? []).map((child) => partOf(child, mimeType)).find(Boolean) ?? "";
+}
+const ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|tr|li|h[1-6]|table|ul|ol)>/gi, "\n")
+    .replace(/<\/t[dh]>/gi, "\t")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code: string) => {
+      if (code[0] !== "#") return ENTITIES[code.toLowerCase()] ?? match;
+      const n = code[1]?.toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      return Number.isNaN(n) ? match : String.fromCodePoint(n);
+    })
+    .replace(/[ \t\u00a0]+\n/g, "\n")
+    .replace(/[ \u00a0]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+/** Plain-text body; falls back to the text/html part (converted to text) for HTML-only mail. */
+function body(part: GmailPart | undefined): string {
+  const plain = partOf(part, "text/plain");
+  if (plain.trim()) return plain;
+  const html = partOf(part, "text/html");
+  return html ? htmlToText(html) : plain;
 }
 function attachments(part: GmailPart | undefined): string[] {
   if (!part) return [];
