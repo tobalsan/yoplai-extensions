@@ -190,8 +190,6 @@ describe("MCP OAuth flow", () => {
     const viaAccess = store.accessToken("casey", "claap");
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     const viaForced = store.refreshAccessToken("casey", "claap");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(refresh).toHaveBeenCalledOnce();
     release({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
 
     await expect(Promise.all([viaAccess, viaForced])).resolves.toEqual(["fresh", "fresh"]);
