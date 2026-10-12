@@ -105,9 +105,11 @@ describe("PipedriveClient.listDeals", () => {
   });
 
   it("returns a lean projection and constructs the deal_url", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({ data: [rawDeal({ id: 42 })], additional_data: { next_cursor: null } }),
-    );
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ data: [rawDeal({ id: 42 })], additional_data: { next_cursor: null } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 30, name: "Jane Owner", active_flag: true }] }));
 
     const result = await createClient().listDeals({});
 
@@ -124,12 +126,13 @@ describe("PipedriveClient.listDeals", () => {
       person_id: 10,
       org_id: 20,
       user_id: 30,
+      owner_name: "Jane Owner",
       expected_close_date: "2025-07-15",
       won_time: null,
       deal_url: "https://acme.pipedrive.com/deal/42",
     });
     // Lean: no raw/custom fields leak through.
-    expect(Object.keys(result.deals[0])).toHaveLength(13);
+    expect(Object.keys(result.deals[0])).toHaveLength(14);
   });
 
   it("passes an explicit cursor through and returns the native next_cursor without a range", async () => {
@@ -140,7 +143,7 @@ describe("PipedriveClient.listDeals", () => {
     const result = await createClient().listDeals({ cursor: "cur-0" });
 
     expect(url(spy).searchParams.get("cursor")).toBe("cur-0");
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2); // + owner-name users lookup
     expect(result.next_cursor).toBe("next-1");
   });
 
@@ -171,7 +174,7 @@ describe("PipedriveClient.listDeals", () => {
       expected_close_to: "2025-07-31",
     });
 
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3); // + owner-name users lookup
     expect(url(spy, 1).searchParams.get("cursor")).toBe("page-2");
     expect(result.deals.map((d) => d.id)).toEqual([2, 4]);
     expect(result.next_cursor).toBeNull();
@@ -206,7 +209,7 @@ describe("PipedriveClient.listDeals", () => {
       won_to: "2026-06-30",
     });
 
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3); // + owner-name users lookup
     expect(url(spy, 1).searchParams.get("cursor")).toBe("page-2");
     expect(result.deals.map((d) => d.id)).toEqual([2, 4]);
     expect(result.deals.map((d) => d.won_time)).toEqual([
@@ -235,7 +238,7 @@ describe("PipedriveClient.listDeals", () => {
       limit: 2,
     });
 
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2); // + owner-name users lookup
     expect(result.deals.map((d) => d.id)).toEqual([1, 2]);
     expect(result.next_cursor).toBe("more");
   });
@@ -371,11 +374,12 @@ describe("PipedriveClient retry and error mapping", () => {
     const spy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({}, 429, { "retry-after": "2" }))
-      .mockResolvedValueOnce(jsonResponse({ data: [rawDeal()], additional_data: {} }));
+      .mockResolvedValueOnce(jsonResponse({ data: [rawDeal()], additional_data: {} }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
 
     const result = await createClient().listDeals({});
 
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3); // + owner-name users lookup
     expect(result.count).toBe(1);
     setTimeoutSpy.mockRestore();
   });
@@ -390,11 +394,12 @@ describe("PipedriveClient retry and error mapping", () => {
     const spy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({}, 503))
-      .mockResolvedValueOnce(jsonResponse({ data: [], additional_data: {} }));
+      .mockResolvedValueOnce(jsonResponse({ data: [], additional_data: {} }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
 
     await createClient().listDeals({});
 
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(3); // + owner-name users lookup
     setTimeoutSpy.mockRestore();
   });
 
@@ -843,5 +848,62 @@ describe("PipedriveClient.listDealActivities", () => {
 
     await createClient().listDealActivities({ deal_id: 3776, done: false });
     expect(url(spy, 1).searchParams.get("done")).toBe("0");
+  });
+});
+
+describe("PipedriveClient users and owner_name", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists users from v1 /users with active flag", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        data: [
+          { id: 30, name: "Jane Owner", email: "jane@acme.com", active_flag: true },
+          { id: 31, name: "Gone User", email: null, active_flag: false },
+        ],
+      }),
+    );
+
+    const result = await createClient().listUsers();
+
+    expect(url(spy).pathname).toBe("/api/v1/users");
+    expect(result).toEqual({
+      users: [
+        { id: 30, name: "Jane Owner", email: "jane@acme.com", active: true },
+        { id: 31, name: "Gone User", email: null, active: false },
+      ],
+      count: 2,
+    });
+  });
+
+  it("caches the users lookup across deal reads", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const u = String(input);
+      if (u.includes("/v1/users")) return jsonResponse({ data: [{ id: 30, name: "Jane Owner", active_flag: true }] });
+      if (u.includes("/v2/deals/7")) return jsonResponse({ data: rawDeal({ id: 7 }) });
+      return jsonResponse({ data: [rawDeal()], additional_data: {} });
+    });
+    const client = createClient();
+
+    const list = await client.listDeals({});
+    const detail = await client.getDeal({ deal_id: 7, output_type: "lean" });
+
+    expect(list.deals[0].owner_name).toBe("Jane Owner");
+    expect(detail.owner_name).toBe("Jane Owner");
+    expect(spy.mock.calls.filter(([u]) => String(u).includes("/v1/users"))).toHaveLength(1);
+  });
+
+  it("leaves owner_name null when the users lookup fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("/v1/users")) return jsonResponse({ error: "forbidden" }, 403);
+      return jsonResponse({ data: [rawDeal()], additional_data: {} });
+    });
+
+    const result = await createClient().listDeals({});
+
+    expect(result.deals[0].user_id).toBe(30);
+    expect(result.deals[0].owner_name).toBeNull();
   });
 });

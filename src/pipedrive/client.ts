@@ -26,6 +26,7 @@ import {
   type GetDealFieldParams,
   type GetDealParams,
   type ListDealDiscountsParams,
+  type ListUsersResult,
   type ListDealDiscountsResult,
   type ListDealFieldsParams,
   type ListDealFieldsResult,
@@ -280,6 +281,10 @@ interface RawLead {
 }
 
 
+function ownerName(names: Map<number, string>, id: number | null): string | null {
+  return id === null ? null : (names.get(id) ?? null);
+}
+
 export class PipedriveClient {
   readonly apiToken: string;
   readonly domain: string;
@@ -289,6 +294,8 @@ export class PipedriveClient {
   private readonly timeoutMs: number;
   /** Lazily-resolved custom-field keys for VAT / SIREN (undefined until first lookup). */
   private orgFieldKeys: { vat: string | null; siren: string | null } | undefined;
+  /** Cached user id → name map for owner_name (null until first successful load). */
+  private ownerNames: Map<number, string> | null = null;
 
   constructor(options: PipedriveClientOptions) {
     this.apiToken = options.apiToken;
@@ -448,6 +455,9 @@ export class PipedriveClient {
       if (cursor === null) break;
     } while (pagesFetched < MAX_INTERNAL_PAGES);
 
+    const names = await this.loadOwnerNames();
+    for (const deal of matches) deal.owner_name = ownerName(names, deal.user_id);
+
     return {
       deals: matches,
       next_cursor: cursor,
@@ -591,12 +601,15 @@ export class PipedriveClient {
       person_id: toNumberOrNull(raw.person_id),
       org_id: toNumberOrNull(raw.org_id),
       user_id: toNumberOrNull(raw.owner_id ?? raw.user_id),
+      owner_name: null,
       expected_close_date: toStringOrNull(raw.expected_close_date),
       add_time: toStringOrNull(raw.add_time),
       update_time: toStringOrNull(raw.update_time),
       won_time: toStringOrNull(raw.won_time),
       deal_url: `https://${this.domain}.pipedrive.com/deal/${params.deal_id}`,
     };
+
+    detail.owner_name = ownerName(await this.loadOwnerNames(), detail.user_id);
 
     if (mode === "lean") {
       return detail;
@@ -680,6 +693,7 @@ export class PipedriveClient {
       person_id: toNumberOrNull(raw.person_id),
       org_id: toNumberOrNull(raw.org_id),
       user_id: toNumberOrNull(raw.owner_id ?? raw.user_id),
+      owner_name: null,
       expected_close_date: toStringOrNull(raw.expected_close_date),
       won_time: toStringOrNull(raw.won_time),
       deal_url: `https://${this.domain}.pipedrive.com/deal/${raw.id}`,
@@ -1269,6 +1283,37 @@ export class PipedriveClient {
       update_time: toStringOrNull(raw.update_time),
     }));
     return { labels, count: labels.length };
+  }
+
+  /** List all company users (v1 /users), active and deactivated. No pagination. */
+  async listUsers(): Promise<ListUsersResult> {
+    const data = await this.requestJson("GET", "v1", "users");
+    const rows = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+    const users = rows
+      .filter((raw) => typeof raw.id === "number")
+      .map((raw) => ({
+        id: raw.id as number,
+        name: typeof raw.name === "string" ? raw.name : "",
+        email: toStringOrNull(raw.email),
+        active: raw.active_flag === true,
+      }));
+    return { users, count: users.length };
+  }
+
+  /**
+   * user id → name map for owner_name, cached per client. A failed lookup
+   * leaves owner_name null instead of failing the deal read, and is retried
+   * on the next call.
+   */
+  private async loadOwnerNames(): Promise<Map<number, string>> {
+    if (this.ownerNames) return this.ownerNames;
+    try {
+      const { users } = await this.listUsers();
+      this.ownerNames = new Map(users.map((u) => [u.id, u.name]));
+      return this.ownerNames;
+    } catch {
+      return new Map();
+    }
   }
 
   /** List lead sources (v1 /leadSources). No pagination. */

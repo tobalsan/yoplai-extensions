@@ -252,6 +252,7 @@ describe("PipedriveClient.getDeal", () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes("/deals/123")) return jsonResponse(dealBody);
+      if (url.includes("/v1/users")) return jsonResponse({ data: [] });
       throw new Error(`unexpected url ${url}`);
     });
 
@@ -260,7 +261,8 @@ describe("PipedriveClient.getDeal", () => {
     expect(detail.normalized_extra_fields).toBeUndefined();
     expect(detail.normalized_field_metadata).toBeUndefined();
     expect(detail.deal_url).toBe("https://acme.pipedrive.com/deal/123");
-    // Only the deal was fetched — no dealFields call.
-    expect(spy).toHaveBeenCalledTimes(1);
+    // Deal + owner-name lookup only — no dealFields call.
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls.some(([u]) => String(u).includes("dealFields"))).toBe(false);
   });
 });

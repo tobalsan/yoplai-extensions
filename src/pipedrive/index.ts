@@ -31,6 +31,7 @@ const RefreshFieldRegistryParamsSchema = z.object({}).strict();
 const ValidateParamsSchema = z.object({}).strict();
 const ListLeadLabelsParamsSchema = z.object({}).strict();
 const ListLeadSourcesParamsSchema = z.object({}).strict();
+const ListUsersParamsSchema = z.object({}).strict();
 
 export default defineToolExtension({
   id: "pipedrive",
@@ -50,6 +51,8 @@ To work with a deal's attachments (e.g. the sales-uploaded Excel/doc that holds 
 pipedrive_get_deal reads one deal in full detail: all standard fields plus custom fields resolved to human-readable labels and typed values (never raw hash keys). output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata; "lean" strips them. Custom-field schema is available via pipedrive_list_deal_fields / pipedrive_get_deal_field (key → label/options/type, v1 offset pagination via start/limit) — use these for invoice mapping and required-field logic. Field metadata is cached locally; pipedrive_refresh_field_registry forces a rebuild if the schema changed.
 
 For the Leads inbox (separate from the deals pipeline): pipedrive_list_leads lists leads with a lean projection, filterable by archived_status (default "not_archived"), owner_id, person_id, organization_id, and filter_id — page with next_cursor until it is null. pipedrive_get_lead reads one lead in full detail by its UUID id, with custom fields normalized the same way as get_deal (leads share the deal custom-field schema); output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata, "lean" strips them. pipedrive_search_leads does free-text search across title/notes/custom_fields (set via the fields param). Use pipedrive_list_lead_labels and pipedrive_list_lead_sources to resolve a lead's label_ids and source_name to human-readable names. pipedrive_list_lead_notes and pipedrive_list_lead_activities read a lead's notes and activity history (activities via the v2 API) — same next_cursor pagination as the deal ops. A lead's person_id / organization_id resolve via the existing pipedrive_get_person / pipedrive_get_organization. Note: Pipedrive's API exposes no email threads or changelog for leads — history is limited to notes and activities.
+
+Deals from pipedrive_list_deals and pipedrive_get_deal include owner_name (the owner's display name) next to user_id. pipedrive_list_users lists every user (id, name, email, active) to resolve any other owner/user id to a name.
 
 pipedrive_validate verifies auth and API reachability.`,
   configSchema: PipedriveConfigSchema,
@@ -282,6 +285,15 @@ pipedrive_validate verifies auth and API reachability.`,
         parameters: ListLeadLabelsParamsSchema,
         execute: async () => {
           return await client.listLeadLabels();
+        },
+      },
+      {
+        name: "list_users",
+        description:
+          "List all Pipedrive users ({ id, name, email, active }), including deactivated ones — use to resolve owner/user ids (deal user_id, lead owner_id, activity user_id) to names. Returns { users, count }. No pagination.",
+        parameters: ListUsersParamsSchema,
+        execute: async () => {
+          return await client.listUsers();
         },
       },
       {

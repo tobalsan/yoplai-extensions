@@ -91,6 +91,7 @@ export const DealSummarySchema = z.object({
   person_id: z.number().nullable(),
   org_id: z.number().nullable(),
   user_id: z.number().nullable(),
+  owner_name: z.string().nullable(),
   expected_close_date: z.string().nullable(),
   won_time: z.string().nullable(),
   deal_url: z.string().nullable(),
@@ -535,6 +536,7 @@ export const DealDetailSchema = z.object({
   person_id: z.number().nullable(),
   org_id: z.number().nullable(),
   user_id: z.number().nullable(),
+  owner_name: z.string().nullable(),
   expected_close_date: z.string().nullable(),
   add_time: z.string().nullable(),
   update_time: z.string().nullable(),
@@ -782,6 +784,21 @@ export type ListLeadLabelsResult = z.infer<typeof ListLeadLabelsResultSchema>;
 
 export const LeadSourceSchema = z.object({ name: z.string() });
 export type LeadSource = z.infer<typeof LeadSourceSchema>;
+
+/** A Pipedrive user (deal/lead owner), from v1 /users. */
+export const UserSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  email: z.string().nullable(),
+  active: z.boolean(),
+});
+export type User = z.infer<typeof UserSchema>;
+
+export const ListUsersResultSchema = z.object({
+  users: z.array(UserSchema),
+  count: z.number(),
+});
+export type ListUsersResult = z.infer<typeof ListUsersResultSchema>;
 
 export const ListLeadSourcesResultSchema = z.object({
   sources: z.array(LeadSourceSchema),
