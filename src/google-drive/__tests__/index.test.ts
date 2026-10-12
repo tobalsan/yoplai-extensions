@@ -9,12 +9,12 @@ function stubDriveFailure(status: number, body: string): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status, headers: { "retry-after": "0" } })));
 }
 
-describe("googleDrive extension", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
+describe("googleDrive extension", () => {
   it("exports the expected extension contract with an oauth requirement", () => {
     expect(extension.id).toBe("googleDrive");
     expect(extension.displayName).toBe("Google Drive");
