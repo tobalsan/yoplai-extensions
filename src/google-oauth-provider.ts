@@ -29,3 +29,21 @@ export const googleOAuthProvider: OAuthProviderDescriptor = {
     return undefined;
   },
 };
+
+const RATE_LIMIT_PATTERN = /rate.?limit|quota|daily.?limit/i;
+
+/**
+ * Maps a Google API failure to a reconnect/retry reason; undefined when the
+ * status isn't an auth or throttling failure. `rateLimitPattern` lets a caller
+ * recognise extra 403 throttling markers.
+ */
+export function googleFailureReason(
+  status: number,
+  body: string,
+  rateLimitPattern: RegExp = RATE_LIMIT_PATTERN
+): "expired" | "rate_limited" | "insufficient_scope" | undefined {
+  if (status === 401) return "expired";
+  if (status === 429) return "rate_limited";
+  if (status === 403) return rateLimitPattern.test(body) ? "rate_limited" : "insufficient_scope";
+  return undefined;
+}

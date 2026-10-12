@@ -619,13 +619,22 @@ export class PipedriveClient {
       return detail;
     }
 
-    const extraFields = flattenCustomFields(raw);
+    return this.withNormalizedFields(detail, flattenCustomFields(raw));
+  }
+
+  /**
+   * Attach normalized custom fields to a detail. Registry unavailable (fetch
+   * failed, no cache): return standard fields rather than fail the whole read;
+   * custom fields simply stay unresolved.
+   */
+  private async withNormalizedFields<T extends DealDetail | LeadDetail>(
+    detail: T,
+    extraFields: Record<string, unknown>,
+  ): Promise<T> {
     let registry = null;
     try {
       registry = await this.registry.get();
     } catch {
-      // Registry unavailable (fetch failed, no cache): return standard fields
-      // rather than fail the whole read. Custom fields simply stay unresolved.
       registry = null;
     }
 
@@ -1107,9 +1116,16 @@ export class PipedriveClient {
 
   /** Read a deal's notes (author + timestamps) via the v1 /notes endpoint. */
   async listDealNotes(params: ListDealNotesParams): Promise<ListDealNotesResult> {
+    return this.listNotes({ deal_id: params.deal_id }, params);
+  }
+
+  private async listNotes(
+    owner: { deal_id: number } | { lead_id: string },
+    params: { limit?: number; cursor?: string },
+  ): Promise<ListDealNotesResult> {
     const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
     const query: Record<string, string | number> = {
-      deal_id: params.deal_id,
+      ...owner,
       limit,
       start: decodeStartCursor(params.cursor),
       sort: "add_time DESC",
@@ -1186,20 +1202,10 @@ export class PipedriveClient {
       return detail;
     }
 
-    const extraFields = flattenLeadCustomFields(raw);
-    let registry = null;
-    try {
-      registry = await this.registry.get();
-    } catch {
-      // Registry unavailable (fetch failed, no cache): return standard fields
-      // rather than fail the whole read. Custom fields simply stay unresolved.
-      registry = null;
-    }
-
-    const normalized = normalizeCustomFields(extraFields, registry);
-    detail.normalized_extra_fields = normalized.normalized_extra_fields;
-    detail.normalized_field_metadata = normalized.normalized_field_metadata;
-    return detail;
+    return this.withNormalizedFields(
+      detail,
+      flattenCustomFields(raw, STANDARD_LEAD_KEYS),
+    );
   }
 
   private toLeadSummary(raw: RawLead): LeadSummary {
@@ -1357,22 +1363,7 @@ export class PipedriveClient {
 
   /** Read a lead's notes (author + timestamps) via the v1 /notes endpoint. */
   async listLeadNotes(params: ListLeadNotesParams): Promise<ListDealNotesResult> {
-    const limit = Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
-    const query: Record<string, string | number> = {
-      lead_id: params.lead_id,
-      limit,
-      start: decodeStartCursor(params.cursor),
-      sort: "add_time DESC",
-    };
-
-    const data = await this.requestJson("GET", "v1", "notes", query);
-    const rows = Array.isArray(data.data) ? (data.data as RawNote[]) : [];
-    const notes = rows.map((raw) => toNote(raw));
-    return {
-      notes,
-      next_cursor: nextStartCursor(data.additional_data),
-      count: notes.length,
-    };
+    return this.listNotes({ lead_id: params.lead_id }, params);
   }
 
   /** Read a lead's activity history via the v2 /activities endpoint. */
@@ -1446,12 +1437,15 @@ const STANDARD_DEAL_KEYS = new Set([
  * nests custom fields under `custom_fields`; v1 spreads hash keys at the top
  * level. This merges both, dropping the nested container and standard keys.
  */
-export function flattenCustomFields(raw: RawDeal): Record<string, unknown> {
+export function flattenCustomFields(
+  raw: RawDeal | RawLead,
+  standardKeys: ReadonlySet<string> = STANDARD_DEAL_KEYS,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
   // v1-style: hash keys spread at the top level.
   for (const [key, value] of Object.entries(raw)) {
-    if (!STANDARD_DEAL_KEYS.has(key)) out[key] = value;
+    if (!standardKeys.has(key)) out[key] = value;
   }
 
   // v2-style: nested `custom_fields` container.
@@ -1491,26 +1485,9 @@ const STANDARD_LEAD_KEYS = new Set([
   "custom_fields",
 ]);
 
-/**
- * Flatten a raw lead's custom fields into a single hash-key map, mirroring
- * flattenCustomFields for deals. Leads share the deal custom-field schema:
- * hash-key custom fields are spread at the top level of the lead payload.
- */
+/** Flatten a raw lead's custom fields; leads share the deal custom-field schema. */
 export function flattenLeadCustomFields(raw: RawLead): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(raw)) {
-    if (!STANDARD_LEAD_KEYS.has(key)) out[key] = value;
-  }
-
-  const nested = raw.custom_fields;
-  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-    for (const [key, value] of Object.entries(nested as Record<string, unknown>)) {
-      out[key] = value;
-    }
-  }
-
-  return out;
+  return flattenCustomFields(raw, STANDARD_LEAD_KEYS);
 }
 
 /**
@@ -1607,20 +1584,7 @@ function toNote(raw: RawNote): Note {
 }
 
 function toActivity(raw: RawActivity): Activity {
-  return {
-    id: raw.id,
-    deal_id: toNumberOrNull(raw.deal_id),
-    type: toStringOrNull(raw.type),
-    subject: toStringOrNull(raw.subject),
-    note: toStringOrNull(raw.note),
-    done: toBooleanOrNull(raw.done),
-    due_date: toStringOrNull(raw.due_date),
-    due_time: toStringOrNull(raw.due_time),
-    marked_as_done_time: toStringOrNull(raw.marked_as_done_time),
-    user_id: toNumberOrNull(raw.user_id),
-    add_time: toStringOrNull(raw.add_time),
-    update_time: toStringOrNull(raw.update_time),
-  };
+  return toActivityProjection(raw, raw.id, raw.user_id);
 }
 
 /**
@@ -1628,8 +1592,16 @@ function toActivity(raw: RawActivity): Activity {
  * same lean Activity projection as toActivity.
  */
 function toActivityV2(raw: RawActivityV2): Activity {
+  return toActivityProjection(raw, toNumberOrNull(raw.id) ?? 0, raw.owner_id);
+}
+
+function toActivityProjection(
+  raw: RawActivity | RawActivityV2,
+  id: number,
+  userId: unknown,
+): Activity {
   return {
-    id: toNumberOrNull(raw.id) ?? 0,
+    id,
     deal_id: toNumberOrNull(raw.deal_id),
     type: toStringOrNull(raw.type),
     subject: toStringOrNull(raw.subject),
@@ -1638,7 +1610,7 @@ function toActivityV2(raw: RawActivityV2): Activity {
     due_date: toStringOrNull(raw.due_date),
     due_time: toStringOrNull(raw.due_time),
     marked_as_done_time: toStringOrNull(raw.marked_as_done_time),
-    user_id: toNumberOrNull(raw.owner_id),
+    user_id: toNumberOrNull(userId),
     add_time: toStringOrNull(raw.add_time),
     update_time: toStringOrNull(raw.update_time),
   };

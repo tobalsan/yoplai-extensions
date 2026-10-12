@@ -8,6 +8,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import type { McpServerConfig } from "./loader.js";
+import { withTimeout as withDeadline } from "./timeout.js";
+
+const withTimeout = <T>(task: Promise<T>, message: string): Promise<T> => withDeadline(task, 10_000, message);
 
 export interface McpToolDefinition {
   server: string;
@@ -53,21 +56,18 @@ export interface McpClientHandle {
   getServerInfo?(): McpServerLabel;
 }
 
-async function withTimeout<T>(task: Promise<T>, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 10_000); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
 export type McpTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
 export type McpNotConnectedResponse = (server: string) => unknown;
+
+export interface McpClientManagerOptions {
+  clientFactory?: McpClientFactory;
+  tokenProvider?: McpTokenProvider;
+  onAuthFailure?: (server: McpServerConfig) => Promise<boolean>;
+  requiresOAuth?: (server: McpServerConfig) => Promise<boolean>;
+  notConnectedResponse?: McpNotConnectedResponse;
+  onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>;
+}
 
 export interface McpServerError {
   server: string;
@@ -166,15 +166,21 @@ export class McpClientManager {
   private readonly recoveries = new Map<string, Promise<boolean>>();
   private connecting?: Promise<void>;
 
-  constructor(
-    private readonly servers: McpServerConfig[],
-    private readonly clientFactory: McpClientFactory = SdkMcpClientHandle.connect,
-    private readonly tokenProvider?: McpTokenProvider,
-    private readonly onAuthFailure?: (server: McpServerConfig) => Promise<boolean>,
-    private readonly requiresOAuth?: (server: McpServerConfig) => Promise<boolean>,
-    private readonly notConnectedResponse?: McpNotConnectedResponse,
-    private readonly onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>
-  ) {}
+  private readonly clientFactory: McpClientFactory;
+  private readonly tokenProvider?: McpTokenProvider;
+  private readonly onAuthFailure?: (server: McpServerConfig) => Promise<boolean>;
+  private readonly requiresOAuth?: (server: McpServerConfig) => Promise<boolean>;
+  private readonly notConnectedResponse?: McpNotConnectedResponse;
+  private readonly onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>;
+
+  constructor(private readonly servers: McpServerConfig[], options: McpClientManagerOptions = {}) {
+    this.clientFactory = options.clientFactory ?? SdkMcpClientHandle.connect;
+    this.tokenProvider = options.tokenProvider;
+    this.onAuthFailure = options.onAuthFailure;
+    this.requiresOAuth = options.requiresOAuth;
+    this.notConnectedResponse = options.notConnectedResponse;
+    this.onUnrecoverableAuthFailure = options.onUnrecoverableAuthFailure;
+  }
 
   async connect(): Promise<void> {
     if (this.connecting) return this.connecting;

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { raceTimeout, withTimeout } from "./timeout.js";
 
 import {
   discoverOAuthServerInfo,
@@ -309,8 +310,7 @@ export class McpOAuthStore {
     const key = JSON.stringify([this.key(agent, server, scope), connection.connectedAt]);
     const lookup = this.accountLookups.get(key) ?? this.startAccountLookup(key, agent, server, url, scope, connection);
     // Slow lookups keep running and persist; this request just returns without the label.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    return Promise.race([lookup, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); })]).finally(() => clearTimeout(timer));
+    return raceTimeout(lookup, waitMs);
   }
 
   private startAccountLookup(key: string, agent: string, server: string, url: string, scope: CredentialScope, connection: OAuthConnection): Promise<string | undefined> {
@@ -328,14 +328,13 @@ export class McpOAuthStore {
     return lookup;
   }
 
-  async accessToken(agent: string, server: string, skewMs = 60_000, requesterUserId?: string, exactScope?: CredentialScope): Promise<string | undefined> {
-    const exact = exactScope ? await this.read(agent, server, exactScope) : undefined;
-    const resolved = exactScope ? (exact ? { connection: exact, scope: exactScope } : undefined) : await this.resolve(agent, server, requesterUserId);
-    const connection = resolved?.connection;
-    if (!connection) return undefined;
-    if (connection.state === "needs_reconnect") return undefined;
-    if (!connection.expiresAt || Date.parse(connection.expiresAt) - Date.now() > skewMs) return connection.tokens.access_token;
-    const scope = resolved!.scope;
+  private async resolveScoped(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope): Promise<{ connection: OAuthConnection; scope: CredentialScope } | undefined> {
+    if (!exactScope) return this.resolve(agent, server, requesterUserId);
+    const exact = await this.read(agent, server, exactScope);
+    return exact ? { connection: exact, scope: exactScope } : undefined;
+  }
+
+  private async dedupedRefresh(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope): Promise<string | undefined> {
     const key = JSON.stringify(this.key(agent, server, scope));
     const activeRefresh = this.refreshes.get(key);
     if (activeRefresh) return activeRefresh;
@@ -349,23 +348,17 @@ export class McpOAuthStore {
     }
   }
 
-  async refreshAccessToken(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope): Promise<string | undefined> {
-    const exact = exactScope ? await this.read(agent, server, exactScope) : undefined;
-    const resolved = exactScope ? (exact ? { connection: exact, scope: exactScope } : undefined) : await this.resolve(agent, server, requesterUserId);
-    const connection = resolved?.connection;
-    if (!connection) return undefined;
-    const scope = resolved!.scope;
-    const key = JSON.stringify(this.key(agent, server, scope));
-    const activeRefresh = this.refreshes.get(key);
-    if (activeRefresh) return activeRefresh;
+  async accessToken(agent: string, server: string, skewMs = 60_000, requesterUserId?: string, exactScope?: CredentialScope): Promise<string | undefined> {
+    const resolved = await this.resolveScoped(agent, server, requesterUserId, exactScope);
+    if (!resolved || resolved.connection.state === "needs_reconnect") return undefined;
+    const { connection, scope } = resolved;
+    if (!connection.expiresAt || Date.parse(connection.expiresAt) - Date.now() > skewMs) return connection.tokens.access_token;
+    return this.dedupedRefresh(agent, server, connection, scope);
+  }
 
-    const refresh = this.refreshConnection(agent, server, connection, scope);
-    this.refreshes.set(key, refresh);
-    try {
-      return await refresh;
-    } finally {
-      this.refreshes.delete(key);
-    }
+  async refreshAccessToken(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope): Promise<string | undefined> {
+    const resolved = await this.resolveScoped(agent, server, requesterUserId, exactScope);
+    return resolved ? this.dedupedRefresh(agent, server, resolved.connection, resolved.scope) : undefined;
   }
 
   private async refreshConnection(
@@ -382,14 +375,10 @@ export class McpOAuthStore {
       return undefined;
     }
     try {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const tokens = await Promise.race([
-        (async () => {
-          const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
-          return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token! });
-        })(),
-        new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("OAuth refresh timed out")), 10_000); }),
-      ]).finally(() => { if (timeout) clearTimeout(timeout); });
+      const tokens = await withTimeout((async () => {
+        const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
+        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token! });
+      })(), 10_000, "OAuth refresh timed out");
       const latest = await unchanged();
       if (!latest) return undefined;
       await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);

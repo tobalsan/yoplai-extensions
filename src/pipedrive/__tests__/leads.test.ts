@@ -192,6 +192,19 @@ describe("PipedriveClient.getLead", () => {
     expect(detail.normalized_field_metadata?.Priority).toEqual({ key: "hashP", type: "enum" });
   });
 
+  it("full mode returns no resolved custom fields when the field schema fetch fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const u = String(input);
+      if (u.includes("/leads/adf21080-0e10-11eb-879b-05d71fb426ec")) return jsonResponse(leadBody);
+      return jsonResponse({ success: false, error: "nope" }, 404);
+    });
+
+    const detail = await createLeadClient().getLead({ id: "adf21080-0e10-11eb-879b-05d71fb426ec" });
+
+    expect(detail.title).toBe("Jane Doe lead");
+    expect(detail.normalized_extra_fields).toEqual({});
+  });
+
   it("lean mode strips normalized fields and never fetches the field schema", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const u = String(input);

@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import { defineToolExtension } from "../tool-extension.js";
 import { googleOAuthProvider } from "../google-oauth-provider.js";
 import { CalendarClient, CalendarRequestError } from "./client.js";
@@ -9,6 +10,20 @@ const messages: Record<string, string> = {
   insufficient_scope: "Calendar permission was not approved. Reconnect Google Calendar and approve Calendar access.",
   wrong_account: "Google Calendar does not match the connected Google account. Reconnect the intended account.",
   rate_limited: "Google Calendar is temporarily rate limited. Wait and retry.",
+};
+type ToolName = keyof typeof toolSchemas;
+type Action = (client: CalendarClient, params: unknown, account: string) => Promise<unknown>;
+type Actions = { [K in ToolName]: (client: CalendarClient, params: z.infer<(typeof toolSchemas)[K]>, account: string) => Promise<unknown> };
+const actions: Actions = {
+  list_calendars: (client, params) => client.list_calendars(params),
+  list_events: (client, params) => client.list_events(params),
+  get_event: (client, params) => client.get_event(params),
+  search_events: (client, params) => client.search_events(params),
+  suggest_time: (client, params) => client.suggest_time(params),
+  create_event: (client, params, account) => client.create_event(params, account),
+  update_event: (client, params) => client.update_event(params),
+  delete_event: (client, params) => client.delete_event(params),
+  respond_to_event: (client, params, account) => client.respond_to_event(params, account),
 };
 const readOnly = new Set(["list_calendars", "list_events", "get_event", "search_events", "suggest_time"]);
 export default defineToolExtension({
@@ -23,7 +38,10 @@ export default defineToolExtension({
     const oauth = config.oauth;
     const connected = oauth?.connected ? oauth : undefined;
     const client = connected ? new CalendarClient(connected.accessToken) : undefined;
-    const disconnected = (reason: string, message = messages[reason], agentId?: string) => ({ connected: false, provider: "google", reason, message, authorizeUrl: oauth && !oauth.connected ? oauth.authorizeUrl ?? (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents") : (agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents") });
+    const disconnected = (reason: string, message = messages[reason], agentId?: string) => {
+      const fallbackUrl = agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents";
+      return { connected: false, provider: "google", reason, message, authorizeUrl: (oauth && !oauth.connected ? oauth.authorizeUrl : undefined) ?? fallbackUrl };
+    };
     return Object.entries(toolSchemas).map(([name, schema]) => ({
       name,
       description: schema.description ?? name,
@@ -35,19 +53,7 @@ export default defineToolExtension({
         try {
           const account = await client.account();
           if (connected.account && account.toLowerCase() !== connected.account.toLowerCase()) return disconnected("wrong_account", messages.wrong_account, context?.agentId);
-          let result: unknown;
-          switch (name) {
-            case "list_calendars": result = await client.list_calendars(toolSchemas.list_calendars.parse(params)); break;
-            case "list_events": result = await client.list_events(toolSchemas.list_events.parse(params)); break;
-            case "get_event": result = await client.get_event(toolSchemas.get_event.parse(params)); break;
-            case "search_events": result = await client.search_events(toolSchemas.search_events.parse(params)); break;
-            case "suggest_time": result = await client.suggest_time(toolSchemas.suggest_time.parse(params)); break;
-            case "create_event": result = await client.create_event(toolSchemas.create_event.parse(params), account); break;
-            case "update_event": result = await client.update_event(toolSchemas.update_event.parse(params)); break;
-            case "delete_event": result = await client.delete_event(toolSchemas.delete_event.parse(params)); break;
-            case "respond_to_event": result = await client.respond_to_event(toolSchemas.respond_to_event.parse(params), account); break;
-            default: throw new Error("Unknown Calendar tool");
-          }
+          const result = await (actions[name as ToolName] as Action)(client, params, account);
           return { ...(result as object), account: account || connected.account || null };
         } catch (error) {
           if (error instanceof CalendarRequestError && error.reason !== "request_failed") return disconnected(error.reason, messages[error.reason], context?.agentId);

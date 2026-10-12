@@ -19,15 +19,16 @@ The source directory is the build/install directory name. The extension ID is th
 | `firecrawl` | `firecrawl` | Web scraping, crawling, mapping, and extraction | API key |
 | [`google-calendar`](src/google-calendar/README.md) | `googleCalendar` | Google Calendar events and availability | Host-managed Google OAuth |
 | [`gmail`](src/gmail/README.md) | `gmail` | Gmail drafts, threads, and labels | Host-managed Google OAuth |
-| [`google-drive`](src/google-drive/README.md) | `googleDrive` | Read-only Drive search and text extraction | Host-managed Google OAuth |
+| [`google-drive`](src/google-drive/README.md) | `googleDrive` | Drive search and text extraction; file and folder writes are opt-in (`allowWrite`) | Host-managed Google OAuth |
 | `gsheets` | `gsheets` | Spreadsheet discovery, reads, row appends, and range updates | Google service-account JSON |
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
-| [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Explicit `enabled: true` and `mcp.json` |
+| [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Agent `mcp.json` or non-empty shared catalog |
 | [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | OAuth (`oauth.providers.notion`, default) or integration API key |
 | [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads and guarded draft/quote writes | API token |
+| `people-enrich` | `people_enrich` | Find people and companies, then enrich with profiles, work emails, and mobile numbers (paid; mobile needs cost approval) | API key |
 | `pipedrive` | `pipedrive` | Read-only Pipedrive CRM and custom-field normalization | Company domain and API token |
-| `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, and internal notes | Subdomain, email, and API key |
+| `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, and internal notes | OAuth (`oauth.providers.zendesk`, default) or subdomain, email, and API key |
 
 In multi-user Yoplai, credentials can be personal or shared: each user can add their own API token or Google connection (**Just me**, used only for their requests), and admins set the shared fallback (**Whole team**). Requests use the requester's own credentials first, then the team's.
 

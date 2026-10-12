@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { googleFailureReason } from "../google-oauth-provider.js";
 import { toolSchemas } from "./models.js";
 import { eventResult, mapEvent, resolveTime, type EventResource } from "./event-mapper.js";
 import { suggestSlots, type BusyInterval } from "./time-suggester.js";
@@ -105,7 +106,7 @@ export class CalendarClient {
         if (!response.ok) {
           let reason = "", detail = "";
           try { const payload = await response.json() as { error?: { status?: string; message?: string; errors?: Array<{ reason?: string }> } }; reason = `${payload.error?.status ?? ""} ${payload.error?.errors?.map(item => item.reason).join(" ") ?? ""}`; detail = [reason.trim(), payload.error?.message].filter(Boolean).join(" - "); } catch { /* An empty response still maps from its HTTP status. */ }
-          const mapped = response.status === 401 ? "expired" : response.status === 429 || response.status === 403 && /rate.?limit|quota|daily.?limit|resource_exhausted/i.test(reason) ? "rate_limited" : response.status === 403 ? "insufficient_scope" : "request_failed";
+          const mapped = googleFailureReason(response.status, reason, /rate.?limit|quota|daily.?limit|resource_exhausted/i) ?? "request_failed";
           throw new CalendarRequestError(response.status, mapped, detail);
         }
         if (response.status === 204) return {};

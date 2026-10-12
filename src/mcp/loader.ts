@@ -36,17 +36,17 @@ const StdioServerSchema = z
   })
   .passthrough();
 
+export const McpStaticOAuthClientSchema = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1).optional(),
+  scopes: z.array(z.string()).optional(),
+});
+
 const HttpServerSchema = z
   .object({
     url: z.string().url(),
     headers: z.record(z.string()).optional(),
-    oauth: z
-      .object({
-        clientId: z.string().min(1),
-        clientSecret: z.string().min(1).optional(),
-        scopes: z.array(z.string()).optional(),
-      })
-      .optional(),
+    oauth: McpStaticOAuthClientSchema.optional(),
   })
   .passthrough();
 
