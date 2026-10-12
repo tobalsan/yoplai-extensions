@@ -75,6 +75,14 @@ export const ListDealsParamsSchema = z
     ),
     sort_by: z.string().min(1).optional().describe('Field to sort by (default "update_time").'),
     sort_direction: SortDirectionSchema.optional().describe('Sort direction (default "desc").'),
+    custom_fields: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(15)
+      .optional()
+      .describe(
+        'Custom fields to include on every deal, by field name (case-insensitive, e.g. "Forecast category") or hash key; max 15. Returned per deal under custom_fields with human-readable values.',
+      ),
   })
   .strict();
 export type ListDealsParams = z.infer<typeof ListDealsParamsSchema>;
@@ -94,7 +102,10 @@ export const DealSummarySchema = z.object({
   owner_name: z.string().nullable(),
   expected_close_date: z.string().nullable(),
   won_time: z.string().nullable(),
+  local_won_date: z.string().nullable(),
+  local_close_date: z.string().nullable(),
   deal_url: z.string().nullable(),
+  custom_fields: z.record(z.unknown()).optional(),
 });
 export type DealSummary = z.infer<typeof DealSummarySchema>;
 

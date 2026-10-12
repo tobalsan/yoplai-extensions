@@ -421,6 +421,8 @@ export class PipedriveClient {
     if (params.person_id !== undefined) query.person_id = params.person_id;
     if (params.org_id !== undefined) query.org_id = params.org_id;
     if (params.user_id !== undefined) query.user_id = params.user_id;
+    const fieldKeys = params.custom_fields ? await this.resolveDealFieldKeys(params.custom_fields) : null;
+    if (fieldKeys) query.custom_fields = fieldKeys.join(",");
 
     const matches: DealSummary[] = [];
     let cursor = params.cursor ?? null;
@@ -440,7 +442,9 @@ export class PipedriveClient {
       for (const raw of page.data) {
         if (hasRange && !inCloseDateRange(raw.expected_close_date, from, to)) continue;
         if (hasWonRange && !inWonDateRange(raw.won_time, wonFrom, wonTo)) continue;
-        matches.push(this.toDealSummary(raw));
+        const summary = this.toDealSummary(raw);
+        if (fieldKeys) summary.custom_fields = await this.pickCustomFields(raw, fieldKeys);
+        matches.push(summary);
       }
 
       cursor = page.nextCursor;
@@ -696,6 +700,8 @@ export class PipedriveClient {
       owner_name: null,
       expected_close_date: toStringOrNull(raw.expected_close_date),
       won_time: toStringOrNull(raw.won_time),
+      local_won_date: toStringOrNull(raw.local_won_date),
+      local_close_date: toStringOrNull(raw.local_close_date),
       deal_url: `https://${this.domain}.pipedrive.com/deal/${raw.id}`,
     };
   }
@@ -1283,6 +1289,31 @@ export class PipedriveClient {
       update_time: toStringOrNull(raw.update_time),
     }));
     return { labels, count: labels.length };
+  }
+
+  /** Resolve custom-field names (case-insensitive) or hash keys to hash keys; unknown entries throw. */
+  private async resolveDealFieldKeys(fields: string[]): Promise<string[]> {
+    const byKey = (await this.registry.get()).by_key;
+    const byName = new Map(Object.entries(byKey).map(([key, meta]) => [meta.name.toLowerCase(), key]));
+    const unknown: string[] = [];
+    const keys = fields.map((field) => {
+      const key = field in byKey ? field : byName.get(field.toLowerCase());
+      if (!key) unknown.push(field);
+      return key ?? "";
+    });
+    if (unknown.length) {
+      throw new PipedriveValidationError(
+        `Unknown deal custom field(s): ${unknown.join(", ")}. Use pipedrive_list_deal_fields to find names.`,
+      );
+    }
+    return [...new Set(keys)];
+  }
+
+  /** Requested custom fields of one raw deal, keyed by field name with human-readable values. */
+  private async pickCustomFields(raw: RawDeal, keys: string[]): Promise<Record<string, unknown>> {
+    const flat = flattenCustomFields(raw);
+    const picked = Object.fromEntries(keys.map((key) => [key, flat[key] ?? null]));
+    return normalizeCustomFields(picked, await this.registry.get()).normalized_extra_fields;
   }
 
   /** List all company users (v1 /users), active and deactivated. No pagination. */

@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PipedriveClient, inCloseDateRange, inWonDateRange } from "../client.js";
@@ -129,10 +132,12 @@ describe("PipedriveClient.listDeals", () => {
       owner_name: "Jane Owner",
       expected_close_date: "2025-07-15",
       won_time: null,
+      local_won_date: null,
+      local_close_date: null,
       deal_url: "https://acme.pipedrive.com/deal/42",
     });
     // Lean: no raw/custom fields leak through.
-    expect(Object.keys(result.deals[0])).toHaveLength(14);
+    expect(Object.keys(result.deals[0])).toHaveLength(16);
   });
 
   it("passes an explicit cursor through and returns the native next_cursor without a range", async () => {
@@ -905,5 +910,55 @@ describe("PipedriveClient users and owner_name", () => {
 
     expect(result.deals[0].user_id).toBe(30);
     expect(result.deals[0].owner_name).toBeNull();
+  });
+});
+
+describe("PipedriveClient.listDeals custom_fields", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const FC = "1e0f8400816db3aa4b28ef5f139b8980b85457a4";
+  const fields = [
+    { id: 1, key: FC, name: "Forecast category", field_type: "enum", options: [{ id: 707, label: "Pipeline" }, { id: 708, label: "Upside" }] },
+    { id: 2, key: "abc123", name: "Region", field_type: "varchar" },
+  ];
+  function mockApi() {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const u = String(input);
+      if (u.includes("dealFields")) return jsonResponse({ data: fields, additional_data: { pagination: { more_items_in_collection: false } } });
+      if (u.includes("/v1/users")) return jsonResponse({ data: [] });
+      return jsonResponse({
+        data: [rawDeal({ id: 1, custom_fields: { [FC]: 708 }, local_won_date: "2026-09-01" }), rawDeal({ id: 2, custom_fields: { [FC]: null } })],
+        additional_data: {},
+      });
+    });
+  }
+  function client(): PipedriveClient {
+    const cachePath = path.join(os.tmpdir(), `pd-registry-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    return new PipedriveClient({ apiToken: "t", domain: "acme", timeoutMs: 1_000, registryOptions: { cachePath } });
+  }
+
+  it("resolves names to keys, sends them server-side, and returns readable values", async () => {
+    const spy = mockApi();
+    const result = await client().listDeals({ custom_fields: ["forecast category"] });
+
+    const dealsCall = spy.mock.calls.map(([u]) => new URL(String(u))).find((u) => u.pathname === "/api/v2/deals");
+    expect(dealsCall?.searchParams.get("custom_fields")).toBe(FC);
+    expect(result.deals[0].custom_fields).toEqual({ "Forecast category": "Upside" });
+    expect(result.deals[0].local_won_date).toBe("2026-09-01");
+    expect(result.deals[1].custom_fields).toEqual({ "Forecast category": null });
+  });
+
+  it("rejects unknown field names before calling the deals endpoint", async () => {
+    const spy = mockApi();
+    await expect(client().listDeals({ custom_fields: ["Nope"] })).rejects.toThrow(/Unknown deal custom field\(s\): Nope/);
+    expect(spy.mock.calls.some(([u]) => new URL(String(u)).pathname === "/api/v2/deals")).toBe(false);
+  });
+
+  it("omits custom_fields when not requested", async () => {
+    mockApi();
+    const result = await client().listDeals({});
+    expect(result.deals[0].custom_fields).toBeUndefined();
   });
 });

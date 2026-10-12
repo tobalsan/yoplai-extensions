@@ -52,7 +52,7 @@ pipedrive_get_deal reads one deal in full detail: all standard fields plus custo
 
 For the Leads inbox (separate from the deals pipeline): pipedrive_list_leads lists leads with a lean projection, filterable by archived_status (default "not_archived"), owner_id, person_id, organization_id, and filter_id — page with next_cursor until it is null. pipedrive_get_lead reads one lead in full detail by its UUID id, with custom fields normalized the same way as get_deal (leads share the deal custom-field schema); output_type "full" (default) includes normalized_extra_fields + normalized_field_metadata, "lean" strips them. pipedrive_search_leads does free-text search across title/notes/custom_fields (set via the fields param). Use pipedrive_list_lead_labels and pipedrive_list_lead_sources to resolve a lead's label_ids and source_name to human-readable names. pipedrive_list_lead_notes and pipedrive_list_lead_activities read a lead's notes and activity history (activities via the v2 API) — same next_cursor pagination as the deal ops. A lead's person_id / organization_id resolve via the existing pipedrive_get_person / pipedrive_get_organization. Note: Pipedrive's API exposes no email threads or changelog for leads — history is limited to notes and activities.
 
-Deals from pipedrive_list_deals and pipedrive_get_deal include owner_name (the owner's display name) next to user_id. pipedrive_list_users lists every user (id, name, email, active) to resolve any other owner/user id to a name.
+To read custom fields (e.g. "Forecast category") across many deals, pass custom_fields: ["Forecast category", ...] to pipedrive_list_deals: one paged list call returns them per deal with readable values — never loop pipedrive_get_deal for this. Every listed deal also carries local_won_date and local_close_date.\n\nDeals from pipedrive_list_deals and pipedrive_get_deal include owner_name (the owner's display name) next to user_id. pipedrive_list_users lists every user (id, name, email, active) to resolve any other owner/user id to a name.
 
 pipedrive_validate verifies auth and API reachability.`,
   configSchema: PipedriveConfigSchema,
@@ -74,7 +74,7 @@ pipedrive_validate verifies auth and API reachability.`,
       {
         name: "list_deals",
         description:
-          "List deals from the Pipedrive pipeline with a lean per-deal projection (now including won_time). Supports server-side filters (status [default open], pipeline_id, stage_id, person_id, org_id, user_id), an expected-close-date range (expected_close_from / expected_close_to, YYYY-MM-DD), and a won-date range (won_from / won_to, YYYY-MM-DD, filters on won_time). Returns { deals, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.",
+          "List deals from the Pipedrive pipeline with a lean per-deal projection (now including won_time). Supports server-side filters (status [default open], pipeline_id, stage_id, person_id, org_id, user_id), an expected-close-date range (expected_close_from / expected_close_to, YYYY-MM-DD), and a won-date range (won_from / won_to, YYYY-MM-DD, filters on won_time). Optional custom_fields (names like 'Forecast category' or hash keys, max 15) adds those fields per deal with readable values. Returns { deals, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.",
         parameters: ListDealsParamsSchema,
         execute: async (params) => {
           const parsed = ListDealsParamsSchema.parse(params);
