@@ -991,7 +991,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       name: tool.name,
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
-      execute: async (params: unknown, execution?: { userId?: string }) => {
+      execute: async (params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => {
         let now: string | undefined;
         try { now = mergedForAgent(agent, context.config)?.fingerprint; } catch { /* treated as changed */ }
         if (now !== revision) {
@@ -999,13 +999,13 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         }
         const definition = definitions[index]!;
         const target = loaded.servers.find((server) => server.name === definition.server)!;
-        if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target)) return tool.execute(params);
+        if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target)) return tool.execute(params, execution);
         const requester = execution?.userId;
         const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
         const fresh = await getManager(key, agent.id, [target], requester);
         try {
           const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
-          if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params));
+          if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params, { signal: execution?.signal }));
           return connectResponse(target.name, execution, { connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
         } finally { managers.delete(key); await fresh.close(); }
       },
@@ -1016,7 +1016,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         name: `mcp__${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__not_connected`,
         description: `Connect ${server.name} from the agent's extensions before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: async (_params: unknown, execution?: { userId?: string }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
+        execute: async (_params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
       };
     }));
     return [...connectedTools, ...disconnected.filter((tool): tool is NonNullable<typeof tool> => Boolean(tool))];

@@ -114,3 +114,7 @@ Every agent lists catalog servers on its extensions page, even without its own `
 On hosts exposing `ctx.credentialConnect`, missing or unusable MCP credentials return the requester’s single connect link. The host verifies Slack ownership and pairs if needed before invoking MCP authorization; the grant is always **Just me**. MCP uses the trusted `mcpServers` configuration key (`server.name`) as the hook’s `targetId`, binds it and the personal owner to expiring CSRF/PKCE state, and confirms the original thread only after storing the grant. Provider denial, exchange failure, invalid/expired state, and replay never confirm. Existing team connections and hosts without the hook keep their normal behavior.
 
 This uses the context hook introduced by platform ALG-458 (PR #129, commit `2c56a866`); it does not import or bundle `@yoplai/shared`. Live Slack and Claap consent must be verified in a real workspace after deployment.
+
+## Cancellation
+
+MCP tool calls forward the gateway's cancellation signal to the MCP client, including OAuth refresh retries. Cancellation is cooperative: a timeout does not prove that a remote side effect did not happen.

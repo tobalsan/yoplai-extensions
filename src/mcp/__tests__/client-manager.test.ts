@@ -9,6 +9,72 @@ afterEach(() => {
 });
 
 describe("McpClientManager", () => {
+  it("forwards RequestOptions to the SDK and rejects with the abort reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("401 cancelled by gateway");
+    const sdkCall = vi.fn((_request: unknown, _schema: unknown, options: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+    }));
+    vi.doMock("@modelcontextprotocol/sdk/client/index.js", () => ({ Client: class {
+      async connect() {}
+      callTool = sdkCall;
+    } }));
+    vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+      getDefaultEnvironment: () => ({}), StdioClientTransport: class { async close() {} },
+    }));
+    vi.resetModules();
+    const { SdkMcpClientHandle } = await import("../client-manager.js");
+    const recover = vi.fn(async () => true);
+    const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
+      clientFactory: SdkMcpClientHandle.connect, onAuthFailure: recover,
+    });
+    await manager.connect();
+    const pending = manager.invokeTool("local", "sleep", {}, { signal: controller.signal });
+    const rejected = expect(pending).rejects.toBe(reason);
+    expect(sdkCall).toHaveBeenCalledWith({ name: "sleep", arguments: {} }, undefined, { signal: controller.signal });
+    controller.abort(reason);
+    await rejected;
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("does not call the transport for a pre-aborted signal", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+    const callTool = vi.fn(async () => undefined);
+    const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
+      clientFactory: async () => ({ async listTools() { return []; }, callTool, async close() {} }),
+    });
+    await manager.connect();
+    await expect(manager.invokeTool("local", "sleep", {}, { signal: controller.signal })).rejects.toBe(reason);
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("does not recover an AbortError whose message mentions 401", async () => {
+    const reason = new DOMException("401 Unauthorized cancellation", "AbortError");
+    const recover = vi.fn(async () => true);
+    const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
+      clientFactory: async () => ({ async listTools() { return []; }, async callTool() { throw reason; }, async close() {} }),
+      onAuthFailure: recover,
+    });
+    await manager.connect();
+    await expect(manager.invokeTool("local", "sleep", {})).rejects.toBe(reason);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("does not retry when the signal aborts during OAuth recovery", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during refresh");
+    const callTool = vi.fn(async () => { throw new Error("401 Unauthorized"); });
+    const manager = new McpClientManager([{ type: "http", name: "local", url: "https://example.test/mcp" }], {
+      clientFactory: async () => ({ async listTools() { return []; }, callTool, async close() {} }),
+      onAuthFailure: async () => { controller.abort(reason); return true; },
+    });
+    await manager.connect();
+    await expect(manager.invokeTool("local", "sleep", {}, { signal: controller.signal })).rejects.toBe(reason);
+    expect(callTool).toHaveBeenCalledOnce();
+  });
+
   it("lists and invokes healthy servers while recording failed servers", async () => {
     const calls: string[] = [];
     const manager = new McpClientManager(
@@ -174,11 +240,14 @@ describe("McpClientManager", () => {
 
   it("refreshes and reconnects an expired OAuth transport after a tool 401", async () => {
     const tokens = ["expired-token", "fresh-token"];
+    const signal = new AbortController().signal;
+    const signals: (AbortSignal | undefined)[] = [];
     const factory = vi.fn(async (_server, token): Promise<McpClientHandle> => ({
       async listTools() {
         return [{ server: "claap", name: "search", description: "", inputSchema: {} }];
       },
-      async callTool() {
+      async callTool(_name, _args, options) {
+        signals.push(options?.signal);
         if (token === "expired-token") throw new Error("401 Unauthorized");
         return { token };
       },
@@ -196,7 +265,8 @@ describe("McpClientManager", () => {
     await manager.connect();
     await manager.listTools();
 
-    await expect(manager.invoke("claap__search", {})).resolves.toEqual({ token: "fresh-token" });
+    await expect(manager.invokeTool("claap", "search", {}, { signal })).resolves.toEqual({ token: "fresh-token" });
+    expect(signals).toEqual([signal, signal]);
     expect(refresh).toHaveBeenCalledOnce();
     expect(factory).toHaveBeenNthCalledWith(1, expect.anything(), "expired-token");
     expect(factory).toHaveBeenNthCalledWith(2, expect.anything(), "fresh-token");
