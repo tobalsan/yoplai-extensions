@@ -27,6 +27,8 @@
 
 ### Fixed
 
+- MCP tool calls forward gateway cancellation signals, including OAuth refresh retries (ALG-488).
+
 - MCP disconnect removes the selected credential immediately; provider revocation runs in the background so outages cannot block team fallback (ALG-460).
 
 - MCP OAuth refusals in Slack offer one personal connect link, reusing host pairing and confirming the originating thread after authorization.

@@ -31,7 +31,9 @@ export function normalizeTypeLists(schema: unknown): unknown {
 export function adaptMcpTools(
   tools: McpToolDefinition[],
   manager: McpClientManager
-): ToolExtensionTool[] {
+): (Omit<ToolExtensionTool, "execute"> & {
+  execute(params: unknown, execution?: { agentId?: string; userId?: string; signal?: AbortSignal }): Promise<unknown>;
+})[] {
   const seen = new Map<string, number>();
   return tools.map((tool) => {
     const baseName = getMcpExtensionToolName(tool);
@@ -43,7 +45,7 @@ export function adaptMcpTools(
       description: tool.description,
       parameters: z.object({}).passthrough(),
       jsonSchemaParameters: normalizeTypeLists(tool.inputSchema) as Record<string, unknown>,
-      execute: async (params) => manager.invokeTool(tool.server, tool.name, params),
+      execute: async (params, execution) => manager.invokeTool(tool.server, tool.name, params, { signal: execution?.signal }),
     };
   });
 }

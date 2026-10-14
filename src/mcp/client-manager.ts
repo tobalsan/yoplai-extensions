@@ -50,7 +50,7 @@ export function labelFromServerInfo(info: { name?: string; title?: string; descr
 
 export interface McpClientHandle {
   listTools(): Promise<McpToolDefinition[]>;
-  callTool(name: string, args: unknown): Promise<unknown>;
+  callTool(name: string, args: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   close(): Promise<void>;
   getServerIcon?(): string | undefined;
   getServerInfo?(): McpServerLabel;
@@ -104,11 +104,11 @@ export class SdkMcpClientHandle implements McpClientHandle {
     }));
   }
 
-  async callTool(name: string, args: unknown): Promise<unknown> {
+  async callTool(name: string, args: unknown, options?: { signal?: AbortSignal }): Promise<unknown> {
     return await this.client.callTool({
       name,
       arguments: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
-    });
+    }, undefined, { signal: options?.signal });
   }
 
   getServerIcon(): string | undefined {
@@ -320,22 +320,26 @@ export class McpClientManager {
     return await this.invokeTool(target.server, target.tool, args);
   }
 
-  async invokeTool(server: string, tool: string, args: unknown): Promise<unknown> {
+  async invokeTool(server: string, tool: string, args: unknown, options?: { signal?: AbortSignal }): Promise<unknown> {
+    if (options?.signal?.aborted) throw options.signal.reason ?? new Error("MCP call cancelled");
     const client = this.clients.get(server);
     if (!client) {
       throw new Error(`MCP server "${server}" is not connected`);
     }
     try {
-      return await client.callTool(tool, args);
+      return await client.callTool(tool, args, options);
     } catch (error) {
+      if (options?.signal?.aborted) throw options.signal.reason ?? error;
       const config = this.servers.find((item) => item.name === server);
       if (config && isUnauthorized(error)) {
         if (await this.recover(config)) {
           const refreshed = this.clients.get(server);
           if (refreshed) {
             try {
-              return await refreshed.callTool(tool, args);
+              if (options?.signal?.aborted) throw options.signal.reason ?? new Error("MCP call cancelled");
+              return await refreshed.callTool(tool, args, options);
             } catch (retryError) {
+              if (options?.signal?.aborted) throw options.signal.reason ?? retryError;
               if (isUnauthorized(retryError)) {
                 await this.onUnrecoverableAuthFailure?.(config);
                 this.recordError(server, retryError);
@@ -373,6 +377,7 @@ export class McpClientManager {
 }
 
 function isUnauthorized(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return false;
   const message = error instanceof Error ? error.message : String(error);
   return /\b401\b|unauthori[sz]ed/i.test(message);
 }

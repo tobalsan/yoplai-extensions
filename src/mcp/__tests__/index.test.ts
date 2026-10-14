@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { McpOAuthStore } from "../oauth.js";
+import { credentials } from "./credentials.js";
 import extension, { createMcpExtension } from "../index.js";
 
 /** Re-imports the module so its module-level "warned once" flag starts fresh. */
@@ -149,8 +151,39 @@ describe("mcp extension", () => {
       name: "mcp__local__echo",
       parameters: { type: "object", properties: { text: { type: "string" } } },
     });
-    await expect(tools[0]?.execute({ text: "hi" })).resolves.toEqual({ text: "hi" });
+    const signal = new AbortController().signal;
+    await expect(tools[0]?.execute({ text: "hi" }, { signal })).resolves.toEqual({ text: "hi" });
+    expect(callTool).toHaveBeenCalledWith("echo", { text: "hi" }, { signal });
     await mockedExtension.stop();
+  });
+
+  it("forwards the signal through the fresh OAuth-aware manager", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-agent-"));
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
+      local: { url: "https://example.test/mcp", oauth: { clientId: "client" } },
+    } }));
+    const host = credentials();
+    const store = new McpOAuthStore(agentDir, "http://localhost/callback", host, () => ({ url: "https://example.test/mcp", clientId: "client" }));
+    await store.write("casey", "local", {
+      client: { client_id: "client", redirect_uris: ["http://localhost/callback"] },
+      tokens: { access_token: "test-token", token_type: "Bearer" }, connectedAt: new Date().toISOString(),
+      authorizationServerUrl: "https://auth.example.test", state: "connected",
+    });
+    const callTool = vi.fn(async (_name: string, args: unknown) => args);
+    const factory = vi.fn(async () => ({
+      async listTools() { return [{ server: "local", name: "echo", description: "Echo", inputSchema: { type: "object" } }]; },
+      callTool, async close() {},
+    }));
+    const mockedExtension = createMcpExtension(factory);
+    const agent = { id: "casey", workspaceDir: agentDir, extensions: { mcp: {} } };
+    await mockedExtension.start({ credentials: host, getDataDir: () => agentDir, getConfig: () => ({}), getAgent: () => agent });
+    try {
+      const tools = await mockedExtension.getAgentTools(agent, { config: {} });
+      const signal = new AbortController().signal;
+      await expect(tools[0]?.execute({ text: "hi" }, { signal })).resolves.toEqual({ text: "hi" });
+      expect(callTool).toHaveBeenCalledWith("echo", { text: "hi" }, { signal });
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally { await mockedExtension.stop(); }
   });
 
   it("uses a valid object schema for disconnected OAuth MCP placeholders", async () => {

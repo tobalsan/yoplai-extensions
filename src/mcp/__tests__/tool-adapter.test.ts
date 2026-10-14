@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { McpClientManager } from "../client-manager.js";
 import { adaptMcpTools, getMcpExtensionToolName, normalizeTypeLists } from "../tool-adapter.js";
@@ -38,10 +38,13 @@ describe("MCP tool adapter", () => {
       q: "bug",
       extra: true,
     });
-    await expect(adapted[0]?.execute({ q: "bug" })).resolves.toEqual({
+    const signal = new AbortController().signal;
+    const invoke = vi.spyOn(manager, "invokeTool");
+    await expect(adapted[0]?.execute({ q: "bug" }, { signal })).resolves.toEqual({
       name: "search/issues",
       args: { q: "bug" },
     });
+    expect(invoke).toHaveBeenCalledWith("github-main", "search/issues", { q: "bug" }, { signal });
   });
 
   it("suffixes sanitized name collisions", () => {
