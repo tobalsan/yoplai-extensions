@@ -1,14 +1,17 @@
 import { z } from "zod";
 
-import { PipedriveClient } from "./client.js";
+import { PipedriveWriteClient } from "./write-client.js";
 import {
   DownloadFileParamsSchema,
-  EntityByIdParamsSchema,
+  GetActivityParamsSchema,
   GetDealFieldParamsSchema,
   GetDealParamsSchema,
   GetLeadParamsSchema,
+  GetOrganizationParamsSchema,
+  GetPersonParamsSchema,
   GetPipelineParamsSchema,
   GetStageParamsSchema,
+  ListContactFieldsParamsSchema,
   ListDealActivitiesParamsSchema,
   ListDealDiscountsParamsSchema,
   ListDealFieldsParamsSchema,
@@ -24,21 +27,57 @@ import {
   PipedriveConfigSchema,
   SearchDealsParamsSchema,
   SearchLeadsParamsSchema,
+  SearchOrganizationsParamsSchema,
+  SearchPersonsParamsSchema,
 } from "./models.js";
-import { defineToolExtension } from "../tool-extension.js";
+import {
+  ConvertLeadToDealParamsSchema,
+  CreateActivityParamsSchema,
+  CreateDealParamsSchema,
+  CreateLeadLabelParamsSchema,
+  CreateLeadParamsSchema,
+  CreateNoteParamsSchema,
+  CreateOrganizationParamsSchema,
+  CreatePersonParamsSchema,
+  UpdateActivityParamsSchema,
+  UpdateDealParamsSchema,
+  UpdateLeadLabelParamsSchema,
+  UpdateLeadParamsSchema,
+  UpdateOrganizationParamsSchema,
+  UpdatePersonParamsSchema,
+} from "./write-models.js";
+import { defineToolExtension, type ToolExtensionTool } from "../tool-extension.js";
 
 const RefreshFieldRegistryParamsSchema = z.object({}).strict();
 const ValidateParamsSchema = z.object({}).strict();
 const ListLeadLabelsParamsSchema = z.object({}).strict();
 const ListLeadSourcesParamsSchema = z.object({}).strict();
 const ListUsersParamsSchema = z.object({}).strict();
+const ListActivityTypesParamsSchema = z.object({}).strict();
+
+const WRITE_GUIDANCE = `Pipedrive is READ-ONLY by default. The write tools (pipedrive_create_*, pipedrive_update_*, pipedrive_convert_lead_to_deal) and the supporting reads pipedrive_search_persons, pipedrive_search_organizations, pipedrive_list_contact_fields, pipedrive_get_activity and pipedrive_list_activity_types exist only when allowWrite is enabled for this agent. If they are not in your tool list, diagnose and propose changes but never claim an update was applied.
+
+When the write tools are available:
+1. Read the record first (pipedrive_get_lead / get_deal / get_person with output_type "full" / get_organization with output_type "full") and resolve ids, owners (pipedrive_list_users), lead labels and custom-field options.
+2. Search before creating and reuse what exists. Creates run their own duplicate check: a duplicate_candidates result means NOTHING was created — pick an existing record or supply distinguishing data. There is no force option; never work around it.
+3. For creates, field edits, owner changes, archiving, conversion and label-definition changes show the human the exact before→after and the affected records, get an explicit OK, and only then set confirmed: true. A batch approval covers only the listed records and changes (typically up to ~20, each as its own call). Stop the batch on any conflict, unknown outcome or audit failure and report what was completed.
+4. Updates need changes plus expected_before with the current value of EVERY changed field. A conflict result means someone changed the record — nothing was written; re-read, re-show the diff and obtain renewed approval.
+5. requested_by is the human who asked (from the conversation; ask if unknown). Never use the agent name, the record owner or the shared token owner.
+6. Notes and routine activity logging (pipedrive_create_note, create_activity, update_activity) may proceed without extra approval when directly requested; assigning/changing an activity owner needs confirmed: true. The tool adds the agent marker itself.
+7. Never delete or merge. Archive with update_lead is_archived: true. Flag suspected duplicates with a note naming the duplicate ids (and optionally an existing "Possible duplicate" label via update_lead); never merge.
+8. Lists such as label_ids, emails, phones and set fields are full replacements: include every entry to keep. null clears only where allowed. VAT/SIREN are organization custom fields (custom_fields, see pipedrive_list_contact_fields).
+9. Report outcomes accurately: applied, unchanged, reused, conflict, duplicate_candidates, pending (conversion — resume with its conversion_id, never start it again) and partial success (applied but trace_status failed/unknown — repair with pipedrive_create_note using trace_repair, or, when trace_repair is null on a conversion, resume with its conversion_id; never repeat the change).
+10. confirmed: true is not verified by the tool; it records that the human approved.`;
 
 export default defineToolExtension({
   id: "pipedrive",
   displayName: "Pipedrive",
   description:
-    "Read-only Pipedrive data access for the sales pipeline: token-bounded deal retrieval with server-side filters and an expected-close-date range narrowing.",
-  systemPrompt: `Use this extension to read the Pipedrive sales pipeline (read-only). pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". For deals WON in a given period, filter by won date with won_from / won_to (compared against each deal's won_time) and set status to "won" — the expected close date is NOT the won date, so never use expected_close_* to answer "won in month X". Every returned deal includes won_time. To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
+    "Pipedrive data access for the sales pipeline, read-only by default: token-bounded deal retrieval with server-side filters and an expected-close-date range narrowing. Optional confirmed record changes (leads, deals, persons, organizations, notes, activities, lead labels, lead conversion) when allowWrite is enabled.",
+  configFieldTitles: { allowWrite: "Enable creating and updating CRM records" },
+  systemPrompt: `Use this extension to read the Pipedrive sales pipeline. ${WRITE_GUIDANCE}
+
+pipedrive_list_deals returns a lean, token-bounded projection — narrow the pipeline with server-side filters (status, pipeline_id, stage_id, person_id, org_id, user_id) and the expected_close_from / expected_close_to date range (YYYY-MM-DD) rather than pulling every deal. status defaults to "open". For deals WON in a given period, filter by won date with won_from / won_to (compared against each deal's won_time) and set status to "won" — the expected close date is NOT the won date, so never use expected_close_* to answer "won in month X". Every returned deal includes won_time. To page through a large filtered result, pass the returned next_cursor back as cursor until next_cursor is null; every deal is returned exactly once with no gaps or duplicates.
 
 pipedrive_search_deals does free-text title search (e.g. term "try & buy" to flag Try-and-Buy deals for invoicing exclusion) with optional status/person_id/org_id filters. pipedrive_list_deal_notes and pipedrive_list_deal_activities read a single deal's notes (with author/timestamp) and activity history. These use the same next_cursor pagination — page until next_cursor is null.
 
@@ -59,9 +98,9 @@ pipedrive_validate verifies auth and API reachability.`,
   requiredSecrets: ["apiToken"],
   createTools(config) {
     const resolved = PipedriveConfigSchema.parse(config.merged);
-    const client = new PipedriveClient(resolved);
+    const client = new PipedriveWriteClient(resolved);
 
-    return [
+    const readTools: ToolExtensionTool[] = [
       {
         name: "validate",
         description: "Validate Pipedrive auth and API reachability via users/me.",
@@ -201,21 +240,21 @@ pipedrive_validate verifies auth and API reachability.`,
       {
         name: "get_organization",
         description:
-          "Resolve a deal's org_id to the organization entity for an invoice customer: { id, name, address, vat, siren, org_url }. address is structured (formatted_address + parts) or null; vat/siren are null unless stored on the org. Throws a typed not-found error when the organization does not exist.",
-        parameters: EntityByIdParamsSchema,
+          "Resolve a deal's org_id to the organization entity for an invoice customer: { id, name, address, vat, siren, org_url }. address is structured (formatted_address + parts) or null; vat/siren are null unless stored on the org. output_type \"full\" additionally returns owner_id, add/update time and normalized custom fields + metadata (use before update_organization). Throws a typed not-found error when the organization does not exist.",
+        parameters: GetOrganizationParamsSchema,
         execute: async (params) => {
-          const parsed = EntityByIdParamsSchema.parse(params);
-          return await client.getOrganization(parsed.id);
+          const parsed = GetOrganizationParamsSchema.parse(params);
+          return await client.getOrganization(parsed.id, parsed.output_type);
         },
       },
       {
         name: "get_person",
         description:
-          "Resolve a deal's person_id to the primary contact entity: { id, name, first_name, last_name, job_title, org_id, emails, phones, primary_email, primary_phone, person_url }. emails/phones are labelled with a primary flag. Throws a typed not-found error when the person does not exist.",
-        parameters: EntityByIdParamsSchema,
+          "Resolve a deal's person_id to the primary contact entity: { id, name, first_name, last_name, job_title, org_id, emails, phones, primary_email, primary_phone, person_url }. emails/phones are labelled with a primary flag. output_type \"full\" additionally returns owner_id, add/update time and normalized custom fields + metadata (use before update_person). Throws a typed not-found error when the person does not exist.",
+        parameters: GetPersonParamsSchema,
         execute: async (params) => {
-          const parsed = EntityByIdParamsSchema.parse(params);
-          return await client.getPerson(parsed.id);
+          const parsed = GetPersonParamsSchema.parse(params);
+          return await client.getPerson(parsed.id, parsed.output_type);
         },
       },
       {
@@ -325,6 +364,137 @@ pipedrive_validate verifies auth and API reachability.`,
           return await client.listLeadActivities(parsed);
         },
       },
+    ];
+    if (resolved.allowWrite !== true) return readTools;
+
+    const tool = <T extends z.ZodTypeAny>(
+      name: string,
+      description: string,
+      parameters: T,
+      run: (params: z.infer<T>) => Promise<unknown>,
+    ): ToolExtensionTool => ({
+      name,
+      description,
+      parameters,
+      execute: async (params) => run(parameters.parse(params)),
+    });
+
+    return [
+      ...readTools,
+      tool(
+        "search_persons",
+        "Free-text person search (v2) by name/email/phone/notes/custom fields (fields param), optional exact_match and organization_id. Use before create_person. Returns { persons: [{ id, name, emails, phones, org_id, org_name }], next_cursor, count }; page with next_cursor.",
+        SearchPersonsParamsSchema,
+        (params) => client.searchPersons(params),
+      ),
+      tool(
+        "search_organizations",
+        "Free-text organization search (v2) by name/address/notes/custom fields (fields param), optional exact_match. Use before create_organization (also to find an org by VAT/SIREN with fields custom_fields). Returns { organizations: [{ id, name, address }], next_cursor, count }.",
+        SearchOrganizationsParamsSchema,
+        (params) => client.searchOrganizations(params),
+      ),
+      tool(
+        "list_contact_fields",
+        "List person or organization custom-field definitions (entity person|organization; key → name/type/options). Use to find exact keys and option labels (e.g. VAT, SIREN) for custom_fields on person/organization writes. v1 offset pagination via start/limit.",
+        ListContactFieldsParamsSchema,
+        (params) => client.listContactFields(params),
+      ),
+      tool(
+        "get_activity",
+        "Read one activity by id (v2): type, subject, note, done, due date/time, duration, owner and linked lead/deal/person/org. Use before update_activity.",
+        GetActivityParamsSchema,
+        (params) => client.getActivity(params),
+      ),
+      tool(
+        "list_activity_types",
+        "List activity types ({ id, name, key_string, active }); use key_string as the type for create_activity / update_activity.",
+        ListActivityTypesParamsSchema,
+        () => client.listActivityTypes(),
+      ),
+      tool(
+        "create_lead",
+        "HARD CONFIRMATION. Create a lead (v1). Needs title and at least one of person_id / organization_id; optional owner_id, label_ids, value {amount,currency}, expected_close_date, custom_fields. Searches existing leads (incl. archived) first: a duplicate_candidates result means nothing was created. Writes a 'Created by agent' trace note. Requires requested_by and confirmed: true after human approval.",
+        CreateLeadParamsSchema,
+        (params) => client.createLead(params),
+      ),
+      tool(
+        "update_lead",
+        "HARD CONFIRMATION. Update a lead (v1 PATCH): title, value, expected_close_date, owner_id, label_ids (full replacement), person_id/organization_id (cannot remove both), is_archived (archive/unarchive; never deletes), custom_fields. Pass changes plus expected_before (current value of every changed field); a conflict result means nothing was written. Leaves a trace note listing before→after. Requires requested_by and confirmed: true.",
+        UpdateLeadParamsSchema,
+        (params) => client.updateLead(params),
+      ),
+      tool(
+        "create_deal",
+        "HARD CONFIRMATION. Create a deal (v2). Needs title; optional person_id, org_id, owner_id, stage_id/pipeline_id (stage must belong to the pipeline), value, currency, expected_close_date, custom_fields. Searches same-title deals first (duplicate_candidates = nothing created). Writes a 'Created by agent' trace note. Requires requested_by and confirmed: true.",
+        CreateDealParamsSchema,
+        (params) => client.createDeal(params),
+      ),
+      tool(
+        "update_deal",
+        "HARD CONFIRMATION. Update a deal (v2 PATCH): title, value/currency, stage_id/pipeline_id (a pipeline change needs a stage of it), expected_close_date (can be set, not cleared), status open|won|lost (+ lost_reason with lost; never deleted), owner_id, person_id, org_id, custom_fields. Pass changes plus expected_before for every changed field; conflict = nothing written. Leaves a trace note. Requires requested_by and confirmed: true.",
+        UpdateDealParamsSchema,
+        (params) => client.updateDeal(params),
+      ),
+      tool(
+        "create_person",
+        "HARD CONFIRMATION. Create a person (v2). Needs name; optional org_id, owner_id, emails, phones ({value,label?,primary?}), custom_fields. Searches by every email, phone and the name first (duplicate_candidates = nothing created; link the existing person instead). Writes a 'Created by agent' trace note. Requires requested_by and confirmed: true.",
+        CreatePersonParamsSchema,
+        (params) => client.createPerson(params),
+      ),
+      tool(
+        "update_person",
+        "HARD CONFIRMATION. Update a person (v2 PATCH): name, org_id (null unlinks), owner_id, emails/phones (full replacement lists), custom_fields. Read with get_person output_type full first; pass changes plus expected_before for every changed field. Leaves a trace note. Requires requested_by and confirmed: true.",
+        UpdatePersonParamsSchema,
+        (params) => client.updatePerson(params),
+      ),
+      tool(
+        "create_organization",
+        "HARD CONFIRMATION. Create an organization (v2). Needs name; optional owner_id, address {value,...}, custom_fields (VAT/SIREN are custom fields). Searches by name and by VAT/SIREN values first (duplicate_candidates = nothing created). Writes a 'Created by agent' trace note. Requires requested_by and confirmed: true.",
+        CreateOrganizationParamsSchema,
+        (params) => client.createOrganization(params),
+      ),
+      tool(
+        "update_organization",
+        "HARD CONFIRMATION. Update an organization (v2 PATCH): name, owner_id, address (full replacement; compared by formatted line and each component), custom_fields incl. VAT/SIREN. Read with get_organization output_type full first; pass changes plus expected_before for every changed field. Leaves a trace note. Requires requested_by and confirmed: true.",
+        UpdateOrganizationParamsSchema,
+        (params) => client.updateOrganization(params),
+      ),
+      tool(
+        "create_note",
+        "SOFT CONFIRMATION. Add a note to exactly one of lead_id, deal_id, person_id, org_id. Content is plain text (HTML-escaped); the tool adds the '[Agent-made for <requested_by>]' marker. An identical existing note is reused (returns its id), so this is also how to repair a missing trace note. Requires requested_by.",
+        CreateNoteParamsSchema,
+        (params) => client.createNote(params),
+      ),
+      tool(
+        "create_activity",
+        "SOFT CONFIRMATION (owner assignment is hard: confirmed: true). Create an activity (v2) linked to a lead/deal/person/org with subject, type (see list_activity_types), optional due_date, due_time (HH:MM), duration (HH:MM), note, done, owner_id. The subject gets an '[Agent]' prefix and the note an agent marker. An identical existing activity is reused. Requires requested_by.",
+        CreateActivityParamsSchema,
+        (params) => client.createActivity(params),
+      ),
+      tool(
+        "update_activity",
+        "SOFT CONFIRMATION (owner change is hard: confirmed: true). Update an activity (v2 PATCH): subject, type, due_date, due_time, duration, note, done (use this to complete), owner_id. Pass changes plus expected_before for every changed field. The agent marker is kept once and the change is recorded in the activity note. Requires requested_by.",
+        UpdateActivityParamsSchema,
+        (params) => client.updateActivity(params),
+      ),
+      tool(
+        "convert_lead_to_deal",
+        "HARD CONFIRMATION. Convert a lead into a deal in stage_id (v2 convert; pipeline_id optional). Checks expected_update_time against the lead, blocks if a same-title deal exists for the same person/org, then polls the conversion. Results: converted (trace note 'Lead → Deal' written on the deal), pending (call again with conversion_id to resume; never restarts), failed. Requires requested_by and confirmed: true.",
+        ConvertLeadToDealParamsSchema,
+        (params) => client.convertLeadToDeal(params),
+      ),
+      tool(
+        "create_lead_label",
+        "HARD CONFIRMATION. Create a lead label (name, color green|blue|red|yellow|purple|gray). An existing label with the same name is reused. Label definitions are GLOBAL and cannot own notes, so audit_lead_id (a lead) receives the trace note. Requires requested_by and confirmed: true.",
+        CreateLeadLabelParamsSchema,
+        (params) => client.createLeadLabel(params),
+      ),
+      tool(
+        "update_lead_label",
+        "HARD CONFIRMATION. Rename or recolor a lead label. WARNING: this changes the label on EVERY lead that uses it. Pass changes plus expected_before; audit_lead_id (a lead) receives the trace note. Requires requested_by and confirmed: true.",
+        UpdateLeadLabelParamsSchema,
+        (params) => client.updateLeadLabel(params),
+      ),
     ];
   },
 });

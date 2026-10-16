@@ -33,6 +33,10 @@ export const PipedriveConfigSchema = z.object({
     .describe(
       'Your company\'s Pipedrive subdomain (the part before ".pipedrive.com" in your Pipedrive URL), e.g. "acme" for acme.pipedrive.com.',
     ),
+  allowWrite: z
+    .boolean()
+    .default(false)
+    .describe("Allow confirmed Pipedrive record changes and agent-tagged notes/activities."),
 });
 export type PipedriveConfig = z.infer<typeof PipedriveConfigSchema>;
 
@@ -836,3 +840,142 @@ export const ListLeadActivitiesParamsSchema = z
   })
   .strict();
 export type ListLeadActivitiesParams = z.infer<typeof ListLeadActivitiesParamsSchema>;
+
+// ---------------------------------------------------------------------------
+// Supporting reads for write workflows (people/org search, contact fields,
+// activity lookup). Mounted only when allowWrite is enabled, except the
+// optional output_type on get_person / get_organization.
+// ---------------------------------------------------------------------------
+
+const ContactOutputTypeSchema = z.enum(["full", "lean"]);
+
+export const GetPersonParamsSchema = z
+  .object({
+    id: PositiveIntFromInput.describe("The person ID to resolve (a deal's person_id)."),
+    output_type: ContactOutputTypeSchema.optional().describe(
+      'Omit for the original projection. "full" adds owner_id, add/update time and normalized custom fields + metadata (needed before update_person); "lean" is the original projection.',
+    ),
+  })
+  .strict();
+export type GetPersonParams = z.infer<typeof GetPersonParamsSchema>;
+
+export const GetOrganizationParamsSchema = z
+  .object({
+    id: PositiveIntFromInput.describe("The organization ID to resolve (a deal's org_id)."),
+    output_type: ContactOutputTypeSchema.optional().describe(
+      'Omit for the original projection. "full" adds owner_id, add/update time and normalized custom fields + metadata (needed before update_organization); "lean" is the original projection.',
+    ),
+  })
+  .strict();
+export type GetOrganizationParams = z.infer<typeof GetOrganizationParamsSchema>;
+
+const FullContactExtras = {
+  owner_id: z.number().nullable().optional(),
+  add_time: z.string().nullable().optional(),
+  update_time: z.string().nullable().optional(),
+  normalized_extra_fields: z.record(z.unknown()).optional(),
+  normalized_field_metadata: z.record(NormalizedFieldMetadataSchema).optional(),
+};
+export const PersonDetailSchema = PersonSchema.extend(FullContactExtras);
+export type PersonDetail = z.infer<typeof PersonDetailSchema>;
+export const OrganizationDetailSchema = OrganizationSchema.extend(FullContactExtras);
+export type OrganizationDetail = z.infer<typeof OrganizationDetailSchema>;
+
+const SearchFieldsParam = (allowed: string) =>
+  z
+    .string()
+    .min(1)
+    .optional()
+    .describe(`Comma-separated fields to search (${allowed}); default searches all of them.`);
+
+export const SearchPersonsParamsSchema = z
+  .object({
+    term: z.string().min(2, "Search term must be at least 2 characters").describe("Search term (min 2 chars)."),
+    fields: SearchFieldsParam("name, email, phone, notes, custom_fields"),
+    exact_match: z.boolean().optional().describe("Only exact, case-insensitive matches (server-side)."),
+    organization_id: PositiveIntFromInput.optional().describe("Restrict to one organization."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type SearchPersonsParams = z.infer<typeof SearchPersonsParamsSchema>;
+
+export const PersonSearchMatchSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  emails: z.array(z.string()),
+  phones: z.array(z.string()),
+  org_id: z.number().nullable(),
+  org_name: z.string().nullable(),
+  result_score: z.number().nullable(),
+  person_url: z.string(),
+});
+export type PersonSearchMatch = z.infer<typeof PersonSearchMatchSchema>;
+
+export const SearchPersonsResultSchema = z.object({
+  persons: z.array(PersonSearchMatchSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type SearchPersonsResult = z.infer<typeof SearchPersonsResultSchema>;
+
+export const SearchOrganizationsParamsSchema = z
+  .object({
+    term: z.string().min(2, "Search term must be at least 2 characters").describe("Search term (min 2 chars)."),
+    fields: SearchFieldsParam("name, address, notes, custom_fields"),
+    exact_match: z.boolean().optional().describe("Only exact, case-insensitive matches (server-side)."),
+    ...CursorPaginationParams,
+  })
+  .strict();
+export type SearchOrganizationsParams = z.infer<typeof SearchOrganizationsParamsSchema>;
+
+export const OrganizationSearchMatchSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  address: z.string().nullable(),
+  result_score: z.number().nullable(),
+  org_url: z.string(),
+});
+export type OrganizationSearchMatch = z.infer<typeof OrganizationSearchMatchSchema>;
+
+export const SearchOrganizationsResultSchema = z.object({
+  organizations: z.array(OrganizationSearchMatchSchema),
+  next_cursor: z.string().nullable(),
+  count: z.number(),
+});
+export type SearchOrganizationsResult = z.infer<typeof SearchOrganizationsResultSchema>;
+
+export const ListContactFieldsParamsSchema = z
+  .object({
+    entity: z.enum(["person", "organization"]).describe("Which contact entity's custom-field definitions to list."),
+    start: z.number().int().nonnegative().optional().describe("Offset for v1 pagination (default 0)."),
+    limit: z.number().int().positive().max(500).optional().describe("Page size, 1-500 (default 100)."),
+  })
+  .strict();
+export type ListContactFieldsParams = z.infer<typeof ListContactFieldsParamsSchema>;
+
+export const GetActivityParamsSchema = z
+  .object({ id: PositiveIntFromInput.describe("Activity ID to read.") })
+  .strict();
+export type GetActivityParams = z.infer<typeof GetActivityParamsSchema>;
+
+export const ActivityDetailSchema = ActivitySchema.extend({
+  lead_id: z.string().nullable(),
+  person_id: z.number().nullable(),
+  org_id: z.number().nullable(),
+  duration: z.string().nullable(),
+});
+export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
+
+export const ActivityTypeSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  key_string: z.string(),
+  active: z.boolean(),
+});
+export type ActivityType = z.infer<typeof ActivityTypeSchema>;
+
+export const ListActivityTypesResultSchema = z.object({
+  types: z.array(ActivityTypeSchema),
+  count: z.number(),
+});
+export type ListActivityTypesResult = z.infer<typeof ListActivityTypesResultSchema>;

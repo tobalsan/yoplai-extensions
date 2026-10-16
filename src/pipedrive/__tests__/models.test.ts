@@ -25,7 +25,7 @@ import {
 describe("PipedriveConfigSchema", () => {
   it("accepts a valid config", () => {
     const parsed = PipedriveConfigSchema.parse({ apiToken: "tok", domain: "acme" });
-    expect(parsed).toEqual({ apiToken: "tok", domain: "acme" });
+    expect(parsed).toEqual({ apiToken: "tok", domain: "acme", allowWrite: false });
   });
 
   it("rejects a missing/empty token with a clear error", () => {

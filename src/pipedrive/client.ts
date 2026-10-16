@@ -3,15 +3,14 @@ import {
   PipedriveConnectionError,
   PipedriveError,
   PipedriveNotFoundError,
+  PipedriveOutcomeUnknownError,
   PipedriveRateLimitError,
   PipedriveServerError,
   PipedriveValidationError,
 } from "./errors.js";
 import {
-  FieldRegistryStore,
-  type FieldRegistryStoreOptions,
-} from "./field-registry.js";
-import {
+  type ActivityDetail,
+  type ActivityType,
   type Address,
   type ContactDetail,
   type DealDetail,
@@ -23,8 +22,19 @@ import {
   type DownloadFileParams,
   type DownloadFileResult,
   type File,
+  type GetActivityParams,
   type GetDealFieldParams,
   type GetDealParams,
+  type ListActivityTypesResult,
+  type ListContactFieldsParams,
+  type OrganizationDetail,
+  type OrganizationSearchMatch,
+  type PersonDetail,
+  type PersonSearchMatch,
+  type SearchOrganizationsParams,
+  type SearchOrganizationsResult,
+  type SearchPersonsParams,
+  type SearchPersonsResult,
   type ListDealDiscountsParams,
   type ListUsersResult,
   type ListDealDiscountsResult,
@@ -40,9 +50,7 @@ import {
   type ListPipelinesResult,
   type ListStagesParams,
   type ListStagesResult,
-  type Organization,
   type PaginationInfo,
-  type Person,
   type Pipeline,
   type PipedriveConfig,
   type RefreshFieldRegistryResult,
@@ -69,6 +77,7 @@ import {
   type SearchLeadsParams,
   type SearchLeadsResult,
 } from "./models.js";
+import { buildRegistry, FieldRegistryStore, type FieldRegistryStoreOptions } from "./field-registry.js";
 import { normalizeCustomFields } from "./normalizer.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -137,7 +146,9 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-export interface PipedriveClientOptions extends PipedriveConfig {
+export interface PipedriveClientOptions extends Omit<PipedriveConfig, "allowWrite"> {
+  /** Enables mutation methods on PipedriveWriteClient; the base read client ignores it. Defaults to false. */
+  allowWrite?: boolean;
   timeoutMs?: number;
   /** Overrides for the file-backed field-registry cache (path/TTL/grace/clock). */
   registryOptions?: FieldRegistryStoreOptions;
@@ -182,7 +193,9 @@ interface RawFile {
 }
 
 interface RawAddress {
+  /** v2 documents the display line as `value`; `formatted_address` is the older name. */
   formatted_address?: unknown;
+  value?: unknown;
   street_number?: unknown;
   route?: unknown;
   locality?: unknown;
@@ -281,6 +294,12 @@ interface RawLead {
 }
 
 
+/** The `data.items` list of a v2 search response ([] when absent). */
+function searchItems(data: Record<string, unknown>): Record<string, unknown>[] {
+  const items = asRecord(data.data).items;
+  return Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
+}
+
 function ownerName(names: Map<number, string>, id: number | null): string | null {
   return id === null ? null : (names.get(id) ?? null);
 }
@@ -291,7 +310,8 @@ export class PipedriveClient {
   readonly baseUrlV1: string;
   readonly baseUrlV2: string;
   readonly registry: FieldRegistryStore;
-  private readonly timeoutMs: number;
+  protected readonly timeoutMs: number;
+  protected readonly allowWrite: boolean;
   /** Lazily-resolved custom-field keys for VAT / SIREN (undefined until first lookup). */
   private orgFieldKeys: { vat: string | null; siren: string | null } | undefined;
   /** Cached user id → name map for owner_name (null until first successful load). */
@@ -303,6 +323,7 @@ export class PipedriveClient {
     this.baseUrlV1 = `https://${this.domain}.pipedrive.com/api/v1`;
     this.baseUrlV2 = `https://${this.domain}.pipedrive.com/api/v2`;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.allowWrite = options.allowWrite === true;
     this.registry = new FieldRegistryStore(
       () => this.fetchAllDealFields(),
       options.registryOptions,
@@ -315,7 +336,7 @@ export class PipedriveClient {
    * PipedriveNotFoundError when the org does not exist (e.g. a deal with no
    * linked organization passes org_id=null and should be guarded by the caller).
    */
-  async getOrganization(id: number): Promise<Organization> {
+  async getOrganization(id: number, outputType?: "full" | "lean"): Promise<OrganizationDetail> {
     const data = await this.requestJson("GET", "v2", `organizations/${id}`);
     const raw = data.data as Record<string, unknown> | null | undefined;
     if (!raw || typeof raw.id !== "number") {
@@ -326,7 +347,7 @@ export class PipedriveClient {
     }
     const customFields = (raw.custom_fields as Record<string, unknown> | undefined) ?? {};
     const keys = await this.resolveOrgFieldKeys();
-    return {
+    const detail: OrganizationDetail = {
       id: raw.id,
       name: typeof raw.name === "string" ? raw.name : "",
       address: parseAddress(raw.address),
@@ -334,6 +355,28 @@ export class PipedriveClient {
       siren: keys.siren ? toStringOrNull(customFields[keys.siren]) : null,
       org_url: `https://${this.domain}.pipedrive.com/organization/${raw.id}`,
     };
+    if (outputType !== "full") return detail;
+    detail.owner_id = toNumberOrNull(raw.owner_id);
+    detail.add_time = toStringOrNull(raw.add_time);
+    detail.update_time = toStringOrNull(raw.update_time);
+    await this.attachContactCustomFields(detail, "organization", customFields);
+    return detail;
+  }
+
+  /** Best-effort normalized custom fields for get_person/get_organization full mode. */
+  private async attachContactCustomFields(
+    detail: PersonDetail | OrganizationDetail,
+    entity: "person" | "organization",
+    customFields: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const registry = buildRegistry(await this.fetchAllFields(entity));
+      const normalized = normalizeCustomFields(customFields, registry);
+      detail.normalized_extra_fields = normalized.normalized_extra_fields;
+      detail.normalized_field_metadata = normalized.normalized_field_metadata;
+    } catch {
+      // Field metadata is best-effort on reads; writes re-fetch it and fail closed.
+    }
   }
 
   /**
@@ -341,7 +384,7 @@ export class PipedriveClient {
    * contact details (emails/phones with primary flagged). Throws
    * PipedriveNotFoundError when the person does not exist.
    */
-  async getPerson(id: number): Promise<Person> {
+  async getPerson(id: number, outputType?: "full" | "lean"): Promise<PersonDetail> {
     const data = await this.requestJson("GET", "v2", `persons/${id}`);
     const raw = data.data as Record<string, unknown> | null | undefined;
     if (!raw || typeof raw.id !== "number") {
@@ -352,7 +395,7 @@ export class PipedriveClient {
     }
     const emails = parseContactDetails(raw.emails);
     const phones = parseContactDetails(raw.phones);
-    return {
+    const detail: PersonDetail = {
       id: raw.id,
       name: typeof raw.name === "string" ? raw.name : "",
       first_name: toStringOrNull(raw.first_name),
@@ -365,6 +408,12 @@ export class PipedriveClient {
       primary_phone: primaryValue(phones),
       person_url: `https://${this.domain}.pipedrive.com/person/${raw.id}`,
     };
+    if (outputType !== "full") return detail;
+    detail.owner_id = toNumberOrNull(raw.owner_id);
+    detail.add_time = toStringOrNull(raw.add_time);
+    detail.update_time = toStringOrNull(raw.update_time);
+    await this.attachContactCustomFields(detail, "person", asRecord(raw.custom_fields));
+    return detail;
   }
 
   /**
@@ -564,6 +613,162 @@ export class PipedriveClient {
     return all;
   }
 
+  /**
+   * Fetch every field definition of one entity across all v1 offset pages,
+   * failing closed (throws) on malformed pages, pagination loops or hitting
+   * the page safety bound. Never cached: writes need complete, fresh metadata.
+   */
+  async fetchAllFields(entity: "deal" | "person" | "organization"): Promise<DealField[]> {
+    const endpoint = { deal: "dealFields", person: "personFields", organization: "organizationFields" }[entity];
+    const all: DealField[] = [];
+    let start = 0;
+
+    for (let page = 0; page < MAX_FIELD_PAGES; page += 1) {
+      const data = await this.requestJson("GET", "v1", endpoint, { start, limit: FIELD_PAGE_LIMIT });
+      if (!Array.isArray(data.data)) {
+        throw new PipedriveError(`Malformed ${endpoint} response: expected a list of field definitions`, { endpoint });
+      }
+      for (const row of data.data) {
+        const definition = asRecord(row);
+        if (typeof definition.key !== "string" || definition.key === "" || typeof definition.name !== "string" || typeof definition.field_type !== "string") {
+          throw new PipedriveError(`Malformed ${endpoint} response: a field definition has no key, name or field_type`, { endpoint });
+        }
+      }
+      all.push(...data.data.map((row) => this.toDealField(row)));
+
+      const rawPagination = asRecord(data.additional_data).pagination;
+      if (rawPagination !== undefined && typeof asRecord(rawPagination).more_items_in_collection !== "boolean") {
+        throw new PipedriveError(`Malformed ${endpoint} pagination metadata; field list may be incomplete`, { endpoint });
+      }
+      const pagination = this.toPagination(rawPagination);
+      if (!pagination) {
+        if (data.data.length < FIELD_PAGE_LIMIT) return all;
+        throw new PipedriveError(`${endpoint} pagination metadata missing for a full page; field list may be incomplete`, { endpoint });
+      }
+      if (!pagination.more_items_in_collection) return all;
+      const next = pagination.next_start;
+      if (typeof next !== "number" || next <= start) {
+        throw new PipedriveError(`${endpoint} pagination did not advance; field list may be incomplete`, { endpoint });
+      }
+      start = next;
+    }
+    throw new PipedriveError(`${endpoint} exceeded ${MAX_FIELD_PAGES} pages; field list may be incomplete`, { endpoint });
+  }
+
+  /** List person/organization custom-field definitions for one v1 offset page. */
+  async listContactFields(params: ListContactFieldsParams): Promise<ListDealFieldsResult> {
+    const endpoint = params.entity === "person" ? "personFields" : "organizationFields";
+    const data = await this.requestJson("GET", "v1", endpoint, {
+      start: params.start ?? 0,
+      limit: params.limit ?? DEFAULT_PAGE_LIMIT,
+    });
+    const rows = Array.isArray(data.data) ? data.data : [];
+    return {
+      fields: rows.map((row) => this.toDealField(row)),
+      pagination: this.toPagination(asRecord(data.additional_data).pagination),
+    };
+  }
+
+  /** Free-text person search (v2 /persons/search), cursor-paginated. */
+  async searchPersons(params: SearchPersonsParams): Promise<SearchPersonsResult> {
+    const query: Record<string, string | number> = {
+      term: params.term,
+      limit: Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
+    };
+    if (params.fields !== undefined) query.fields = params.fields;
+    if (params.exact_match) query.exact_match = "true";
+    if (params.organization_id !== undefined) query.organization_id = params.organization_id;
+    if (params.cursor !== undefined) query.cursor = params.cursor;
+
+    const data = await this.requestJson("GET", "v2", "persons/search", query);
+    const items = searchItems(data);
+    const persons = items.map((entry) => this.toPersonSearchMatch(entry));
+    return { persons, next_cursor: toStringOrNull(asRecord(data.additional_data).next_cursor), count: persons.length };
+  }
+
+  private toPersonSearchMatch(entry: Record<string, unknown>): PersonSearchMatch {
+    const item = asRecord(entry.item ?? entry);
+    const org = asRecord(item.organization);
+    const id = toNumberOrNull(item.id) ?? 0;
+    const strings = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+    return {
+      id,
+      name: typeof item.name === "string" ? item.name : "",
+      emails: strings(item.emails),
+      phones: strings(item.phones),
+      org_id: toNumberOrNull(org.id),
+      org_name: toStringOrNull(org.name),
+      result_score: toNumberOrNull(entry.result_score),
+      person_url: `https://${this.domain}.pipedrive.com/person/${id}`,
+    };
+  }
+
+  /** Free-text organization search (v2 /organizations/search), cursor-paginated. */
+  async searchOrganizations(params: SearchOrganizationsParams): Promise<SearchOrganizationsResult> {
+    const query: Record<string, string | number> = {
+      term: params.term,
+      limit: Math.min(params.limit ?? DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
+    };
+    if (params.fields !== undefined) query.fields = params.fields;
+    if (params.exact_match) query.exact_match = "true";
+    if (params.cursor !== undefined) query.cursor = params.cursor;
+
+    const data = await this.requestJson("GET", "v2", "organizations/search", query);
+    const organizations = searchItems(data).map((entry): OrganizationSearchMatch => {
+      const item = asRecord(entry.item ?? entry);
+      const id = toNumberOrNull(item.id) ?? 0;
+      return {
+        id,
+        name: typeof item.name === "string" ? item.name : "",
+        address: toStringOrNull(item.address),
+        result_score: toNumberOrNull(entry.result_score),
+        org_url: `https://${this.domain}.pipedrive.com/organization/${id}`,
+      };
+    });
+    return {
+      organizations,
+      next_cursor: toStringOrNull(asRecord(data.additional_data).next_cursor),
+      count: organizations.length,
+    };
+  }
+
+  /** Read one activity by id (v2 /activities/{id}). */
+  async getActivity(params: GetActivityParams): Promise<ActivityDetail> {
+    const data = await this.requestJson("GET", "v2", `activities/${params.id}`);
+    const raw = asRecord(data.data) as RawActivityV2;
+    if (toNumberOrNull(raw.id) === null) {
+      throw new PipedriveNotFoundError(`Activity ${params.id} not found`, {
+        endpoint: `activities/${params.id}`,
+        status: 404,
+      });
+    }
+    return {
+      ...toActivityV2(raw),
+      lead_id: toStringOrNull(raw.lead_id),
+      person_id: toNumberOrNull(raw.person_id),
+      org_id: toNumberOrNull(raw.org_id),
+      duration: toStringOrNull(raw.duration),
+    };
+  }
+
+  /** List activity types (v1 /activityTypes) to resolve a valid `type` key for create_activity. */
+  async listActivityTypes(): Promise<ListActivityTypesResult> {
+    const data = await this.requestJson("GET", "v1", "activityTypes");
+    const rows = Array.isArray(data.data) ? (data.data as Record<string, unknown>[]) : [];
+    const types = rows
+      .filter((raw) => typeof raw.id === "number" && typeof raw.key_string === "string")
+      .map(
+        (raw): ActivityType => ({
+          id: raw.id as number,
+          name: typeof raw.name === "string" ? raw.name : "",
+          key_string: raw.key_string as string,
+          active: raw.active_flag === true,
+        }),
+      );
+    return { types, count: types.length };
+  }
+
   /** Force a rebuild of the cached field registry from the API. */
   async refreshFieldRegistry(): Promise<RefreshFieldRegistryResult> {
     try {
@@ -644,7 +849,7 @@ export class PipedriveClient {
     return detail;
   }
 
-  private toDealField(raw: unknown): DealField {
+  protected toDealField(raw: unknown): DealField {
     const record = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const known = new Set([
       "id",
@@ -734,19 +939,31 @@ export class PipedriveClient {
     return { ok: true, account: asRecord(data.data) };
   }
 
-  private async requestJson(
+  /**
+   * JSON transport. GET keeps the existing retry behaviour (429 and 5xx). Any
+   * other method is a mutation: only an explicit 429 is retried (the request
+   * was rejected, so replay is safe); timeouts, network failures, 5xx and
+   * malformed success bodies raise PipedriveOutcomeUnknownError because the
+   * write may already have been applied.
+   */
+  protected async requestJson(
     method: string,
     version: "v1" | "v2",
     endpoint: string,
     query: Record<string, string | number> = {},
+    body?: unknown,
   ): Promise<Record<string, unknown>> {
     const url = this.buildUrl(version, endpoint, query);
+    const isMutation = method !== "GET";
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (body !== undefined) headers["content-type"] = "application/json";
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       try {
         const response = await fetch(url, {
           method,
-          headers: { accept: "application/json" },
+          headers,
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(this.timeoutMs),
         });
 
@@ -762,16 +979,22 @@ export class PipedriveClient {
         }
 
         if (response.status >= 500) {
-          if (attempt < MAX_ATTEMPTS - 1) {
+          if (!isMutation && attempt < MAX_ATTEMPTS - 1) {
             await sleep(this.retryDelayMs(response, attempt));
             continue;
           }
           const responseBody = await this.readErrorMessage(response);
+          if (isMutation) {
+            throw new PipedriveOutcomeUnknownError(
+              `Pipedrive returned status ${response.status} for ${method} ${endpoint}; the change may or may not have been applied. Do not retry blindly: read the record to reconcile first. ${responseBody}`,
+              { endpoint, status: response.status, responseBody },
+            );
+          }
           throw new PipedriveServerError(
             `Pipedrive server error with status ${response.status} for ${endpoint}: ${responseBody}`,
             {
-            endpoint,
-            status: response.status,
+              endpoint,
+              status: response.status,
               responseBody,
             },
           );
@@ -794,12 +1017,19 @@ export class PipedriveClient {
         }
 
         const text = await response.text();
-        return text ? (JSON.parse(text) as Record<string, unknown>) : {};
+        if (!isMutation) return text ? (JSON.parse(text) as Record<string, unknown>) : {};
+        return this.parseMutationBody(text, method, endpoint);
       } catch (error) {
         if (error instanceof PipedriveError) {
           throw error;
         }
         if (error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError)) {
+          if (isMutation) {
+            throw new PipedriveOutcomeUnknownError(
+              `${error.message}. The ${method} ${endpoint} change may or may not have been applied; read the record to reconcile before any retry.`,
+              { endpoint },
+            );
+          }
           throw new PipedriveConnectionError(error.message, { endpoint });
         }
         throw error;
@@ -807,6 +1037,28 @@ export class PipedriveClient {
     }
 
     throw new PipedriveRateLimitError("Pipedrive rate limit exceeded", { endpoint, status: 429 });
+  }
+
+  /** Mutation success bodies must be a JSON object envelope; `success: false` is a failed write. */
+  private parseMutationBody(text: string, method: string, endpoint: string): Record<string, unknown> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new PipedriveOutcomeUnknownError(
+        `Pipedrive returned a malformed success body for ${method} ${endpoint}; the change may have been applied. Read the record to reconcile before any retry.`,
+        { endpoint },
+      );
+    }
+    const envelope = parsed as Record<string, unknown>;
+    if (envelope.success === false) {
+      const detail = typeof envelope.error === "string" ? envelope.error : text.slice(0, 500);
+      throw new PipedriveError(`Pipedrive rejected ${method} ${endpoint}: ${detail}`, { endpoint });
+    }
+    return envelope;
   }
 
   /**
@@ -1342,7 +1594,7 @@ export class PipedriveClient {
    * leaves owner_name null instead of failing the deal read, and is retried
    * on the next call.
    */
-  private async loadOwnerNames(): Promise<Map<number, string>> {
+  protected async loadOwnerNames(): Promise<Map<number, string>> {
     if (this.ownerNames) return this.ownerNames;
     try {
       const { users } = await this.listUsers();
@@ -1530,7 +1782,7 @@ export function parseAddress(value: unknown): Address | null {
   if (value === null || typeof value !== "object") return null;
   const raw = value as RawAddress;
   const address: Address = {
-    formatted_address: toStringOrNull(raw.formatted_address),
+    formatted_address: toStringOrNull(raw.formatted_address ?? raw.value),
     street_number: toStringOrNull(raw.street_number),
     route: toStringOrNull(raw.route),
     locality: toStringOrNull(raw.locality),

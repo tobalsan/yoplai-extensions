@@ -29,3 +29,9 @@ export class PipedriveServerError extends PipedriveError {}
 export class PipedriveConnectionError extends PipedriveError {}
 
 export class PipedriveValidationError extends PipedriveError {}
+
+/**
+ * A mutation may or may not have been applied (timeout, network failure, 5xx,
+ * malformed success body). Never replay automatically; reconcile by reading.
+ */
+export class PipedriveOutcomeUnknownError extends PipedriveError {}
