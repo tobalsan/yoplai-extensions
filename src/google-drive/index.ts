@@ -1,5 +1,5 @@
 import { defineToolExtension, notConnected } from "../tool-extension.js";
-import type { ToolExtensionTool } from "../tool-extension.js";
+import type { ToolExecutionContext, ToolExtensionTool } from "../tool-extension.js";
 import { googleFailureReason, googleOAuthProvider } from "../google-oauth-provider.js";
 import { z } from "zod";
 import { GoogleDriveClient, GoogleDriveRequestError } from "./client.js";
@@ -35,7 +35,7 @@ export default defineToolExtension({
   id: "googleDrive",
   displayName: "Google Drive",
   description:
-    "Google Drive access (read-only by default, optional file and Sheets writes) via Google OAuth: connect your own account (Just me) or a shared team account (Whole team). List and search files, and read a file's text content.",
+    "Google Drive access (read-only by default, optional file and Sheets writes) via Google OAuth: connect your own account (Just me) or a shared team account (Whole team). List, search, read text, or download original files for editing.",
   systemPrompt: `Use this extension for Google Drive access. Write tools are available only when allowWrite is enabled; read the target before writing, confirm when ambiguous, and report what changed.
 
 Authentication uses the requester's own Google connection, falling back to the team connection. If a tool reports not connected, share the connect link it returns (or tell the user to connect Google Drive in the agent's settings) — do not attempt to guess or supply credentials.
@@ -44,11 +44,17 @@ Tools:
 - googleDrive_list_files: list accessible Drive files, optionally filtered by a name substring; supports pageSize and pageToken pagination
 - googleDrive_search_files: search Drive using the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'"; supports pagination
 - googleDrive_read_file: download a file by id and extract its text (Google Docs/Sheets/Slides are exported to text/CSV; PDF and DOCX are text-extracted)
+- googleDrive_download_file: download original binary files byte for byte into this conversation's writable folder; native Docs/Sheets/Slides export to docx/xlsx/pptx
+- googleDrive_save_file (allowWrite only): upload a conversation file as a new copy with name and optional parentId, or replace an app-accessible fileId in its existing format
 - googleDrive_sheets_list_spreadsheets: list Google Sheets, optionally filtered by name
 - googleDrive_sheets_inspect: inspect a spreadsheet's tabs, dimensions, and detected headers
 - googleDrive_sheets_read_sheet: read one tab as headers plus row objects; use rowOffset, maxRows, and columns for large tabs
 - googleDrive_sheets_read_range: read an arbitrary A1 range as raw values
 - googleDrive_validate: check that the Google Drive connection is live
+
+For layout, headers, footers, images or formatting, use googleDrive_download_file, edit the returned local path, then googleDrive_save_file. googleDrive_read_file returns extracted text only. Use send_file to deliver the edited local file to the user where useful. Save files only from the current conversation folder. Downloads are limited to 25 MiB for binary media and Google's 10 MB native export limit.
+
+allowWrite retains drive.file access: create new copies by default; replacing files requires app-created or explicitly app-authorized files. It cannot overwrite arbitrary existing user files. Native Google Docs/Sheets/Slides stay native when replaced with the matching Office format. A file-permission refusal needs a copy or access change, not an OAuth reconnect.
 
 Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDrive_sheets_update_range overwrites an exact A1 range; googleDrive_sheets_append_rows appends after table data. Before writing, read the target tab or range; after writing, report the updated range and cell count.`,
   configSchema: GoogleDriveConfigSchema,
@@ -70,13 +76,13 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     const oauth = config.oauth;
     const connected = oauth?.connected === true ? oauth : undefined;
 
-    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>): ToolExtensionTool {
+    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }, context?: ToolExecutionContext) => Promise<unknown>): ToolExtensionTool {
       return {
         name, description, parameters: schema,
-        execute: async (params: unknown) => {
+        execute: async (params: unknown, context) => {
           const parsed = schema.parse(params);
           if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
-          return action(new GoogleDriveClient(connected.accessToken), parsed, connected);
+          return action(new GoogleDriveClient(connected.accessToken), parsed, connected, context);
         },
       };
     }
@@ -84,6 +90,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
       tool("list_files", "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.", ListFilesParamsSchema, (client, params) => client.listFiles(params)),
       tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params)),
       tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params)),
+      tool("download_file", "Download the original file into this conversation for editing; native Docs/Sheets/Slides export as Office files.", ReadFileParamsSchema, (client, params, _connected, context) => client.downloadFile(params.fileId, context)),
       tool("sheets_list_spreadsheets", "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.", SheetsListSpreadsheetsParamsSchema, (client, params) => client.sheetsListSpreadsheets(params)),
       tool("sheets_inspect", "Inspect a spreadsheet's tabs, dimensions, and detected headers.", SheetsInspectParamsSchema, (client, params) => client.sheetsInspect(params)),
       tool("sheets_read_sheet", "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.", SheetsReadSheetParamsSchema, (client, params) => client.sheetsReadSheet(params)),
@@ -101,6 +108,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     ];
     if (config.merged.allowWrite === true) {
       tools.push(
+        tool("save_file", "Save a conversation file to Drive: create a copy with name and optional parentId, or replace an app-accessible fileId while preserving its format.", z.object({ path: z.string().min(1), fileId: z.string().min(1).optional(), name: z.string().min(1).optional(), parentId: z.string().min(1).optional() }), (client, params, _connected, context) => client.saveFile(params, context)),
         tool("create_folder", "Create a Drive folder, optionally inside a parent folder.", CreateFolderParamsSchema, (client, params) => client.createFolder(params)),
         tool("create_file", "Create a text/CSV file; optionally convert it to a Google Doc or Sheet.", CreateFileParamsSchema, (client, params) => client.createFile(params)),
         tool("update_file_content", "Overwrite a file's content; Google Docs accept text and Sheets accept CSV. Read the target first.", UpdateFileContentParamsSchema, (client, params) => client.updateFileContent(params)),
@@ -111,12 +119,13 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     }
     return tools.map((tool) => ({
       ...tool,
-      execute: async (params: unknown) => {
+      execute: async (params: unknown, context) => {
         try {
-          return await tool.execute(params);
+          return await tool.execute(params, context);
         } catch (error) {
           if (error instanceof GoogleDriveRequestError && [401, 403, 429].includes(error.status)) {
             const reason = googleFailureReason(error.status, error.responseBody)!;
+            if (error.status === 403 && reason === "insufficient_scope" && !/insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(error.responseBody)) throw error;
             return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
           }
           throw error;

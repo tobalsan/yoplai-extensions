@@ -91,13 +91,22 @@ export interface ResolvedToolExtensionConfig {
   oauth?: ResolvedOAuth;
 }
 
+export interface ToolExecutionContext {
+  agentId?: string;
+  agent?: { id: string };
+  sessionId?: string;
+  userId?: string;
+  signal?: AbortSignal;
+  conversationFiles?: { hostPath: string; runtimePath: string };
+}
+
 export interface ToolExtensionTool {
   name: string;
   description: string;
   annotations?: { readOnlyHint?: boolean };
   parameters: z.ZodTypeAny;
   jsonSchemaParameters?: Record<string, unknown>;
-  execute(params: unknown, context?: { agentId: string }): Promise<unknown>;
+  execute(params: unknown, context?: ToolExecutionContext): Promise<unknown>;
 }
 
 export interface ToolExtensionDefinition {
@@ -337,11 +346,12 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
               $refStrategy: "none",
             })
         ) as Record<string, unknown>,
-        execute: async (params: unknown, toolContext?: { userId?: string }) => {
-          if (!definition.oauth || !context.resolveOAuth) return tool.execute(params, { agentId: agent.id });
+        execute: async (params: unknown, toolContext?: ToolExecutionContext) => {
+          const executionContext = { ...toolContext, agentId: agent.id };
+          if (!definition.oauth || !context.resolveOAuth) return tool.execute(params, executionContext);
           // Re-resolve per call so the token matches this call's requester.
           const requirement = oauthRequirement(definition, resolved);
-          if (!requirement) return tool.execute(params, { agentId: agent.id });
+          if (!requirement) return tool.execute(params, executionContext);
           const oauth = await context.resolveOAuth(
             agent,
             requirement,
@@ -355,7 +365,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
               `OAuth tool "${getMountedToolName(definition, tool.name)}" is no longer available`
             );
           }
-          return callTimeTool.execute(params, { agentId: agent.id });
+          return callTimeTool.execute(params, executionContext);
         },
       }));
     },

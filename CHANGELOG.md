@@ -4,6 +4,8 @@
 
 ### Added
 
+- Google Drive original-file download and conversation-confined save tools preserve binary formats and round-trip native Docs/Sheets/Slides through Office files; optional writes retain `drive.file` scope (ALG-502).
+
 - Pipedrive confirmed write tools behind an opt-in `allowWrite` toggle (default off, agent overrides root): create/update leads, deals, persons, organizations, activities and lead labels, create notes, and convert leads to deals. Writes require `requested_by` attribution, hard `confirmed: true` for record changes, code-enforced search-before-create, `expected_before` stale-edit protection, agent markers and automatic trace notes with partial-success reporting. Adds `search_persons`, `search_organizations`, `list_contact_fields`, `get_activity`, `list_activity_types`, and `output_type: "full"` on `get_person`/`get_organization`. See `src/pipedrive/README.md`.
 
 - Google Calendar extension with nine MCP-compatible tools for events, invitations, and availability using host-managed Google OAuth (ALG-473).
