@@ -1,5 +1,8 @@
 import mammoth from "mammoth";
+import { setTimeout as delayRetry } from "node:timers/promises";
 import * as XLSX from "xlsx";
+import type { ToolExecutionContext } from "../tool-extension.js";
+import { downloadFile, saveFile, type SaveFileParams } from "./files.js";
 
 import {
   DRIVE_ABOUT_URL,
@@ -135,6 +138,14 @@ export class GoogleDriveClient {
     const response = await this.#request(DRIVE_ABOUT_URL);
     const data = (await response.json().catch(() => ({}))) as { user?: DriveUser };
     return data.user ?? {};
+  }
+
+  async downloadFile(fileId: string, context?: ToolExecutionContext): Promise<unknown> {
+    return downloadFile(fileId, context, (url, init) => this.#request(url, init));
+  }
+
+  async saveFile(params: SaveFileParams, context?: ToolExecutionContext): Promise<unknown> {
+    return saveFile(params, context, (url, init) => this.#request(url, init));
   }
 
   async listFiles(params: ListFilesParams): Promise<{
@@ -432,9 +443,11 @@ export class GoogleDriveClient {
 
   async #request(url: string, init: RequestInit = {}): Promise<Response> {
     for (let attempt = 0; ; attempt += 1) {
+      const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+      signal.throwIfAborted();
       const response = await this.#fetch(url, {
         ...init,
-        signal: AbortSignal.timeout(30_000),
+        signal,
         headers: {
           Authorization: `Bearer ${this.#accessToken}`,
           Accept: "application/json",
@@ -445,7 +458,8 @@ export class GoogleDriveClient {
         const retryAfter = response.headers.get("retry-after");
         const seconds = retryAfter === null ? NaN : Number(retryAfter);
         const delay = Number.isFinite(seconds) ? Math.min(30_000, Math.max(0, seconds * 1000)) : 1000 * (attempt + 1);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        void response.body?.cancel().catch(() => {});
+        await delayRetry(delay, undefined, { signal });
         continue;
       }
       if (!response.ok) {

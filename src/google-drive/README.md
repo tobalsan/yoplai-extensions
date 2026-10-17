@@ -11,6 +11,7 @@ Tools (mounted as `googleDrive_<name>`):
 - `sheets_read_sheet` — one tab as headers + row objects (`rowOffset`, `maxRows`, `columns`)
 - `sheets_read_range` — raw values for an A1 range (`majorDimension`)
 - `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF and DOCX text-extracted)
+- `download_file({ fileId })` — save original bytes into the current conversation's writable folder; Google Docs/Sheets/Slides export as docx/xlsx/pptx
 - `validate` — confirm the connection is live; returns the connected Google account
 
 Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file` and `spreadsheets`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets.
@@ -18,6 +19,7 @@ Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWr
 Write tools (only mounted when `allowWrite: true`):
 
 - `create_folder` — name and optional parent folder id
+- `save_file({ path, fileId? | name + parentId? })` — upload a local conversation file as a new copy or replace an app-accessible file while keeping its format
 - `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
 - `update_file_content` — overwrite content (text for Docs, CSV for Sheets)
 - `rename_move_file` — rename and/or add/remove parent folders
@@ -26,7 +28,19 @@ Write tools (only mounted when `allowWrite: true`):
 All Sheets tools accept `spreadsheetId` or `spreadsheetUrl`. Sheets reads work under `drive.readonly`; Google Sheets API must be enabled.
 - `sheets_append_rows` — A1 table range and `rows` arrays; `valueInputOption` `USER_ENTERED` (default) or `RAW`
 
-Read the target before writing, confirm when ambiguous, and report what changed. Deleting, sharing, and permissions are not exposed. API 403 responses return `insufficient_scope`; 429 responses retry twice, then return `rate_limited`.
+Read the target before writing, confirm when ambiguous, and report what changed. Deleting, sharing, and permissions are not exposed. Explicit OAuth scope refusals return `insufficient_scope`; download restrictions, export-size errors and file-permission refusals retain actionable Google errors. Rate limits retry twice, then return `rate_limited`.
+
+## Work with real files
+
+Use `read_file` for extracted text. When layout, headers, footers, logos, images or styles matter, use `download_file` → edit its returned local `path` → `save_file`. Send the edited local file to the user with `send_file` where useful.
+
+`download_file` returns `{ fileId, name, mimeType, path, bytes }`. The host supplies a trusted `conversationFiles: { hostPath, runtimePath }` execution context, never an agent-derived shared folder. The returned path works inside the active runtime; local runtimes use the host path and containers use `/workspace/files`. Files remain private to the current conversation. Binary downloads retain exact bytes and stop at 25 MiB counted on the stream, even without Content-Length. Native exports use Google's 10 MB limit. Owner download restrictions, unsupported native types (including folders and shortcuts), cancellation and timeout leave no partial file. Shared-drive metadata and media requests use `supportsAllDrives=true`.
+
+`save_file` accepts an absolute runtime path (or a host path inside the same conversation folder), rejects path escapes and symlinks pointing outside, and returns `{ fileId, name, mimeType, webViewLink }`. Save regular files directly in the conversation folder root; nested paths are rejected to prevent mutable ancestor symlinks from escaping the folder. Without `fileId`, supply `name` and optionally `parentId` to create a binary file in its local format. With `fileId`, omit `name` and `parentId`: binary formats stay binary and native Docs/Sheets/Slides import the matching docx/xlsx/pptx back into the original native file. A mismatched replacement format is rejected.
+
+Google documents that [Office upload conversion during an update replaces the complete contents of an existing Google Doc, Sheet or Slide](https://developers.google.com/workspace/drive/api/guides/manage-uploads#convert_to_google_docs_types). Multipart uploads use Office media Content-Type and the target's existing native MIME type in metadata. Actual Google conversion and fidelity must also be verified against a connected test account.
+
+The approved scope remains `drive.file`, not full `drive`. Creating copies works; replacing arbitrary user-owned files does not. Replace only files the app created or the user explicitly authorized for this app. A Google Sheets grant alone does not authorize a Drive media replacement of an arbitrary existing Sheet. For Frederic's template, download the original docx, edit only its body, and save a new docx copy.
 
 ---
 
