@@ -72,13 +72,13 @@ it.each([
 it.each(["folder", "shortcut", "drawing", "form"])("rejects unsupported native %s without leaving files", async (kind) => {
   const run = await tools();
   google(metadata(`application/vnd.google-apps.${kind}`), new Response("not downloadable"));
-  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toThrow(/unsupported|cannot download/i);
+  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toMatchObject({ message: expect.stringMatching(/unsupported|cannot download/i), status: 400 });
   expect(await readdir(run.hostPath)).toEqual([]);
 });
 it("honors the owner's download restriction", async () => {
   const run = await tools();
   google(metadata("application/pdf", "restricted.pdf", { capabilities: { canDownload: false } }), new Response("private"));
-  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toThrow(/download.*(disabled|allowed|restricted)/i);
+  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toMatchObject({ message: expect.stringMatching(/download.*(disabled|allowed|restricted)/i), status: 403 });
   expect(await readdir(run.hostPath)).toEqual([]);
 });
 it.each([["application/pdf", 26_214_400], ["application/vnd.google-apps.document", 10_000_000]])("caps streamed %s bytes without Content-Length and removes partial output", async (mime, limit) => {
@@ -89,7 +89,7 @@ it.each([["application/pdf", 26_214_400], ["application/vnd.google-apps.document
     controller.enqueue(new Uint8Array(1_000_000));
     sent += 1_000_000;
   } })));
-  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toThrow(/(25 MiB|10 MB).*limit|exceeds/i);
+  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toMatchObject({ message: expect.stringMatching(/(25 MiB|10 MB).*limit|exceeds/i), status: 413 });
   expect(await readdir(run.hostPath)).toEqual([]);
 });
 it("cancels a hung download and removes its partial file", async () => {
@@ -145,7 +145,7 @@ it.each(["absolute", "traversal", "symlink", "other-conversation"])("rejects sav
     : kind === "traversal" ? `/workspace/files/../${path.basename(other.hostPath)}/private.docx`
     : path.join(other.hostPath, "private.docx");
   vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Must not contact Drive for an outside file"); }));
-  await expect(run.execute("save_file", { path: source, name: "Copy.docx" })).rejects.toThrow(/outside.*conversation|conversation.*only/i);
+  await expect(run.execute("save_file", { path: source, name: "Copy.docx" })).rejects.toMatchObject({ message: expect.stringMatching(/outside.*conversation|conversation.*only/i), status: 400 });
   expect(await readFile(path.join(other.hostPath, "private.docx"), "utf8")).toBe("private");
 });
 it.each([
@@ -174,7 +174,7 @@ it.each(["application/vnd.google-apps.document", "application/vnd.openxmlformats
   const run = await tools(true);
   await writeFile(path.join(run.hostPath, "wrong.pdf"), "%PDF");
   google(metadata(mime));
-  await expect(run.execute("save_file", { path: "/workspace/files/wrong.pdf", fileId: "file-1" })).rejects.toThrow(/format|unsupported/i);
+  await expect(run.execute("save_file", { path: "/workspace/files/wrong.pdf", fileId: "file-1" })).rejects.toMatchObject({ message: expect.stringMatching(/format|unsupported/i), status: 400 });
 });
 it.each(["cannotDownloadFile", "exportSizeLimitExceeded", "insufficientFilePermissions"])("keeps Google %s errors actionable instead of asking for OAuth reconnect", async (reason) => {
   const run = await tools();
@@ -212,7 +212,7 @@ it("rejects FIFOs without waiting for a writer", async () => {
   const run = await tools(true);
   await promisify(execFile)("mkfifo", [path.join(run.hostPath, "pipe.docx")]);
   google();
-  await expect(run.execute("save_file", { path: "/workspace/files/pipe.docx", name: "Copy.docx" })).rejects.toThrow(/regular file/i);
+  await expect(run.execute("save_file", { path: "/workspace/files/pipe.docx", name: "Copy.docx" })).rejects.toMatchObject({ message: expect.stringMatching(/regular file/i), status: 400 });
 });
 
 it("times out a stalled media stream, cleans it up, and permits the next download", async () => {
@@ -248,5 +248,5 @@ it("rejects nested sources so a mutable parent cannot escape the conversation du
   await mkdir(path.join(run.hostPath, "nested"));
   await writeFile(path.join(run.hostPath, "nested", "edited.docx"), "local");
   google(Response.json({ id: "unsafe", name: "Copy.docx", mimeType: "application/octet-stream" }));
-  await expect(run.execute("save_file", { path: "/workspace/files/nested/edited.docx", name: "Copy.docx" })).rejects.toThrow(/directly|root/i);
+  await expect(run.execute("save_file", { path: "/workspace/files/nested/edited.docx", name: "Copy.docx" })).rejects.toMatchObject({ message: expect.stringMatching(/directly|root/i), status: 400 });
 });

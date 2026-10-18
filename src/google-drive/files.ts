@@ -4,6 +4,11 @@ import path from "node:path";
 import type { ToolExecutionContext } from "../tool-extension.js";
 
 export type DriveRequest = (url: string, init?: RequestInit) => Promise<Response>;
+
+/** Tool error with an HTTP status, so the gateway does not report it as a 500. */
+class DriveFileError extends Error {
+  constructor(message: string, readonly status: 400 | 403 | 413) { super(message); }
+}
 const OFFICE: Record<string, { extension: string; mimeType: string }> = {
   "application/vnd.google-apps.document": { extension: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
   "application/vnd.google-apps.spreadsheet": { extension: "xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
@@ -28,8 +33,8 @@ export async function downloadFile(fileId: string, context: ToolExecutionContext
   url.searchParams.set("fields", "id,name,mimeType,capabilities(canDownload)");
   const metadata = await (await request(url.toString(), { signal })).json() as { name: string; mimeType: string; capabilities?: { canDownload?: boolean } };
   const office = OFFICE[metadata.mimeType];
-  if (metadata.mimeType.startsWith("application/vnd.google-apps.") && !office) throw new Error(`Cannot download unsupported Google Drive type: ${metadata.mimeType}.`);
-  if (metadata.capabilities?.canDownload === false) throw new Error("Download is restricted by the file owner (canDownload=false).");
+  if (metadata.mimeType.startsWith("application/vnd.google-apps.") && !office) throw new DriveFileError(`Cannot download unsupported Google Drive type: ${metadata.mimeType}.`, 400);
+  if (metadata.capabilities?.canDownload === false) throw new DriveFileError("Download is restricted by the file owner (canDownload=false).", 403);
   url.searchParams.delete("fields");
   if (office) {
     url.pathname += "/export";
@@ -52,7 +57,7 @@ export async function downloadFile(fileId: string, context: ToolExecutionContext
       signal.throwIfAborted();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > (office ? 10_000_000 : 25 * 1024 * 1024)) throw new Error(`Download exceeds the ${office ? "10 MB export" : "25 MiB media"} limit.`);
+      if (bytes > (office ? 10_000_000 : 25 * 1024 * 1024)) throw new DriveFileError(`Download exceeds the ${office ? "10 MB export" : "25 MiB media"} limit.`, 413);
       await file.writeFile(chunk.value);
     }
   } catch (error) {
@@ -87,24 +92,24 @@ export async function saveFile(params: SaveFileParams, context: ToolExecutionCon
   if (!context?.conversationFiles) throw new Error("A conversation files folder is required to save Drive files.");
   const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
   signal.throwIfAborted();
-  if (!params.fileId && !params.name) throw new Error("Provide fileId to replace a file, or name to create a copy.");
-  if (params.fileId && (params.name || params.parentId)) throw new Error("Provide either fileId or name with optional parentId, not both.");
+  if (!params.fileId && !params.name) throw new DriveFileError("Provide fileId to replace a file, or name to create a copy.", 400);
+  if (params.fileId && (params.name || params.parentId)) throw new DriveFileError("Provide either fileId or name with optional parentId, not both.", 400);
   const folder = await realpath(context.conversationFiles.hostPath);
   const { hostPath, runtimePath } = context.conversationFiles;
-  if (!path.isAbsolute(params.path)) throw new Error("Only files inside the current conversation folder may be saved.");
+  if (!path.isAbsolute(params.path)) throw new DriveFileError("Only files inside the current conversation folder may be saved.", 400);
   let local: string;
   if (inside(runtimePath, params.path)) local = path.resolve(folder, path.relative(runtimePath, params.path));
   else if (inside(hostPath, params.path)) local = path.resolve(folder, path.relative(hostPath, params.path));
   else if (inside(folder, params.path)) local = path.resolve(params.path);
-  else throw new Error("File path is outside the current conversation folder.");
-  if (path.dirname(local) !== folder) throw new Error("Save files directly in the conversation folder root; nested paths are not supported.");
+  else throw new DriveFileError("File path is outside the current conversation folder.", 400);
+  if (path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported.", 400);
   local = await realpath(local);
-  if (!inside(folder, local)) throw new Error("File path is outside the current conversation folder.");
-  if (path.dirname(local) !== folder) throw new Error("Save files directly in the conversation folder root; nested paths are not supported.");
+  if (!inside(folder, local)) throw new DriveFileError("File path is outside the current conversation folder.", 400);
+  if (path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported.", 400);
   const file = await open(local, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let bytes: Buffer;
   try {
-    if (!(await file.stat()).isFile()) throw new Error("Only regular files inside the current conversation folder may be saved.");
+    if (!(await file.stat()).isFile()) throw new DriveFileError("Only regular files inside the current conversation folder may be saved.", 400);
     bytes = await file.readFile({ signal });
   } finally { await file.close(); }
   let mimeType = BINARY_MIME[path.extname(params.path).slice(1).toLowerCase()] ?? "application/octet-stream";
@@ -112,8 +117,8 @@ export async function saveFile(params: SaveFileParams, context: ToolExecutionCon
   if (params.fileId) {
     const target = await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(params.fileId)}?supportsAllDrives=true&fields=id,name,mimeType`, { signal })).json() as { mimeType: string };
     const office = OFFICE[target.mimeType];
-    if (target.mimeType.startsWith("application/vnd.google-apps.") && !office) throw new Error(`Unsupported replacement format: ${target.mimeType}.`);
-    if (office ? mimeType !== office.mimeType : mimeType !== "application/octet-stream" && mimeType !== target.mimeType) throw new Error("Local file format does not match the existing Drive file. Create a new copy instead.");
+    if (target.mimeType.startsWith("application/vnd.google-apps.") && !office) throw new DriveFileError(`Unsupported replacement format: ${target.mimeType}.`, 400);
+    if (office ? mimeType !== office.mimeType : mimeType !== "application/octet-stream" && mimeType !== target.mimeType) throw new DriveFileError("Local file format does not match the existing Drive file. Create a new copy instead.", 400);
     if (!office) mimeType = target.mimeType;
     metadata = { mimeType: target.mimeType };
   }
