@@ -3,6 +3,12 @@ import { z } from "zod";
 import type { McpClientManager, McpToolDefinition } from "./client-manager.js";
 import type { ToolExtensionTool } from "../tool-extension.js";
 
+export const McpCallToolResultSchema = z.object({
+  content: z.array(z.object({ type: z.string() }).passthrough()),
+  structuredContent: z.record(z.unknown()).optional(),
+  isError: z.boolean().optional(),
+}).passthrough();
+
 export function sanitizeSegment(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_");
   return sanitized.replace(/^_+|_+$/g, "") || "tool";
@@ -44,6 +50,7 @@ export function adaptMcpTools(
       name,
       description: tool.description,
       parameters: z.object({}).passthrough(),
+      outputSchema: McpCallToolResultSchema,
       jsonSchemaParameters: normalizeTypeLists(tool.inputSchema) as Record<string, unknown>,
       execute: async (params, execution) => manager.invokeTool(tool.server, tool.name, params, { signal: execution?.signal }),
     };

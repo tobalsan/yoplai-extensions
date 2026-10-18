@@ -2,6 +2,8 @@ import { ZendeskClient } from "./client.js";
 import {
   AddInternalNoteParamsSchema,
   GetTicketParamsSchema,
+  GetTicketResultSchema,
+  SearchTicketsResultSchema,
   ListAgentsParamsSchema,
   ListGroupsParamsSchema,
   ListTicketsParamsSchema,
@@ -90,12 +92,14 @@ Notes:
         name: "search_tickets",
         description: "Search tickets using Zendesk search syntax.",
         parameters: SearchTicketsParamsSchema,
+        outputSchema: SearchTicketsResultSchema,
         execute: async (params) => (client ? client.searchTickets(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "get_ticket",
         description: "Get a ticket by id, with comments included.",
         parameters: GetTicketParamsSchema,
+        outputSchema: GetTicketResultSchema,
         execute: async (params) => (client ? client.getTicket(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {

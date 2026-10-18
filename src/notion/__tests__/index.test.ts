@@ -138,7 +138,7 @@ describe("notion extension modes", () => {
     };
     const { tools } = await mount({}, notConnected);
     for (const tool of tools) {
-      expect(await tool.execute({}, {})).toEqual(notConnected);
+      expect(await tool.execute({}, {})).toEqual({ ...notConnected, isError: true });
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });

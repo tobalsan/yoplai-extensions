@@ -104,3 +104,44 @@ export type FindWorkEmailParams = z.infer<typeof FindWorkEmailParamsSchema>;
 export type FindMobileParams = z.infer<typeof FindMobileParamsSchema>;
 export type ReverseEmailParams = z.infer<typeof ReverseEmailParamsSchema>;
 export type LookupCompanyParams = z.infer<typeof LookupCompanyParamsSchema>;
+
+const PersonResultSchema = z.object({
+  apolloId: z.string().optional(),
+  name: z.string().optional(),
+  headline: z.string().optional(),
+  about: z.string().optional(),
+  location: z.string().optional(),
+  currentTitle: z.string().optional(),
+  currentCompany: z.string().optional(),
+  currentCompanyDomain: z.string().optional(),
+  linkedinUrl: z.string().optional(),
+  experience: z.array(z.object({
+    title: z.string().optional(), company: z.string().optional(), domain: z.string().optional(),
+    start: z.string().optional(), end: z.string().optional(),
+  }).passthrough()).optional(),
+}).passthrough();
+const EnrichmentResultSchema = z.object({
+  found: z.boolean(),
+  provider: z.string().optional(),
+  creditsUsed: z.number(),
+  attempts: z.array(z.object({
+    provider: z.string(), creditsUsed: z.number(), found: z.boolean(), error: z.string().optional(),
+  })),
+});
+export const SearchPeopleResultSchema = z.object({
+  provider: z.string(),
+  creditsUsed: z.number(),
+  totalMatches: z.number(),
+  people: z.array(z.object({
+    apolloId: z.string().optional(), firstName: z.string().optional(), lastNameMasked: z.string().optional(),
+    title: z.string().optional(), company: z.string().optional(), hasEmail: z.boolean().nullable().optional(),
+    hasDirectPhone: z.union([z.boolean(), z.string()]).nullable().optional(),
+  })),
+});
+export const LookupPersonResultSchema = EnrichmentResultSchema.extend({ person: PersonResultSchema.nullable() });
+export const FindWorkEmailResultSchema = EnrichmentResultSchema.extend({
+  email: z.string().nullable(),
+  emailStatus: z.string().nullable().optional(),
+  otherEmails: z.array(z.string().nullish()).optional(),
+  person: PersonResultSchema.nullable().optional(),
+});

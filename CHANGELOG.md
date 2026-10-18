@@ -4,6 +4,8 @@
 
 ### Added
 
+- Output schemas for high-traffic Pipedrive, Zendesk, People Enrich, Google Drive and all MCP tools, so codemode scripts can read structured results. Connection/reconnection refusals carry `isError: true` (ALG-507).
+
 - MCP tool records include server namespace metadata with labels from local or enabled shared configuration and server info (ALG-509).
 
 - Pipedrive confirmed write tools behind an opt-in `allowWrite` toggle (default off, agent overrides root): create/update leads, deals, persons, organizations, activities and lead labels, create notes, and convert leads to deals. Writes require `requested_by` attribution, hard `confirmed: true` for record changes, code-enforced search-before-create, `expected_before` stale-edit protection, agent markers and automatic trace notes with partial-success reporting. Adds `search_persons`, `search_organizations`, `list_contact_fields`, `get_activity`, `list_activity_types`, and `output_type: "full"` on `get_person`/`get_organization`. See `src/pipedrive/README.md`.

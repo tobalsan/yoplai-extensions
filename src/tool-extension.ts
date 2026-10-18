@@ -96,6 +96,7 @@ export interface ToolExtensionTool {
   description: string;
   annotations?: { readOnlyHint?: boolean };
   parameters: z.ZodTypeAny;
+  outputSchema?: z.ZodTypeAny;
   jsonSchemaParameters?: Record<string, unknown>;
   execute(params: unknown, context?: { agentId: string }): Promise<unknown>;
 }
@@ -208,6 +209,7 @@ function oauthRequirement(
 export function notConnected(provider: string, fallbackMessage: string, oauth?: ResolvedOAuth) {
   const disconnected = oauth && !oauth.connected ? oauth : undefined;
   return {
+    isError: true,
     connected: false,
     provider,
     reason: disconnected?.reason ?? "not_connected",
@@ -318,6 +320,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
         ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        ...(tool.outputSchema ? { outputSchema: zodToJsonSchema(tool.outputSchema, { $refStrategy: "none" }) as Record<string, unknown> } : {}),
         parameters: expandTypeArrays(
           tool.jsonSchemaParameters ??
             zodToJsonSchema(tool.parameters, {

@@ -3,10 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseEnv } from "node:util";
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
-import { adaptMcpTools, sanitizeSegment } from "./tool-adapter.js";
+import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
@@ -503,7 +504,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           return false;
         },
         requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
-        notConnectedResponse: (server) => ({ connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
+        notConnectedResponse: (server) => ({ isError: true, connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
         onUnrecoverableAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             const scope = selectedScopes.get(server.name);
@@ -1003,6 +1004,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       namespace: namespaceForServer(definitions[index]!.server),
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
+      outputSchema: zodToJsonSchema(tool.outputSchema!, { $refStrategy: "none" }) as Record<string, unknown>,
       execute: async (params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => {
         let now: string | undefined;
         try { now = mergedForAgent(agent, context.config)?.fingerprint; } catch { /* treated as changed */ }
@@ -1018,7 +1020,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         try {
           const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
           if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params, { signal: execution?.signal }));
-          return connectResponse(target.name, execution, { connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
+          return connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
         } finally { managers.delete(key); await fresh.close(); }
       },
     }));
@@ -1029,7 +1031,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         namespace: namespaceForServer(server.name),
         description: `Connect ${server.name} from the agent's extensions before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: async (_params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
+        outputSchema: zodToJsonSchema(McpCallToolResultSchema, { $refStrategy: "none" }) as Record<string, unknown>,
+        execute: async (_params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { isError: true, connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
       };
     }));
     return [...connectedTools, ...disconnected.filter((tool): tool is NonNullable<typeof tool> => Boolean(tool))];

@@ -252,3 +252,29 @@ describe("expandTypeArrays", () => {
     });
   });
 });
+
+describe("tool result declarations", () => {
+  it("publishes no-ref result fields while leaving legacy tools and refusal payloads usable", async () => {
+    const address = z.object({ city: z.string() });
+    const extension = defineToolExtension({
+      id: "results", displayName: "Results", description: "Results",
+      configSchema: z.object({}), requiredSecrets: [],
+      createTools: () => [
+        { name: "declared", description: "Declared", parameters: z.object({}),
+          outputSchema: z.object({ primary: address, secondary: address }),
+          execute: async () => ({ isError: true, message: "Connect account" }) },
+        { name: "legacy", description: "Legacy", parameters: z.object({}), execute: async () => "legacy" },
+      ],
+    });
+    const [declared, legacy] = await extension.getAgentTools({ id: "a", extensions: { results: {} } }, { config: {} });
+    expect(declared).toMatchObject({ outputSchema: {
+      type: "object", required: ["primary", "secondary"], properties: {
+        primary: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+        secondary: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+      },
+    } });
+    expect(legacy).not.toHaveProperty("outputSchema");
+    await expect(declared!.execute({})).resolves.toEqual({ isError: true, message: "Connect account" });
+    await expect(legacy!.execute({})).resolves.toBe("legacy");
+  });
+});

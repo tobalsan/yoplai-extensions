@@ -132,6 +132,7 @@ describe("zendesk extension modes", () => {
       [tools[6], { groupId: 1 }],
     ] as const) {
       expect(await tool.execute(params, {})).toEqual({
+        isError: true,
         connected: false,
         provider: "zendesk",
         reason: "not_connected",
@@ -162,4 +163,19 @@ describe("zendesk extension modes", () => {
     expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("https://acme.zendesk.com/api/v2/tickets.json");
     expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
   });
+});
+
+it("declares ticket result envelopes with comments, attachments and optional pagination", async () => {
+  const tools = extension.createTools({ global: {}, agent: {}, merged: {} });
+  const ticket = { id: 42, subject: "Billing", status: "open", comments: [{ id: 7, body: "Invoice attached", attachments: [{ id: 9, fileName: "invoice.pdf", size: 100 }] }] };
+  for (const [name, examples] of [
+    ["get_ticket", [{ ticket }]],
+    ["search_tickets", [{ tickets: [ticket], count: 1, nextPage: "https://example.test/page/2" }, { tickets: [] }]],
+  ] as const) {
+    const schema = tools.find((tool) => tool.name === name)!.outputSchema;
+    expect(schema, name).toBeDefined();
+    for (const fixture of examples) expect(schema!.safeParse(fixture).success).toBe(true);
+    const mounted = await extension.getAgentTools({ id: "a", extensions: { zendesk: {} } }, { config: {} });
+    expect(mounted.find((tool) => tool.name === `zendesk_${name}`)).toHaveProperty("outputSchema.type", "object");
+  }
 });

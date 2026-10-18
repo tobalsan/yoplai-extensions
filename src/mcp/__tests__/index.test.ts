@@ -285,9 +285,11 @@ describe("mcp extension", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       name: "mcp__claap__not_connected",
+      outputSchema: { type: "object", properties: { content: { type: "array" }, isError: { type: "boolean" } } },
       parameters: { type: "object", additionalProperties: false },
     });
     expect(tools[0]?.namespace).toStrictEqual({ name: "claap" });
+    await expect(tools[0]!.execute({})).resolves.toMatchObject({ isError: true, connected: false, provider: "mcp", reason: "not_connected", server: "claap" });
     await mockedExtension.stop();
   });
 
@@ -576,4 +578,71 @@ describe("mcp extension", () => {
     await mockedExtension.stop();
     expect(close).toHaveBeenCalledOnce();
   });
+});
+
+it("publishes generic MCP result fields and preserves rich success and error data", async () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-output-"));
+  fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }));
+  const fixture = { content: [
+    { type: "text", text: "Found" }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    { type: "resource", resource: { uri: "fixture://1", text: "data" } },
+  ], structuredContent: { deal: { org_id: 9 } }, _meta: { trace: "fixture" } };
+  const extension = createMcpExtension(async () => ({
+    async listTools() { return ["success", "failure"].map((name) => ({ server: "fixture", name, description: name, inputSchema: { type: "object" } })); },
+    async callTool(name) { return name === "failure" ? { ...fixture, isError: true } : fixture; },
+    async close() {},
+  }));
+  try {
+    const tools = await extension.getAgentTools({ id: "a", workspaceDir: agentDir }, { config: {} });
+    for (const tool of tools) expect(tool).toMatchObject({ namespace: { name: "fixture" }, outputSchema: {
+      type: "object", required: ["content"], properties: {
+        content: { type: "array", items: { type: "object", properties: { type: { type: "string" } }, additionalProperties: true } },
+        structuredContent: { type: "object" }, isError: { type: "boolean" },
+      },
+    } });
+    await expect(tools[0]!.execute({})).resolves.toEqual(fixture);
+    await expect(tools[1]!.execute({})).resolves.toEqual({ ...fixture, isError: true });
+  } finally {
+    await extension.stop();
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+it("marks the manager's reconnect fallback as an error while retaining refusal data", async () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-reconnect-"));
+  fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }));
+  const extension = createMcpExtension(async () => ({
+    async listTools() { return [{ server: "fixture", name: "read", description: "Read", inputSchema: { type: "object" } }]; },
+    async callTool() { throw new Error("401 Unauthorized"); },
+    async close() {},
+  }));
+  try {
+    const tools = await extension.getAgentTools({ id: "a", workspaceDir: agentDir }, { config: {} });
+    await expect(tools[0]!.execute({})).resolves.toMatchObject({ isError: true, connected: false, provider: "mcp", server: "fixture", reason: "needs_reconnect", authorizeUrl: "/agents/a/edit" });
+  } finally { await extension.stop(); fs.rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+it("marks a connected OAuth tool's unavailable response as an error", async () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-unavailable-"));
+  fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { local: { url: "https://example.test/mcp", oauth: { clientId: "client" } } } }));
+  const host = credentials();
+  const store = new McpOAuthStore(agentDir, "http://localhost/callback", host, () => ({ url: "https://example.test/mcp", clientId: "client" }));
+  await store.write("casey", "local", {
+    client: { client_id: "client", redirect_uris: ["http://localhost/callback"] },
+    tokens: { access_token: "fixture-token", token_type: "Bearer" }, connectedAt: new Date().toISOString(),
+    authorizationServerUrl: "https://auth.example.test", state: "connected",
+  });
+  let available = true;
+  const extension = createMcpExtension(async () => ({
+    async listTools() { return available ? [{ server: "local", name: "read", description: "Read", inputSchema: { type: "object" } }] : []; },
+    async callTool() { return { content: [{ type: "text", text: "OK" }] }; },
+    async close() {},
+  }));
+  const agent = { id: "casey", workspaceDir: agentDir, extensions: { mcp: {} } };
+  await extension.start({ credentials: host, getDataDir: () => agentDir, getConfig: () => ({}), getAgent: () => agent });
+  try {
+    const tools = await extension.getAgentTools(agent, { config: {} });
+    available = false;
+    await expect(tools[0]!.execute({})).resolves.toMatchObject({ isError: true, connected: false, provider: "mcp", reason: "not_connected", authorizeUrl: "/agents/casey/edit" });
+  } finally { await extension.stop(); fs.rmSync(agentDir, { recursive: true, force: true }); }
 });

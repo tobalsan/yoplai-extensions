@@ -2,6 +2,13 @@ import { z } from "zod";
 
 import { PipedriveWriteClient } from "./write-client.js";
 import {
+  DealDetailSchema,
+  ListDealsResultSchema,
+  OrganizationDetailSchema,
+  SearchDealsResultSchema,
+  SearchLeadsResultSchema,
+  ListDealFilesResultSchema,
+  PersonDetailSchema,
   DownloadFileParamsSchema,
   GetActivityParamsSchema,
   GetDealFieldParamsSchema,
@@ -115,6 +122,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           "List deals from the Pipedrive pipeline with a lean per-deal projection (now including won_time). Supports server-side filters (status [default open], pipeline_id, stage_id, person_id, org_id, user_id), an expected-close-date range (expected_close_from / expected_close_to, YYYY-MM-DD), and a won-date range (won_from / won_to, YYYY-MM-DD, filters on won_time). Optional custom_fields (names like 'Forecast category' or hash keys, max 15) adds those fields per deal with readable values. Returns { deals, next_cursor, count }; pass next_cursor back as cursor to page through the full filtered result.",
         parameters: ListDealsParamsSchema,
+        outputSchema: ListDealsResultSchema,
         execute: async (params) => {
           const parsed = ListDealsParamsSchema.parse(params);
           return await client.listDeals(parsed);
@@ -125,6 +133,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           "List the files/attachments on a deal with a lean metadata projection so you can pick the right one. Returns { files, count } where each file has { id, name, type, size (bytes), deal_id, add_time, url, remote_location }. Returns up to 500 files (deals rarely have more). Read-only; nothing is downloaded or parsed. Pass a file's id to download_file to fetch its bytes — but if remote_location is non-null (e.g. \"googledocs\"), the file is hosted externally and download_file will return a typed error with the link instead.",
         parameters: ListDealFilesParamsSchema,
+        outputSchema: ListDealFilesResultSchema,
         execute: async (params) => {
           const parsed = ListDealFilesParamsSchema.parse(params);
           return await client.listDealFiles(parsed);
@@ -203,6 +212,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           "Read a single deal in full detail by deal_id. Returns all standard fields (title, value, currency, status, stage/pipeline, person/org/owner, expected close date, created/updated/won times) plus a deal URL. Custom fields resolve to human-readable labels and typed values (enum→label, set→[labels], monetary→{amount,currency}, date-range→{from,until}) — never raw hash keys. output_type 'full' (default) includes normalized_extra_fields + normalized_field_metadata; 'lean' strips them.",
         parameters: GetDealParamsSchema,
+        outputSchema: DealDetailSchema,
         execute: async (params) => {
           const parsed = GetDealParamsSchema.parse(params);
           return await client.getDeal(parsed);
@@ -242,6 +252,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           "Resolve a deal's org_id to the organization entity for an invoice customer: { id, name, address, vat, siren, org_url }. address is structured (formatted_address + parts) or null; vat/siren are null unless stored on the org. output_type \"full\" additionally returns owner_id, add/update time and normalized custom fields + metadata (use before update_organization). Throws a typed not-found error when the organization does not exist.",
         parameters: GetOrganizationParamsSchema,
+        outputSchema: OrganizationDetailSchema,
         execute: async (params) => {
           const parsed = GetOrganizationParamsSchema.parse(params);
           return await client.getOrganization(parsed.id, parsed.output_type);
@@ -252,6 +263,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           "Resolve a deal's person_id to the primary contact entity: { id, name, first_name, last_name, job_title, org_id, emails, phones, primary_email, primary_phone, person_url }. emails/phones are labelled with a primary flag. output_type \"full\" additionally returns owner_id, add/update time and normalized custom fields + metadata (use before update_person). Throws a typed not-found error when the person does not exist.",
         parameters: GetPersonParamsSchema,
+        outputSchema: PersonDetailSchema,
         execute: async (params) => {
           const parsed = GetPersonParamsSchema.parse(params);
           return await client.getPerson(parsed.id, parsed.output_type);
@@ -262,6 +274,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           'Free-text search on deal titles. Pass a term (e.g. "try & buy" to flag Try-and-Buy deals for invoicing exclusion) plus optional server-side filters (status, person_id, org_id, exact_match). Returns { deals, next_cursor, count } with a lean per-match projection; pass next_cursor back as cursor to page the full match set so no matching deal is missed.',
         parameters: SearchDealsParamsSchema,
+        outputSchema: SearchDealsResultSchema,
         execute: async (params) => {
           const parsed = SearchDealsParamsSchema.parse(params);
           return await client.searchDeals(parsed);
@@ -312,6 +325,7 @@ pipedrive_validate verifies auth and API reachability.`,
         description:
           'Free-text search over leads. Pass a term (min 2 chars) plus optional fields (comma list: "title", "notes", "custom_fields"), exact_match, person_id, organization_id, and include_fields. Returns { leads, next_cursor, count } with a lean per-match projection (owner/person/organization as {id, name}); pass next_cursor back as cursor to page the full match set.',
         parameters: SearchLeadsParamsSchema,
+        outputSchema: SearchLeadsResultSchema,
         execute: async (params) => {
           const parsed = SearchLeadsParamsSchema.parse(params);
           return await client.searchLeads(parsed);

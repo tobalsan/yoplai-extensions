@@ -1,6 +1,9 @@
 import { PeopleEnrichClient } from "./client.js";
 import {
   FindMobileParamsSchema,
+  SearchPeopleResultSchema,
+  LookupPersonResultSchema,
+  FindWorkEmailResultSchema,
   FindWorkEmailParamsSchema,
   LookupCompanyParamsSchema,
   LookupPersonParamsSchema,
@@ -36,6 +39,7 @@ Strip accents from names (Éric → Eric). Never repeat a paid call whose result
         description:
           "Free. Search people by name, company domain, title or location. Returns candidates with apolloId, masked last name, title and company.",
         parameters: SearchPeopleParamsSchema,
+        outputSchema: SearchPeopleResultSchema,
         execute: async (params) => await client.searchPeople(SearchPeopleParamsSchema.parse(params)),
       },
       {
@@ -43,6 +47,7 @@ Strip accents from names (Éric → Eric). Never repeat a paid call whose result
         description:
           "Professional profile (headline, location, current role, work history, LinkedIn) from a LinkedIn URL or name + company. No contact data. Billed only by the source that matches: 5, else 10, else 30; misses are free.",
         parameters: LookupPersonParamsSchema,
+        outputSchema: LookupPersonResultSchema,
         execute: async (params) => await client.lookupPerson(LookupPersonParamsSchema.parse(params)),
       },
       {
@@ -50,6 +55,7 @@ Strip accents from names (Éric → Eric). Never repeat a paid call whose result
         description:
           "Verified work email from a LinkedIn URL or first/last name + company. Sources in order: 20 credits when an email is found; Apollo by apolloId (30 per matched person, even without an email); 50 credits only when an email exists; Apollo by name/LinkedIn as last resort when no apolloId (30 per matched person). Typical 20, worst 80.",
         parameters: FindWorkEmailParamsSchema,
+        outputSchema: FindWorkEmailResultSchema,
         execute: async (params) => await client.findWorkEmail(FindWorkEmailParamsSchema.parse(params)),
       },
       {

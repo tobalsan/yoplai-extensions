@@ -18,6 +18,8 @@ import {
   ListFilesParamsSchema,
   ReadFileParamsSchema,
   SearchFilesParamsSchema,
+  SearchFilesResultSchema,
+  ReadFileResultSchema,
   ValidateParamsSchema,
 } from "./models.js";
 
@@ -62,9 +64,9 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     const oauth = config.oauth;
     const connected = oauth?.connected === true ? oauth : undefined;
 
-    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>): ToolExtensionTool {
+    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>, outputSchema?: z.ZodTypeAny): ToolExtensionTool {
       return {
-        name, description, parameters: schema,
+        name, description, parameters: schema, ...(outputSchema ? { outputSchema } : {}),
         execute: async (params: unknown) => {
           const parsed = schema.parse(params);
           if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
@@ -74,8 +76,8 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     }
     const tools: ToolExtensionTool[] = [
       tool("list_files", "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.", ListFilesParamsSchema, (client, params) => client.listFiles(params)),
-      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params)),
-      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params)),
+      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params), SearchFilesResultSchema),
+      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params), ReadFileResultSchema),
       tool("sheets_list_spreadsheets", "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.", SheetsListSpreadsheetsParamsSchema, (client, params) => client.sheetsListSpreadsheets(params)),
       tool("sheets_inspect", "Inspect a spreadsheet's tabs, dimensions, and detected headers.", SheetsInspectParamsSchema, (client, params) => client.sheetsInspect(params)),
       tool("sheets_read_sheet", "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.", SheetsReadSheetParamsSchema, (client, params) => client.sheetsReadSheet(params)),
@@ -109,7 +111,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         } catch (error) {
           if (error instanceof GoogleDriveRequestError && [401, 403, 429].includes(error.status)) {
             const reason = googleFailureReason(error.status, error.responseBody)!;
-            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
+            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason], ...(reason === "rate_limited" ? {} : { isError: true }) };
           }
           throw error;
         }
