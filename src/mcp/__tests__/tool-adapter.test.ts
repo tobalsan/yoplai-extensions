@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { McpClientManager } from "../client-manager.js";
 import { adaptMcpTools, getMcpExtensionToolName, normalizeTypeLists } from "../tool-adapter.js";
@@ -13,7 +13,7 @@ describe("MCP tool adapter", () => {
             return [];
           },
           async callTool(name, args) {
-            return { name, args };
+            return { content: [{ type: "text", text: name }], structuredContent: { args }, isError: true };
           },
           async close() {},
         }),
@@ -39,12 +39,12 @@ describe("MCP tool adapter", () => {
       extra: true,
     });
     const signal = new AbortController().signal;
-    const invoke = vi.spyOn(manager, "invokeTool");
     await expect(adapted[0]?.execute({ q: "bug" }, { signal })).resolves.toEqual({
-      name: "search/issues",
-      args: { q: "bug" },
+      content: [{ type: "text", text: "search/issues" }],
+      structuredContent: { args: { q: "bug" } },
+      isError: true,
     });
-    expect(invoke).toHaveBeenCalledWith("github-main", "search/issues", { q: "bug" }, { signal });
+    await manager.close();
   });
 
   it("suffixes sanitized name collisions", () => {

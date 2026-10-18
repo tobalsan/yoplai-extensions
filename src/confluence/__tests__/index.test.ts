@@ -80,10 +80,25 @@ describe("confluence extension", () => {
     expect(tools.map((tool) => tool.name)).toContain("replace_page");
   });
 
-  it("documents write tools and storage/scope rules in the system prompt", () => {
-    expect(extension.systemPrompt).toContain("confluence_create_page");
-    expect(extension.systemPrompt).toContain("confluence_replace_page");
-    expect(extension.systemPrompt).toContain("storage-format XHTML");
-    expect(extension.systemPrompt).toContain("rejects any mismatched");
+  it("keeps write, search, and scope guidance without a tool catalog", async () => {
+    const prompts = await extension.getSystemPromptContributions(
+      { id: "a1", extensions: { confluence: { subdomain: "acme", email: "user@example.com", apiToken: "token" } } },
+      { config: { extensions: {} } }
+    );
+    const prompt = prompts!.join("\n");
+    expect(prompt).not.toContain("Tools:");
+    expect(prompt).not.toMatch(/^- confluence_\w+:/m);
+    expect(prompt).toContain("storage-format XHTML");
+    expect(prompt).toContain("rejects any mismatched");
+    expect(prompt).toContain("NUMERIC `spaceId`");
+    expect(prompt).toContain("resolve keys via confluence_list_spaces");
+    expect(prompt).toContain("CQL primer");
+    expect(prompt).toContain("sanitize agent-derived input");
+    const tools = await extension.getAgentTools(
+      { id: "a1", extensions: { confluence: { subdomain: "acme", email: "user@example.com", apiToken: "token" } } },
+      { config: { extensions: {} } }
+    );
+    expect(tools.map((tool) => tool.name)).toContain("confluence_create_page");
+    expect(tools.map((tool) => tool.name)).toContain("confluence_replace_page");
   });
 });

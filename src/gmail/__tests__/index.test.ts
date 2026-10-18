@@ -14,7 +14,7 @@ describe("gmail extension", () => {
 
   it("returns a structured connection result without an access token", async () => {
     const tools = await extension.getAgentTools({ id: "a1", extensions: { gmail: {} } }, { config: {}, resolveOAuth: vi.fn().mockResolvedValue({ connected: false, provider: "google", reason: "expired", message: "Reconnect Google.", authorizeUrl: "https://example.test/connect" }) });
-    await expect(tools[0].execute({ to: ["person@example.com"] })).resolves.toEqual({ connected: false, provider: "google", reason: "expired", message: "Reconnect Google.", authorizeUrl: "https://example.test/connect" });
+    await expect(tools[0].execute({ to: ["person@example.com"] })).resolves.toEqual({ isError: true, connected: false, provider: "google", reason: "expired", message: "Reconnect Google.", authorizeUrl: "https://example.test/connect" });
   });
 
   it("rejects invalid official inputs before making a Gmail request", async () => {

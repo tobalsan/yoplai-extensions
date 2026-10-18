@@ -4,6 +4,10 @@
 
 ### Added
 
+- Output schemas for high-traffic Pipedrive, Zendesk, People Enrich, Google Drive and all MCP tools, so codemode scripts can read structured results. Connection/reconnection refusals carry `isError: true` (ALG-507).
+
+- MCP tool records include server namespace metadata with labels from local or enabled shared configuration and server info (ALG-509).
+
 - Google Drive original-file download and conversation-confined save tools preserve binary formats and round-trip native Docs/Sheets/Slides through Office files; optional writes retain `drive.file` scope (ALG-502).
 
 - Pipedrive confirmed write tools behind an opt-in `allowWrite` toggle (default off, agent overrides root): create/update leads, deals, persons, organizations, activities and lead labels, create notes, and convert leads to deals. Writes require `requested_by` attribution, hard `confirmed: true` for record changes, code-enforced search-before-create, `expected_before` stale-edit protection, agent markers and automatic trace notes with partial-success reporting. Adds `search_persons`, `search_organizations`, `list_contact_fields`, `get_activity`, `list_activity_types`, and `output_type: "full"` on `get_person`/`get_organization`. See `src/pipedrive/README.md`.
@@ -15,6 +19,8 @@
 - MCP OAuth connections and removals record redacted settings audit events when the host supports auditing (ALG-470).
 
 ### Changed
+
+- Extension prompt addenda omit generated and redundant literal tool catalogs while retaining usage guidance (ALG-509).
 
 - `GET /mcp/servers/personal-status?agent=&url=` reports whether the user already has a usable shared personal grant for a server URL, so adding it "Just me" needs no OAuth popup.
 - Personal MCP OAuth connections are shared across agents that configure the same server URL; team connections stay per agent.
@@ -30,6 +36,8 @@
 - Gmail and Google Drive descriptions, agent instructions, and not-connected messages now say connections can be personal (**Just me**) or shared (**Whole team**) instead of "per-agent OAuth"; the READMEs describe the personal-then-team fallback and the current connect flow.
 
 ### Fixed
+
+- Disconnected MCP stub names use the same canonical server sanitizer as connected tools, correcting unusual keys such as `--a__b--` and all-punctuation keys without changing normal names or collision suffixes (ALG-509).
 
 - MCP tool calls forward gateway cancellation signals, including OAuth refresh retries (ALG-488).
 

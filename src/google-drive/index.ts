@@ -18,6 +18,8 @@ import {
   ListFilesParamsSchema,
   ReadFileParamsSchema,
   SearchFilesParamsSchema,
+  SearchFilesResultSchema,
+  ReadFileResultSchema,
   ValidateParamsSchema,
 } from "./models.js";
 
@@ -40,17 +42,7 @@ export default defineToolExtension({
 
 Authentication uses the requester's own Google connection, falling back to the team connection. If a tool reports not connected, share the connect link it returns (or tell the user to connect Google Drive in the agent's settings) — do not attempt to guess or supply credentials.
 
-Tools:
-- googleDrive_list_files: list accessible Drive files, optionally filtered by a name substring; supports pageSize and pageToken pagination
-- googleDrive_search_files: search Drive using the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'"; supports pagination
-- googleDrive_read_file: download a file by id and extract its text (Google Docs/Sheets/Slides are exported to text/CSV; PDF and DOCX are text-extracted)
-- googleDrive_download_file: download original binary files byte for byte into this conversation's writable folder; native Docs/Sheets/Slides export to docx/xlsx/pptx
-- googleDrive_save_file (allowWrite only): upload a conversation file as a new copy with name and optional parentId, or replace an app-accessible fileId in its existing format
-- googleDrive_sheets_list_spreadsheets: list Google Sheets, optionally filtered by name
-- googleDrive_sheets_inspect: inspect a spreadsheet's tabs, dimensions, and detected headers
-- googleDrive_sheets_read_sheet: read one tab as headers plus row objects; use rowOffset, maxRows, and columns for large tabs
-- googleDrive_sheets_read_range: read an arbitrary A1 range as raw values
-- googleDrive_validate: check that the Google Drive connection is live
+Use pageSize and pageToken for file-list and search pagination. Drive searches use the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'". Use rowOffset, maxRows, and columns to limit large Sheets tabs.
 
 For layout, headers, footers, images or formatting, use googleDrive_download_file, edit the returned local path, then googleDrive_save_file. googleDrive_read_file returns extracted text only. Use send_file to deliver the edited local file to the user where useful. Save files only from the current conversation folder. Downloads are limited to 25 MiB for binary media and Google's 10 MB native export limit.
 
@@ -76,9 +68,9 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     const oauth = config.oauth;
     const connected = oauth?.connected === true ? oauth : undefined;
 
-    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }, context?: ToolExecutionContext) => Promise<unknown>): ToolExtensionTool {
+    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }, context?: ToolExecutionContext) => Promise<unknown>, outputSchema?: z.ZodTypeAny): ToolExtensionTool {
       return {
-        name, description, parameters: schema,
+        name, description, parameters: schema, ...(outputSchema ? { outputSchema } : {}),
         execute: async (params: unknown, context) => {
           const parsed = schema.parse(params);
           if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
@@ -88,8 +80,8 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     }
     const tools: ToolExtensionTool[] = [
       tool("list_files", "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.", ListFilesParamsSchema, (client, params) => client.listFiles(params)),
-      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params)),
-      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params)),
+      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params), SearchFilesResultSchema),
+      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params), ReadFileResultSchema),
       tool("download_file", "Download the original file into this conversation for editing; native Docs/Sheets/Slides export as Office files.", ReadFileParamsSchema, (client, params, _connected, context) => client.downloadFile(params.fileId, context)),
       tool("sheets_list_spreadsheets", "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.", SheetsListSpreadsheetsParamsSchema, (client, params) => client.sheetsListSpreadsheets(params)),
       tool("sheets_inspect", "Inspect a spreadsheet's tabs, dimensions, and detected headers.", SheetsInspectParamsSchema, (client, params) => client.sheetsInspect(params)),
@@ -126,7 +118,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
           if (error instanceof GoogleDriveRequestError && [401, 403, 429].includes(error.status)) {
             const reason = googleFailureReason(error.status, error.responseBody)!;
             if (error.status === 403 && reason === "insufficient_scope" && !/insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(error.responseBody)) throw error;
-            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
+            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason], ...(reason === "rate_limited" ? {} : { isError: true }) };
           }
           throw error;
         }

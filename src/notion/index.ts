@@ -53,24 +53,11 @@ export default defineToolExtension({
   description: "Generic Notion extension for data sources, pages, blocks, and file extraction.",
   systemPrompt: `Use this extension for generic Notion operations.
 
-Tools:
-- notion_list_data_sources: find data source (database) IDs by title; omit query to list all
-- notion_list_pages: find page IDs by an optional title query; omit query to list all
-- notion_search_pages: same as list_pages but the title query is required — titles only, not full-text body search
-- notion_get_data_source: inspect a data source's schema/properties and metadata, not its rows
-- notion_update_data_source: patch a data source's schema, title, or description, not its rows
-- notion_query_data_source: query ALL rows from a data source, auto-paginated
-- notion_get_page: fetch a page's property values and metadata only — NO content; use get_page_markdown or get_blocks for content
-- notion_get_page_markdown: read page content as Markdown (cheap, no block IDs); call this before update_page_markdown to get exact old_str text
-- notion_create_page: create a data source row (dataSourceId) or a subpage (pageId), exactly one required; markdown and children are mutually exclusive
-- notion_update_page_properties: patch page PROPERTY VALUES only — never content/body
-- notion_update_page_markdown: edit page content via update_content (exact-string find/replace) or replace_content (overwrite everything)
-- notion_get_blocks: fetch raw block JSON with block IDs — use when you need to target a specific block
-- notion_append_blocks: append new raw blocks to the end of a page or block's children
-- notion_delete_block: delete/archive a single block by ID (get the ID from get_blocks)
-- notion_replace_child_blocks: swap direct child sections identified by heading text (appends then deletes matches)
-- notion_download_and_extract_file: download a file URL and extract text from PDF or DOCX
-- notion_validate: verify auth and API reachability
+Discovery queries match titles only, not full-text body search; omit query when listing all pages or data sources. Data source schema operations do not read or edit rows; query_data_source returns all rows with automatic pagination.
+
+Page metadata does not include content. Use get_page_markdown for content without block IDs, and call it before update_page_markdown to get exact old_str text. Use get_blocks when targeting or deleting a specific block by ID. Page property updates change PROPERTY VALUES only, never content/body. For content edits, use update_content for exact-string find/replace or replace_content to overwrite everything. Replacing child sections matches heading text, appends the replacements, then deletes the matches.
+
+When creating a page, supply exactly one parent: dataSourceId for a data source row or pageId for a subpage; markdown and children are mutually exclusive.
 
 Return and consume JSON-serializable data only.
 In oauth mode the requester's connected Notion workspace is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
