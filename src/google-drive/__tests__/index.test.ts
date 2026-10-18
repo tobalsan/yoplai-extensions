@@ -147,11 +147,11 @@ describe("googleDrive extension", () => {
 
 
 describe("write mode", () => {
-  it("defaults to read-only and exposes six writes only when enabled", () => {
+  it("defaults to read-only and exposes seven writes only when enabled", () => {
     const names = (merged: Record<string, unknown>) => extension.createTools({ global: {}, agent: {}, merged }).map((tool) => tool.name);
-    expect(names({})).toEqual(["list_files", "search_files", "read_file", "sheets_list_spreadsheets", "sheets_inspect", "sheets_read_sheet", "sheets_read_range", "validate"]);
+    expect(names({})).toEqual(["list_files", "search_files", "read_file", "download_file", "sheets_list_spreadsheets", "sheets_inspect", "sheets_read_sheet", "sheets_read_range", "validate"]);
     expect(names({ allowWrite: false })).toEqual(names({}));
-    expect(names({ allowWrite: true })).toEqual([...names({}), "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
+    expect(names({ allowWrite: true })).toEqual([...names({}), "save_file", "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
     expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false, title: "Enable creating and writing files" } } });
   });
 
@@ -182,8 +182,8 @@ describe("write mode", () => {
     await expect(tools.find((tool) => tool.name === "create_file")!.execute({ name: "Clients", content: "" })).resolves.toMatchObject({ reason: "insufficient_scope", authorizeUrl: "/authorize?scopes=write" });
   });
 
-  it("turns API permission refusals into insufficient_scope", async () => {
-    stubDriveFailure(403, "permission denied");
+  it("turns API OAuth scope refusals into insufficient_scope", async () => {
+    stubDriveFailure(403, "insufficientPermissions");
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
       connected: true, provider: "google", accessToken: "token", scopes: [],
     } });
@@ -194,7 +194,7 @@ describe("write mode", () => {
     [401, "", "expired", { connected: false, provider: "google", reason: "expired", message: "Google access has expired. Reconnect Google to continue.", isError: true }],
     [429, "", "rate_limited", { connected: false, provider: "google", reason: "rate_limited", message: "Google Drive is temporarily rate limited. Wait and retry." }],
     [403, "userRateLimitExceeded quota", "rate_limited", { connected: false, provider: "google", reason: "rate_limited", message: "Google Drive is temporarily rate limited. Wait and retry." }],
-    [403, "forbidden", "insufficient_scope", { connected: false, provider: "google", reason: "insufficient_scope", message: "Google Drive needs additional Google permission. Reconnect Google and approve the configured access.", isError: true }],
+    [403, "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficient_scope", { connected: false, provider: "google", reason: "insufficient_scope", message: "Google Drive needs additional Google permission. Reconnect Google and approve the configured access.", isError: true }],
   ])("maps API status %s (%s) to %s", async (status, body, _reason, expected) => {
     stubDriveFailure(status, body);
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
