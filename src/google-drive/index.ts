@@ -18,6 +18,8 @@ import {
   ListFilesParamsSchema,
   ReadFileParamsSchema,
   SearchFilesParamsSchema,
+  SearchFilesResultSchema,
+  ReadFileResultSchema,
   ValidateParamsSchema,
 } from "./models.js";
 
@@ -40,15 +42,7 @@ export default defineToolExtension({
 
 Authentication uses the requester's own Google connection, falling back to the team connection. If a tool reports not connected, share the connect link it returns (or tell the user to connect Google Drive in the agent's settings) — do not attempt to guess or supply credentials.
 
-Tools:
-- googleDrive_list_files: list accessible Drive files, optionally filtered by a name substring; supports pageSize and pageToken pagination
-- googleDrive_search_files: search Drive using the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'"; supports pagination
-- googleDrive_read_file: download a file by id and extract its text (Google Docs/Sheets/Slides are exported to text/CSV; PDF and DOCX are text-extracted)
-- googleDrive_sheets_list_spreadsheets: list Google Sheets, optionally filtered by name
-- googleDrive_sheets_inspect: inspect a spreadsheet's tabs, dimensions, and detected headers
-- googleDrive_sheets_read_sheet: read one tab as headers plus row objects; use rowOffset, maxRows, and columns for large tabs
-- googleDrive_sheets_read_range: read an arbitrary A1 range as raw values
-- googleDrive_validate: check that the Google Drive connection is live
+Use pageSize and pageToken for file-list and search pagination. Drive searches use the Drive query (\`q\`) syntax, e.g. "name contains 'report' and mimeType='application/pdf'". Use rowOffset, maxRows, and columns to limit large Sheets tabs.
 
 Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDrive_sheets_update_range overwrites an exact A1 range; googleDrive_sheets_append_rows appends after table data. Before writing, read the target tab or range; after writing, report the updated range and cell count.`,
   configSchema: GoogleDriveConfigSchema,
@@ -70,9 +64,9 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     const oauth = config.oauth;
     const connected = oauth?.connected === true ? oauth : undefined;
 
-    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>): ToolExtensionTool {
+    function tool<T extends z.ZodTypeAny>(name: string, description: string, schema: T, action: (client: GoogleDriveClient, params: z.infer<T>, connected: { accessToken: string; account?: string; scopes: string[] }) => Promise<unknown>, outputSchema?: z.ZodTypeAny): ToolExtensionTool {
       return {
-        name, description, parameters: schema,
+        name, description, parameters: schema, ...(outputSchema ? { outputSchema } : {}),
         execute: async (params: unknown) => {
           const parsed = schema.parse(params);
           if (!connected) return notConnected("google", NOT_CONNECTED_MESSAGE, oauth);
@@ -82,8 +76,8 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
     }
     const tools: ToolExtensionTool[] = [
       tool("list_files", "List Google Drive files, optionally filtered by a name substring. Supports pageSize and pageToken pagination.", ListFilesParamsSchema, (client, params) => client.listFiles(params)),
-      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params)),
-      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params)),
+      tool("search_files", "Search Google Drive using the Drive query (`q`) syntax. Supports pageSize and pageToken pagination.", SearchFilesParamsSchema, (client, params) => client.searchFiles(params), SearchFilesResultSchema),
+      tool("read_file", "Download a Google Drive file by id and extract its text content. Google Workspace files are exported to text/CSV; PDF and DOCX are text-extracted.", ReadFileParamsSchema, (client, params) => client.readFile(params), ReadFileResultSchema),
       tool("sheets_list_spreadsheets", "List Google Sheets accessible to the connected account, optionally filtered by name. Supports pageSize and pageToken pagination.", SheetsListSpreadsheetsParamsSchema, (client, params) => client.sheetsListSpreadsheets(params)),
       tool("sheets_inspect", "Inspect a spreadsheet's tabs, dimensions, and detected headers.", SheetsInspectParamsSchema, (client, params) => client.sheetsInspect(params)),
       tool("sheets_read_sheet", "Read one worksheet tab as detected headers plus row objects. Supports rowOffset, maxRows, and columns for large tabs.", SheetsReadSheetParamsSchema, (client, params) => client.sheetsReadSheet(params)),
@@ -117,7 +111,7 @@ Sheets tools accept spreadsheetId or spreadsheetUrl. With allowWrite: googleDriv
         } catch (error) {
           if (error instanceof GoogleDriveRequestError && [401, 403, 429].includes(error.status)) {
             const reason = googleFailureReason(error.status, error.responseBody)!;
-            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason] };
+            return { connected: false, provider: "google", reason, message: FAILURE_MESSAGES[reason], ...(reason === "rate_limited" ? {} : { isError: true }) };
           }
           throw error;
         }

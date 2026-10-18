@@ -52,3 +52,24 @@ describe("people_enrich extension", () => {
     vi.unstubAllEnvs();
   });
 });
+
+it("declares useful search, profile and email fields including normal misses", async () => {
+  const tools = extension.createTools({ global: {}, agent: {}, merged: { apiKey: "fixture" } });
+  const attempts = [{ provider: "fullenrich", creditsUsed: 20, found: true }];
+  const profile = { name: "Sam Example", currentCompany: "Acme", experience: [{ title: "CTO", company: "Acme", start: "2022-01", end: "present" }] };
+  const examples: Record<string, unknown[]> = {
+    search_people: [{ provider: "apollo", creditsUsed: 0, totalMatches: 1, people: [{ apolloId: "p1", firstName: "Sam", lastNameMasked: "E***", hasEmail: true, hasDirectPhone: "maybe" }] }, { provider: "apollo", creditsUsed: 0, totalMatches: 0, people: [] }],
+    lookup_person: [{ found: true, provider: "fullenrich", creditsUsed: 5, attempts: [{ provider: "fullenrich", creditsUsed: 5, found: true }], person: profile }, { found: false, creditsUsed: 0, attempts: [], person: null }],
+    find_work_email: [{ found: true, provider: "fullenrich", creditsUsed: 20, attempts, email: "sam@example.test", emailStatus: "DELIVERABLE", otherEmails: [], person: profile },
+      { found: true, provider: "datalegion", creditsUsed: 50, attempts: [{ provider: "datalegion", creditsUsed: 50, found: true }], email: "sam@example.test", emailStatus: null, otherEmails: [undefined, "other@example.test"], person: null },
+      { found: true, provider: "datalegion", creditsUsed: 50, attempts: [{ provider: "datalegion", creditsUsed: 50, found: true }], email: "sam@example.test", emailStatus: null, otherEmails: [null, "other@example.test"], person: null },
+      { found: false, creditsUsed: 0, attempts: [], email: null }],
+  };
+  const mounted = await extension.getAgentTools({ id: "a", extensions: { people_enrich: { apiKey: "fixture" } } }, { config: {} });
+  for (const [name, fixtures] of Object.entries(examples)) {
+    const schema = tools.find((tool) => tool.name === name)!.outputSchema;
+    expect(schema, name).toBeDefined();
+    for (const fixture of fixtures) expect(schema!.safeParse(fixture).success, name).toBe(true);
+    expect(mounted.find((tool) => tool.name === `people_enrich_${name}`)).toHaveProperty("outputSchema.type", "object");
+  }
+});

@@ -44,21 +44,6 @@ export default defineToolExtension({
   description: "Read, search, and draft-write Pennylane customer invoices and quotes, plus read customers and products (draft-safe: never finalizes, accepts, or sends).",
   systemPrompt: `Use this extension for Pennylane (Company API v2) accounting operations.
 
-Available tools:
-- pennylane_list_invoices: list customer invoices with cursor pagination handled for you
-- pennylane_search_invoices: filter customer invoices by customer, external_reference, status, and date range
-- pennylane_get_invoice: fetch a single customer invoice by id
-- pennylane_list_quotes / pennylane_search_quotes / pennylane_get_quote: read quotes (devis)
-- pennylane_list_customers / pennylane_search_customers / pennylane_get_customer: read customers
-- pennylane_create_customer: create a company or individual customer
-- pennylane_list_products / pennylane_search_products / pennylane_get_product: read products
-- pennylane_list_vat_rates: discover valid vat_rate codes (e.g. FR_200 = 20%)
-- pennylane_validate: verify auth and API reachability
-- pennylane_create_invoice_draft: create a customer invoice as an editable DRAFT (draft: true); pass external_reference (Pipedrive deal id) for dedup
-- pennylane_update_invoice_draft: edit an existing invoice draft; refuses if the target is already finalized (DraftGuard)
-- pennylane_create_quote: create a quote (devis); it is always created 'pending' (quotes have no draft state); pass external_reference (Pipedrive deal id) for dedup
-- pennylane_update_quote: edit an existing quote; refuses via DraftGuard unless the target is still 'pending'; invoice_lines uses a { create, update, delete } diff
-
 Key concepts:
 - money values are decimal strings (e.g. "230.32"), never floats or cents
 - dates are YYYY-MM-DD; ids are int64 returned as strings

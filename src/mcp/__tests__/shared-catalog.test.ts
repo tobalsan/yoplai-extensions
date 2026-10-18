@@ -49,6 +49,27 @@ async function setup(agentFiles: Record<string, unknown> = {}, catalog?: unknown
 }
 
 describe("shared MCP catalog", () => {
+  it("returns enabled shared HTTP namespace labels with independent config overrides", async () => {
+    const t = await setup({ "mcp.json": { mcpServers: {}, sharedServers: ["named", "described", "blank", "full"] } }, { mcpServers: {
+      named: { url: "https://named.example.test/mcp", displayName: " Catalog title " },
+      described: { url: "https://described.example.test/mcp", description: " Catalog description " },
+      blank: { url: "https://blank.example.test/mcp", displayName: " \t ", description: "" },
+      full: { url: "https://full.example.test/mcp", displayName: " Full title ", description: " Full description " },
+      disabled: { url: "https://disabled.example.test/mcp", displayName: "Disabled" },
+    } });
+    try {
+      const tools = await t.extension.getAgentTools(t.agent, { config: {} });
+      expect(tools).toHaveLength(4);
+      expect(tools.map((tool) => tool.namespace)).toEqual(expect.arrayContaining([
+        { name: "named", displayName: "Catalog title", description: "Reported description" },
+        { name: "described", displayName: "Reported", description: "Catalog description" },
+        { name: "blank", displayName: "Reported", description: "Reported description" },
+        { name: "full", displayName: "Full title", description: "Full description" },
+      ]));
+      await expect(tools[0]?.execute({})).resolves.toBe("pong");
+    } finally { await t.extension.stop(); }
+  });
+
   it("allows only superadmins to manage the catalog and validates adds", async () => {
     const t = await setup();
     expect(await t.call("GET /mcp/catalog", ctx("admin"))).toMatchObject({ status: 403 });

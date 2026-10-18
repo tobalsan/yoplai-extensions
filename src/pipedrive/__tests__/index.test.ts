@@ -80,7 +80,12 @@ describe("pipedrive allowWrite gating", () => {
     const on = await prompt(true);
     expect(on).toContain("confirmed: true");
     expect(on).toContain("requested_by");
-    expect(on).toContain("pipedrive_create_lead:");
+    expect(on).not.toContain("pipedrive_create_lead:");
+    const tools = await extension.getAgentTools(
+      { id: "a1", extensions: { pipedrive: {} } },
+      { config: { extensions: { pipedrive: { ...credentials, allowWrite: true } } } }
+    );
+    expect(tools.map((tool) => tool.name)).toContain("pipedrive_create_lead");
   });
 
   it("exports an object schema for every tool", () => {
@@ -97,4 +102,35 @@ describe("pipedrive allowWrite gating", () => {
     await expect(create?.execute({})).rejects.toThrow();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+});
+
+it("declares result fields for all seven codemode reads and accepts lean and full fixtures", async () => {
+  const tools = extension.createTools({ global: {}, agent: {}, merged: credentials });
+  const deal = {
+    id: 17, title: "Renewal", value: 250, currency: "EUR", status: "open", stage_id: 2, pipeline_id: 1,
+    person_id: 4, org_id: 9, user_id: 5, owner_name: "Jo", expected_close_date: null,
+    add_time: null, update_time: null, won_time: null, deal_url: "https://acme.pipedrive.com/deal/17",
+  };
+  const person = { id: 4, name: "Sam", first_name: "Sam", last_name: null, job_title: null, org_id: 9,
+    emails: [{ label: "work", value: "sam@example.test", primary: true }], phones: [],
+    primary_email: "sam@example.test", primary_phone: null, person_url: "https://acme.pipedrive.com/person/4" };
+  const organization = { id: 9, name: "Acme", address: null, vat: null, siren: null, org_url: "https://acme.pipedrive.com/organization/9" };
+  const full = { normalized_extra_fields: { Segment: "Enterprise" }, normalized_field_metadata: { Segment: { key: "abc", type: "enum" } } };
+  const fixtures: Record<string, unknown[]> = {
+    get_deal: [deal, { ...deal, ...full }],
+    get_person: [person, { ...person, ...full, owner_id: 5, add_time: null, update_time: null }],
+    get_organization: [organization, { ...organization, ...full }],
+    list_deals: [{ deals: [{ ...deal, local_won_date: null, local_close_date: null, custom_fields: { Segment: "Enterprise" } }], next_cursor: null, count: 1 }],
+    search_deals: [{ deals: [{ ...deal, result_score: 0.9 }], next_cursor: "next", count: 1 }],
+    search_leads: [{ leads: [{ id: "lead-1", title: "Prospect", owner: { id: 5, name: "Jo" }, person: null,
+      organization: { id: 9, name: "Acme" }, is_archived: false, value: null, currency: null, expected_close_date: null, result_score: 0.8 }], next_cursor: null, count: 1 }],
+    list_deal_files: [{ files: [{ id: 8, name: "offer.pdf", type: "pdf", size: 42, deal_id: 17, add_time: null, url: null, remote_location: null }], count: 1 }],
+  };
+  const registered = await extension.getAgentTools({ id: "a", extensions: { pipedrive: credentials } }, { config: {} });
+  for (const [name, examples] of Object.entries(fixtures)) {
+    const schema = tools.find((tool) => tool.name === name)!.outputSchema;
+    expect(schema, name).toBeDefined();
+    for (const fixture of examples) expect(schema!.safeParse(fixture).success, name).toBe(true);
+    expect(registered.find((tool) => tool.name === `pipedrive_${name}`)).toHaveProperty("outputSchema.type", "object");
+  }
 });

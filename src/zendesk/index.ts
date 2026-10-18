@@ -2,6 +2,8 @@ import { ZendeskClient } from "./client.js";
 import {
   AddInternalNoteParamsSchema,
   GetTicketParamsSchema,
+  GetTicketResultSchema,
+  SearchTicketsResultSchema,
   ListAgentsParamsSchema,
   ListGroupsParamsSchema,
   ListTicketsParamsSchema,
@@ -39,14 +41,9 @@ export default defineToolExtension({
   description: "Zendesk extension for reading, searching, and triaging tickets, and adding internal notes.",
   systemPrompt: `Use this extension to read, search, and triage Zendesk support tickets and add internal notes.
 
-Available tools:
-- zendesk_list_tickets: list tickets with cursor-based pagination (pageSize up to 100, pageCursor from prior response). Returns newest tickets first by default; pass sort to override (id, -id, updated_at, -updated_at, status, -status)
-- zendesk_search_tickets: search tickets by Zendesk search query (e.g. "status:open priority:high"), with offset pagination and optional sort
-- zendesk_get_ticket: fetch a single ticket by id, with comments included
-- zendesk_update_ticket: triage a ticket — set status (open, pending, hold, solved), priority, type, assigneeId, groupId, and add/remove tags. Only the fields you pass change.
-- zendesk_add_internal_note: add a private note to a ticket. Internal notes are visible to agents only, never to the requester.
-- zendesk_list_groups: list support groups (teams) with their ids, cursor-paginated
-- zendesk_list_agents: list agents and admins (assignable users) with their ids and default group; pass groupId to list one team's members
+For ticket lists, use pageSize up to 100 and pageCursor from the prior response. Results are newest first by default; pass sort to override (id, -id, updated_at, -updated_at, status, -status). Ticket searches use offset pagination and optional sort. Group listings use cursor pagination; pass groupId when listing one team's agents.
+
+Only the fields you pass change when updating a ticket. Internal notes are visible to agents only, never to the requester.
 
 Common workflows:
 - To find tickets matching criteria, use zendesk_search_tickets with a query like "status:open requester:user@example.com".
@@ -95,12 +92,14 @@ Notes:
         name: "search_tickets",
         description: "Search tickets using Zendesk search syntax.",
         parameters: SearchTicketsParamsSchema,
+        outputSchema: SearchTicketsResultSchema,
         execute: async (params) => (client ? client.searchTickets(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {
         name: "get_ticket",
         description: "Get a ticket by id, with comments included.",
         parameters: GetTicketParamsSchema,
+        outputSchema: GetTicketResultSchema,
         execute: async (params) => (client ? client.getTicket(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
       {

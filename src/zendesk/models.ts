@@ -102,6 +102,13 @@ export const TicketSchema = z
   .passthrough();
 export type Ticket = z.infer<typeof TicketSchema>;
 
+export const SearchTicketsResultSchema = z.object({
+  tickets: z.array(TicketSchema),
+  count: z.number().optional(),
+  nextPage: z.string().optional(),
+});
+export const GetTicketResultSchema = z.object({ ticket: TicketSchema });
+
 /** Compact shapes (unknown keys stripped) so agent/group lists stay small in model context. */
 export const GroupSchema = z.object({
   id: NullableNumber,

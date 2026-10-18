@@ -96,6 +96,7 @@ export interface ToolExtensionTool {
   description: string;
   annotations?: { readOnlyHint?: boolean };
   parameters: z.ZodTypeAny;
+  outputSchema?: z.ZodTypeAny;
   jsonSchemaParameters?: Record<string, unknown>;
   execute(params: unknown, context?: { agentId: string }): Promise<unknown>;
 }
@@ -208,6 +209,7 @@ function oauthRequirement(
 export function notConnected(provider: string, fallbackMessage: string, oauth?: ResolvedOAuth) {
   const disconnected = oauth && !oauth.connected ? oauth : undefined;
   return {
+    isError: true,
     connected: false,
     provider,
     reason: disconnected?.reason ?? "not_connected",
@@ -242,18 +244,6 @@ function getMountedToolName(
   return toolName.startsWith(`${definition.id}_`)
     ? toolName
     : `${definition.id}_${toolName}`;
-}
-
-function renderMountedToolNames(
-  definition: ToolExtensionDefinition,
-  resolved: ResolvedToolExtensionConfig
-): string {
-  return [
-    "Yoplai exposes this extension's tools with these exact names:",
-    ...definition
-      .createTools(resolved)
-      .map((tool) => `- ${getMountedToolName(definition, tool.name)}: ${tool.description}`),
-  ].join("\n");
 }
 
 function withFieldTitles<T>(schema: T, titles: Record<string, string> = {}): T {
@@ -319,7 +309,6 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       resolved.oauth = await resolveOAuthForDefinition(definition, agent, context, resolved);
       return [
         definition.systemPrompt?.trim() || undefined,
-        renderMountedToolNames(definition, resolved),
       ].filter((prompt): prompt is string => Boolean(prompt));
     },
     async getAgentTools(agent: { id: string; extensions?: Record<string, unknown> }, context?: ToolExtensionHookContext) {
@@ -331,6 +320,7 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
         name: getMountedToolName(definition, tool.name),
         description: tool.description,
         ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        ...(tool.outputSchema ? { outputSchema: zodToJsonSchema(tool.outputSchema, { $refStrategy: "none" }) as Record<string, unknown> } : {}),
         parameters: expandTypeArrays(
           tool.jsonSchemaParameters ??
             zodToJsonSchema(tool.parameters, {

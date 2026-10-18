@@ -3,6 +3,21 @@ import { ZodObject } from "zod";
 import extension from "../index.js";
 
 describe("hiveage extension", () => {
+  it("keeps billing workflows and validation guidance without a tool catalog", async () => {
+    const prompts = await extension.getSystemPromptContributions(
+      { id: "a1", extensions: { hiveage: { apiKey: "secret", subdomain: "acme" } } },
+      { config: { extensions: {} } }
+    );
+    const prompt = prompts!.join("\n");
+    expect(prompt).not.toContain("Available tools:");
+    expect(prompt).not.toMatch(/^- hiveage_\w+.*:/m);
+    expect(prompt).toContain("connections are clients or customers");
+    expect(prompt).toContain("hash keys as identifiers");
+    expect(prompt).toContain("first find the connection");
+    expect(prompt).toContain("required fields, dates, line items, discounts");
+    expect(prompt).toContain("hiveage_list_invoices with pagination");
+  });
+
   it("creates 23 tools", () => {
     const tools = extension.createTools({
       global: {},

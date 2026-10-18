@@ -137,3 +137,15 @@ export type SheetsListSpreadsheetsParams = z.infer<typeof SheetsListSpreadsheets
 export type SheetsInspectParams = z.infer<typeof SheetsInspectParamsSchema>;
 export type SheetsReadSheetParams = z.infer<typeof SheetsReadSheetParamsSchema>;
 export type SheetsReadRangeParams = z.infer<typeof SheetsReadRangeParamsSchema>;
+
+export const SearchFilesResultSchema = z.object({
+  files: z.array(z.object({
+    id: z.string(), name: z.string(), mimeType: z.string().nullable(), modifiedTime: z.string().nullable(),
+    size: z.number().nullable(), webViewLink: z.string().nullable(),
+  })),
+  nextPageToken: z.string().nullable(),
+});
+export const ReadFileResultSchema = z.object({
+  fileId: z.string(), name: z.string(), mimeType: z.string().nullable(),
+  text: z.string(), bytes: z.number(), exported: z.boolean(),
+});
