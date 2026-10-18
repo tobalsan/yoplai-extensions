@@ -15,6 +15,21 @@ afterEach(() => {
 });
 
 describe("googleDrive extension", () => {
+  it("keeps authentication, pagination, and write guidance without a tool catalog", async () => {
+    const prompts = await extension.getSystemPromptContributions(
+      { id: "a1", extensions: { googleDrive: {} } },
+      { config: { extensions: {} } }
+    );
+    const prompt = prompts!.join("\n");
+    expect(prompt).not.toContain("Tools:");
+    expect(prompt).not.toMatch(/^- googleDrive_\w+:/m);
+    expect(prompt).toContain("requester's own Google connection");
+    expect(prompt).toContain("pageSize and pageToken");
+    expect(prompt).toContain("rowOffset, maxRows, and columns");
+    expect(prompt).toContain("Before writing, read the target tab or range");
+    expect(prompt).toContain("report the updated range and cell count");
+  });
+
   it("exports the expected extension contract with an oauth requirement", () => {
     expect(extension.id).toBe("googleDrive");
     expect(extension.displayName).toBe("Google Drive");
@@ -155,7 +170,8 @@ describe("write mode", () => {
     expect(resolveOAuth).toHaveBeenCalledTimes(2);
     expect(resolveOAuth.mock.calls[1][1]).toEqual(resolveOAuth.mock.calls[0][1]);
     const prompts = await extension.getSystemPromptContributions(agent, context);
-    expect(prompts!.join("\n").includes("googleDrive_create_file")).toBe(expectedWrite);
+    expect(prompts!.join("\n")).toContain("Write tools are available only when allowWrite is enabled");
+    expect(prompts!.join("\n")).not.toContain("googleDrive_create_file:");
   });
 
   it("preserves the host insufficient_scope reconnect link", async () => {

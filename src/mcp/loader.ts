@@ -5,6 +5,8 @@ export type McpServerConfig =
   | {
       type: "stdio";
       name: string;
+      displayName?: string;
+      description?: string;
       command: string;
       args?: string[];
       env?: Record<string, string>;
@@ -12,6 +14,8 @@ export type McpServerConfig =
   | {
       type: "http";
       name: string;
+      displayName?: string;
+      description?: string;
       url: string;
       headers?: Record<string, string>;
       oauth?: McpStaticOAuthClient;
@@ -31,6 +35,8 @@ export interface LoadedMcpConfig {
 const StdioServerSchema = z
   .object({
     command: z.string().min(1),
+    displayName: z.string().optional(),
+    description: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string()).optional(),
   })
@@ -45,6 +51,8 @@ export const McpStaticOAuthClientSchema = z.object({
 const HttpServerSchema = z
   .object({
     url: z.string().url(),
+    displayName: z.string().optional(),
+    description: z.string().optional(),
     headers: z.record(z.string()).optional(),
     oauth: McpStaticOAuthClientSchema.optional(),
   })
@@ -87,6 +95,8 @@ function parseServer(
       type: "http",
       name,
       url: http.data.url,
+      ...(http.data.displayName !== undefined ? { displayName: http.data.displayName } : {}),
+      ...(http.data.description !== undefined ? { description: http.data.description } : {}),
       headers: http.data.headers,
       ...(http.data.oauth ? { oauth: http.data.oauth } : {}),
     };
@@ -98,6 +108,8 @@ function parseServer(
       type: "stdio",
       name,
       command: stdio.data.command,
+      ...(stdio.data.displayName !== undefined ? { displayName: stdio.data.displayName } : {}),
+      ...(stdio.data.description !== undefined ? { description: stdio.data.description } : {}),
       args: stdio.data.args,
       env: stdio.data.env,
     };

@@ -135,7 +135,7 @@ describe("defineToolExtension", () => {
     );
   });
 
-  it("injects host OAuth resolution into tools and prompt construction", async () => {
+  it("keeps prompt guidance without constructing a catalog and resolves OAuth through tool registration", async () => {
     const oauth = {
       connected: true as const,
       provider: "google",
@@ -161,17 +161,13 @@ describe("defineToolExtension", () => {
       provider: "google",
       scopes: ["scope"],
     }, undefined);
-    expect(createTools).toHaveBeenCalledWith(
-      expect.objectContaining({ oauth })
-    );
-    expect(prompts).toEqual([
-      "Use example tools.",
-      [
-        "Yoplai exposes this extension's tools with these exact names:",
-        "- example_lookup: Lookup for eu",
-        "- example_ready: Already mounted",
-      ].join("\n"),
-    ]);
+    expect(createTools).not.toHaveBeenCalled();
+    expect(prompts).toEqual(["Use example tools."]);
+
+    const tools = await extension.getAgentTools(agent, context);
+    expect(tools.map((tool) => tool.name)).toEqual(["example_lookup", "example_ready"]);
+    expect(createTools).toHaveBeenCalledWith(expect.objectContaining({ oauth }));
+    await expect(tools[0]?.execute({ query: "status" })).resolves.toEqual({ query: "status" });
   });
 
   it("resolves OAuth for the requesting user at build and call time", async () => {

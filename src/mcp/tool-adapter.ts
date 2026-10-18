@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { McpClientManager, McpToolDefinition } from "./client-manager.js";
 import type { ToolExtensionTool } from "../tool-extension.js";
 
-function sanitizeSegment(value: string): string {
+export function sanitizeSegment(value: string): string {
   const sanitized = value.replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_");
   return sanitized.replace(/^_+|_+$/g, "") || "tool";
 }

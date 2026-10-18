@@ -149,12 +149,82 @@ describe("mcp extension", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       name: "mcp__local__echo",
+      namespace: { name: "local" },
       parameters: { type: "object", properties: { text: { type: "string" } } },
     });
     const signal = new AbortController().signal;
     await expect(tools[0]?.execute({ text: "hi" }, { signal })).resolves.toEqual({ text: "hi" });
     expect(callTool).toHaveBeenCalledWith("echo", { text: "hi" }, { signal });
     await mockedExtension.stop();
+  });
+
+  it.each([
+    { command: "node" },
+    { url: "https://example.test/mcp", headers: { "X-Test": "fixture" } },
+  ])("preserves configured namespace labels for %j", async (transport) => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
+      local: { ...transport, displayName: "  Config title  ", description: "  Config description  " },
+    } }));
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+      getServerInfo: () => ({ title: "Reported title", description: "Reported description" }),
+    }));
+    try {
+      const tools = await mockedExtension.getAgentTools({ id: "casey", workspaceDir: agentDir }, { config: {} });
+      expect(tools[0]?.namespace).toEqual({ name: "local", displayName: "Config title", description: "Config description" });
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { labels: { displayName: " Config title " }, info: { title: "Reported title", description: "Reported description" }, expected: { name: "local", displayName: "Config title", description: "Reported description" } },
+    { labels: { description: " Config description " }, info: { title: "Reported title", description: "Reported description" }, expected: { name: "local", displayName: "Reported title", description: "Config description" } },
+    { labels: { displayName: " \t ", description: "" }, info: { title: "Reported title", description: "Reported description" }, expected: { name: "local", displayName: "Reported title", description: "Reported description" } },
+    { labels: {}, info: {}, expected: { name: "local" } },
+  ])("resolves namespace fields independently: $labels", async ({ labels, info, expected }) => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node", ...labels } } }));
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+      getServerInfo: () => info,
+    }));
+    try {
+      const tools = await mockedExtension.getAgentTools({ id: "casey", workspaceDir: agentDir }, { config: {} });
+      expect(tools[0]?.namespace).toStrictEqual(expected);
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["config", "server info"])("limits the description from %s to 500 characters", async (source) => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
+    const longDescription = `${"d".repeat(499)}XY`;
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
+      local: { command: "node", ...(source === "config" ? { description: ` ${longDescription} ` } : {}) },
+    } }));
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+      getServerInfo: () => ({ description: longDescription }),
+    }));
+    try {
+      const tools = await mockedExtension.getAgentTools({ id: "casey", workspaceDir: agentDir }, { config: {} });
+      const description = tools[0]?.namespace.description;
+      expect(description).toHaveLength(500);
+      expect(description).toBe(`${"d".repeat(499)}X`);
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("forwards the signal through the fresh OAuth-aware manager", async () => {
@@ -217,7 +287,43 @@ describe("mcp extension", () => {
       name: "mcp__claap__not_connected",
       parameters: { type: "object", additionalProperties: false },
     });
+    expect(tools[0]?.namespace).toStrictEqual({ name: "claap" });
     await mockedExtension.stop();
+  });
+
+  it.each([
+    { key: "local", namespace: "local", connectedName: "mcp__local__ping", collisionName: "mcp__local__ping__2", stubName: "mcp__local__not_connected" },
+    { key: "--a__b--", namespace: "a_b", connectedName: "mcp__a_b__ping", collisionName: "mcp__a_b__ping__2", stubName: "mcp__a_b__not_connected" },
+    { key: "!!!", namespace: "tool", connectedName: "mcp__tool__ping", collisionName: "mcp__tool__ping__2", stubName: "mcp__tool__not_connected" },
+  ])("uses matching connected and disconnected server segments for $key", async ({ key, namespace, connectedName, collisionName, stubName }) => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-names-"));
+    const configPath = path.join(agentDir, "mcp.json");
+    const factory = vi.fn(async () => ({
+      async listTools() { return ["ping", "ping!"].map((name) => ({ server: key, name, description: "Ping", inputSchema: { type: "object" } })); },
+      async callTool() { return "pong"; },
+      async close() {},
+    }));
+    const mockedExtension = createMcpExtension(factory);
+    const agent = { id: "casey", workspaceDir: agentDir };
+    try {
+      fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { [key]: { command: "node" } } }));
+      const connected = await mockedExtension.getAgentTools(agent, { config: {} });
+      expect(connected.map((tool) => ({ name: tool.name, namespace: tool.namespace }))).toEqual([
+        { name: connectedName, namespace: { name: namespace } },
+        { name: collisionName, namespace: { name: namespace } },
+      ]);
+      fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { [key]: {
+        url: "https://example.test/mcp", oauth: { clientId: "fixture" }, displayName: " Config title ", description: " Config description ",
+      } } }));
+      const disconnected = await mockedExtension.getAgentTools(agent, { config: {} });
+      expect(disconnected).toHaveLength(1);
+      expect(disconnected[0]).toMatchObject({ name: stubName, namespace: { name: namespace, displayName: "Config title", description: "Config description" } });
+      await expect(disconnected[0]?.execute({})).resolves.toMatchObject({ connected: false, reason: "not_connected", server: key });
+      expect(factory).toHaveBeenCalledTimes(1);
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("resolves $env references in mcp extension config paths", async () => {

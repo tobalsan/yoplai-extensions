@@ -5,6 +5,22 @@ import extension from "../index.js";
 import { NotionConfigSchema } from "../models.js";
 
 describe("notion extension", () => {
+  it("keeps discovery, content-editing, and OAuth guidance without a tool catalog", async () => {
+    const prompts = await extension.getSystemPromptContributions(
+      { id: "a1", extensions: { notion: {} } },
+      { config: { extensions: {} } }
+    );
+    const prompt = prompts!.join("\n");
+    expect(prompt).not.toContain("Tools:");
+    expect(prompt).not.toMatch(/^- notion_\w+:/m);
+    expect(prompt).toContain("titles only, not full-text body search");
+    expect(prompt).toContain("exact old_str text");
+    expect(prompt).toContain("markdown and children are mutually exclusive");
+    expect(prompt).toContain("PROPERTY VALUES only");
+    expect(prompt).toContain("JSON-serializable data only");
+    expect(prompt).toContain("share the connect link it returns");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

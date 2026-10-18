@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { McpClientManager, type McpClientFactory } from "./client-manager.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
-import { adaptMcpTools } from "./tool-adapter.js";
+import { adaptMcpTools, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
@@ -987,8 +987,20 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     const manager = await getManager(`${agent.id}:${configPath}:${revision}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, context.userId);
     const definitions = await manager.listTools();
     const tools = adaptMcpTools(definitions, manager);
+    const namespaceForServer = (name: string) => {
+      const server = loaded.servers.find((entry) => entry.name === name);
+      const info = manager.getServerInfo(name);
+      const displayName = trimValue(server?.displayName) ?? info.title;
+      const description = trimValue(server?.description) ?? info.description;
+      return {
+        name: sanitizeSegment(name),
+        ...(displayName ? { displayName } : {}),
+        ...(description ? { description: description.slice(0, 500) } : {}),
+      };
+    };
     const connectedTools = tools.map((tool, index) => ({
       name: tool.name,
+      namespace: namespaceForServer(definitions[index]!.server),
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       execute: async (params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => {
@@ -1013,7 +1025,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     const disconnected = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http" && !server.headers).map(async (server) => {
       if (!await isOAuthServer(agent.id, server) || await oauth?.accessToken(agent.id, server.name, 60_000, context.userId)) return undefined;
       return {
-        name: `mcp__${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__not_connected`,
+        name: `mcp__${sanitizeSegment(server.name)}__not_connected`,
+        namespace: namespaceForServer(server.name),
         description: `Connect ${server.name} from the agent's extensions before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
         execute: async (_params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),

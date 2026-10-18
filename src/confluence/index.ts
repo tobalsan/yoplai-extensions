@@ -23,20 +23,7 @@ export default defineToolExtension({
   description: "Confluence Cloud extension for search, pages, attachments, labels, and page writes.",
   systemPrompt: `Use this extension for Confluence Cloud access, including page reads and controlled page writes.
 
-Tools:
-- confluence_search: search content with raw CQL (see primer below)
-- confluence_get_page: fetch a page by id, with body in storage/ADF/view format
-- confluence_create_page: create a current page with a title and storage-format XHTML body; optionally pass parentId
-- confluence_replace_page: replace an existing page body with storage-format XHTML and optionally rename it
-- confluence_get_page_children: fetch direct children of a page
-- confluence_get_page_ancestors: fetch the parent chain of a page
-- confluence_list_attachments: list attachments on a page
-- confluence_download_and_extract_file: download a Confluence file URL and extract text from PDF or DOCX content
-- confluence_list_labels: list labels (paginated)
-- confluence_get_pages_by_label: list pages tagged with a given label id
-- confluence_list_space_pages: list pages in a space (uses configured space when \`confluenceSpace\` is set, otherwise requires the NUMERIC \`spaceId\` — not the space key; resolve keys via confluence_list_spaces)
-- confluence_list_spaces: list spaces (paginated, filterable by key/type/status). Unavailable when \`confluenceSpace\` is set.
-- confluence_validate: verify auth and API reachability
+For space-page listings, use the configured space when \`confluenceSpace\` is set; otherwise supply the NUMERIC \`spaceId\`, not the space key, and resolve keys via confluence_list_spaces.
 
 If \`confluenceSpace\` is set in extension config, results are scoped to that space key: search CQL is wrapped with \`AND space = "<KEY>"\`, label listings use the space's labels, page-by-label results are filtered by space, and list_spaces is not exposed. create_page defaults to the configured space and rejects any mismatched \`spaceId\`. Page-id-bound tools (get_page, get_page_children, get_page_ancestors, list_attachments, download_and_extract_file, replace_page) are not space-enforced — agents must pass page ids that belong to the scoped space. Page-id tools require a real wiki page id; passing a space id or non-page content (whiteboard, database, folder, smart link) returns an opaque 500.
 

@@ -4,6 +4,23 @@ import extension from "../index.js";
 import { ZendeskConfigSchema } from "../models.js";
 
 describe("zendesk extension", () => {
+  it("keeps pagination, triage, and credential guidance without a tool catalog", async () => {
+    const prompts = await extension.getSystemPromptContributions(
+      { id: "a1", extensions: { zendesk: {} } },
+      { config: { extensions: {} } }
+    );
+    const prompt = prompts!.join("\n");
+    expect(prompt).not.toContain("Available tools:");
+    expect(prompt).not.toMatch(/^- zendesk_\w+:/m);
+    expect(prompt).toContain("follow nextPageCursor across pages");
+    expect(prompt).toContain("pageSize up to 100");
+    expect(prompt).toContain("Only the fields you pass change");
+    expect(prompt).toContain("Internal notes are visible to agents only");
+    expect(prompt).toContain("read the ticket first");
+    expect(prompt).toContain("never guess them");
+    expect(prompt).toContain("share the connect link it returns");
+  });
+
   it("creates 7 tools", () => {
     const tools = extension.createTools({
       global: {},

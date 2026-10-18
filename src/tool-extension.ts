@@ -244,18 +244,6 @@ function getMountedToolName(
     : `${definition.id}_${toolName}`;
 }
 
-function renderMountedToolNames(
-  definition: ToolExtensionDefinition,
-  resolved: ResolvedToolExtensionConfig
-): string {
-  return [
-    "Yoplai exposes this extension's tools with these exact names:",
-    ...definition
-      .createTools(resolved)
-      .map((tool) => `- ${getMountedToolName(definition, tool.name)}: ${tool.description}`),
-  ].join("\n");
-}
-
 function withFieldTitles<T>(schema: T, titles: Record<string, string> = {}): T {
   const properties = (schema as { properties?: Record<string, object> }).properties;
   if (!properties) return schema;
@@ -319,7 +307,6 @@ export function defineToolExtension(definition: ToolExtensionDefinition) {
       resolved.oauth = await resolveOAuthForDefinition(definition, agent, context, resolved);
       return [
         definition.systemPrompt?.trim() || undefined,
-        renderMountedToolNames(definition, resolved),
       ].filter((prompt): prompt is string => Boolean(prompt));
     },
     async getAgentTools(agent: { id: string; extensions?: Record<string, unknown> }, context?: ToolExtensionHookContext) {

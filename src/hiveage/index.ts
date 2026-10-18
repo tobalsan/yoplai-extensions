@@ -52,22 +52,13 @@ export default defineToolExtension({
   description: "Billing extension for invoices, estimates, payments, items, clients, and trash.",
   systemPrompt: `Use this extension for Hiveage billing and invoicing operations.
 
-Available tools:
-- hiveage_list_invoices, hiveage_get_invoice, hiveage_create_invoice, hiveage_search_invoices: invoice management
-- hiveage_list_recurring_invoices, hiveage_get_recurring_invoice, hiveage_create_recurring_invoice, hiveage_search_recurring_invoices: recurring invoice management
-- hiveage_list_estimates, hiveage_get_estimate, hiveage_create_estimate, hiveage_search_estimates: estimate and quote management
-- hiveage_list_payments, hiveage_get_payment, hiveage_create_payment: payment tracking
-- hiveage_list_items, hiveage_get_item, hiveage_search_items: catalog item management
-- hiveage_list_connections, hiveage_get_connection, hiveage_search_connections: client and connection management
-- hiveage_list_trash: view deleted items
-- hiveage_validate_estimate: validate estimate payload before creation (checks required fields, dates, line items, discounts)
-
 Key concepts:
 - connections are clients or customers in Hiveage
 - invoices, estimates, and recurring invoices use hash keys as identifiers
 - line items define billable rows on invoices and estimates
 
 Common workflows:
+- Before creating an estimate, use hiveage_validate_estimate to check required fields, dates, line items, discounts.
 - To create an invoice, first find the connection (client) using hiveage_search_connections or hiveage_list_connections, then hiveage_create_invoice with the connection hash key and line items.
 - To find a specific invoice, use hiveage_search_invoices with a query string, or hiveage_list_invoices with pagination.`,
   configSchema: HiveageConfigSchema,

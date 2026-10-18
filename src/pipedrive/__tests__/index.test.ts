@@ -80,7 +80,12 @@ describe("pipedrive allowWrite gating", () => {
     const on = await prompt(true);
     expect(on).toContain("confirmed: true");
     expect(on).toContain("requested_by");
-    expect(on).toContain("pipedrive_create_lead:");
+    expect(on).not.toContain("pipedrive_create_lead:");
+    const tools = await extension.getAgentTools(
+      { id: "a1", extensions: { pipedrive: {} } },
+      { config: { extensions: { pipedrive: { ...credentials, allowWrite: true } } } }
+    );
+    expect(tools.map((tool) => tool.name)).toContain("pipedrive_create_lead");
   });
 
   it("exports an object schema for every tool", () => {

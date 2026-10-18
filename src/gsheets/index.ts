@@ -19,14 +19,7 @@ const extension = defineToolExtension({
 
 Authentication is handled by Yoplai extension config. Do not ask for or inspect Google service account environment variables.
 
-Tools:
-- gsheets_list_spreadsheets: list accessible spreadsheets, optionally filtered by name
-- gsheets_inspect_spreadsheet: inspect worksheet tabs, dimensions, and detected headers
-- gsheets_read_sheet: read one worksheet as headers plus row objects. Use rowOffset, maxRows, and columns to limit large tabs when a full read is not needed
-- gsheets_read_range: read an arbitrary A1 range as raw values
-- gsheets_append_rows: append rows after existing table data in a range
-- gsheets_update_range: overwrite cells in an exact range
-- gsheets_validate: check extension authentication and access
+Use rowOffset, maxRows, and columns to limit large tabs when a full read is not needed.
 
 Before writing, read the target tab or range to confirm the correct location; ask the user when the target or values are ambiguous. After writing, report the updated range and cell count.`,
   configSchema: GSheetsConfigSchema,
