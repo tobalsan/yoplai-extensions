@@ -50,8 +50,10 @@ describe("McpClientManager", () => {
     expect(callTool).not.toHaveBeenCalled();
   });
 
-  it("does not recover an AbortError whose message mentions 401", async () => {
-    const reason = new DOMException("401 Unauthorized cancellation", "AbortError");
+  it.each([
+    new DOMException("401 Unauthorized cancellation", "AbortError"),
+    Object.assign(new Error("401 Unauthorized cancellation"), { name: "AbortError", code: 401 }),
+  ])("does not recover an AbortError: %s", async (reason) => {
     const recover = vi.fn(async () => true);
     const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
       clientFactory: async () => ({ async listTools() { return []; }, async callTool() { throw reason; }, async close() {} }),
@@ -73,6 +75,35 @@ describe("McpClientManager", () => {
     await manager.connect();
     await expect(manager.invokeTool("local", "sleep", {}, { signal: controller.signal })).rejects.toBe(reason);
     expect(callTool).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["numeric 403", Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 403 })],
+    ["string 401", Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: "401" })],
+    ["null", null],
+    ["undefined", undefined],
+  ])("does not refresh non-auth failures: %s", async (_kind, error) => {
+    const refresh = vi.fn(async () => true);
+    const close = vi.fn(async () => undefined);
+    const manager = new McpClientManager(
+      [{ type: "http", name: "local", url: "https://example.test/mcp" }],
+      {
+        clientFactory: async () => ({
+          async listTools() { throw error; },
+          async callTool() { throw error; },
+          close,
+        }),
+        onAuthFailure: refresh,
+      }
+    );
+    await manager.connect();
+    await expect(manager.invokeTool("local", "search", {})).rejects.toBe(error);
+    await expect(manager.listTools()).resolves.toEqual([]);
+    expect(manager.hasClient("local")).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+    await expect(manager.connect()).resolves.toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
+    await manager.close();
   });
 
   it("lists and invokes healthy servers while recording failed servers", async () => {
@@ -238,21 +269,33 @@ describe("McpClientManager", () => {
     await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
   });
 
-  it("refreshes and reconnects an expired OAuth transport after a tool 401", async () => {
+  it.each([
+    { kind: "message-based", phase: "invokeTool", error: new Error("401 Unauthorized") },
+    ...["invokeTool", "listTools", "connect", "reconnect"].map((phase) => ({
+      kind: "numeric-only", phase,
+      error: Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
+    })),
+  ])("refreshes an expired OAuth transport after a $kind 401 during $phase", async ({ phase, error }) => {
     const tokens = ["expired-token", "fresh-token"];
     const signal = new AbortController().signal;
     const signals: (AbortSignal | undefined)[] = [];
-    const factory = vi.fn(async (_server, token): Promise<McpClientHandle> => ({
-      async listTools() {
-        return [{ server: "claap", name: "search", description: "", inputSchema: {} }];
-      },
-      async callTool(_name, _args, options) {
-        signals.push(options?.signal);
-        if (token === "expired-token") throw new Error("401 Unauthorized");
-        return { token };
-      },
-      async close() {},
-    }));
+    const close = vi.fn(async () => undefined);
+    let reconnecting = false;
+    const factory = vi.fn(async (_server, token): Promise<McpClientHandle> => {
+      if (token === "expired-token" && (phase === "connect" || (phase === "reconnect" && reconnecting))) throw error;
+      return {
+        async listTools() {
+          if (token === "expired-token" && phase === "listTools") throw error;
+          return [{ server: "claap", name: "search", description: "", inputSchema: {} }];
+        },
+        async callTool(_name, _args, options) {
+          signals.push(options?.signal);
+          if (token === "expired-token") throw error;
+          return { token };
+        },
+        close,
+      };
+    });
     const refresh = vi.fn(async () => {
       tokens.shift();
       return true;
@@ -263,13 +306,24 @@ describe("McpClientManager", () => {
     );
 
     await manager.connect();
-    await manager.listTools();
+    if (phase === "reconnect") {
+      await manager.close();
+      reconnecting = true;
+      await manager.connect();
+    }
+    expect(manager.hasClient("claap")).toBe(true);
+    await expect(manager.listTools()).resolves.toEqual([
+      { server: "claap", name: "search", description: "", inputSchema: {} },
+    ]);
 
     await expect(manager.invokeTool("claap", "search", {}, { signal })).resolves.toEqual({ token: "fresh-token" });
-    expect(signals).toEqual([signal, signal]);
+    expect(signals).toEqual(phase === "invokeTool" ? [signal, signal] : [signal]);
     expect(refresh).toHaveBeenCalledOnce();
-    expect(factory).toHaveBeenNthCalledWith(1, expect.anything(), "expired-token");
-    expect(factory).toHaveBeenNthCalledWith(2, expect.anything(), "fresh-token");
+    expect(factory.mock.calls.map(([, token]) => token)).toEqual(
+      phase === "reconnect" ? ["expired-token", "expired-token", "fresh-token"] : ["expired-token", "fresh-token"]
+    );
+    expect(close).toHaveBeenCalledTimes(phase === "connect" ? 0 : 1);
+    expect(manager.getErrors()).toEqual([]);
   });
 
   it("shares reconnect work across concurrent 401s", async () => {
@@ -297,17 +351,23 @@ describe("McpClientManager", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
-  it("marks a still-unauthorized refreshed transport as needing reconnect", async () => {
+  it.each([
+    new Error("401 Unauthorized"),
+    Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
+  ])("marks a still-unauthorized refreshed transport as needing reconnect: %s", async (error) => {
     const terminal = vi.fn(async () => undefined);
+    const refresh = vi.fn(async () => true);
+    const close = vi.fn(async () => undefined);
+    const callTool = vi.fn(async () => { throw error; });
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
       {
         clientFactory: async (): Promise<McpClientHandle> => ({
           async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
-          async callTool() { throw new Error("401 Unauthorized"); },
-          async close() {},
+          callTool,
+          close,
         }),
-        onAuthFailure: async () => true,
+        onAuthFailure: refresh,
         notConnectedResponse: (server) => ({ connected: false, server, reason: "needs_reconnect" }),
         onUnrecoverableAuthFailure: terminal,
       }
@@ -318,19 +378,29 @@ describe("McpClientManager", () => {
 
     await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
     expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(manager.hasClient("claap")).toBe(false);
   });
 
-  it("marks a still-unauthorized refreshed transport during discovery as needing reconnect", async () => {
+  it.each([
+    new Error("401 Unauthorized"),
+    Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
+  ])("marks a still-unauthorized refreshed transport during discovery as needing reconnect: %s", async (error) => {
     const terminal = vi.fn(async () => undefined);
+    const refresh = vi.fn(async () => true);
+    const close = vi.fn(async () => undefined);
+    const listTools = vi.fn(async () => { throw error; });
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
       {
         clientFactory: async (): Promise<McpClientHandle> => ({
-          async listTools() { throw new Error("401 Unauthorized"); },
+          listTools,
           async callTool() { return undefined; },
-          async close() {},
+          close,
         }),
-        onAuthFailure: async () => true,
+        onAuthFailure: refresh,
         onUnrecoverableAuthFailure: terminal,
       }
     );
@@ -339,9 +409,16 @@ describe("McpClientManager", () => {
 
     await expect(manager.listTools()).resolves.toEqual([]);
     expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(listTools).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(manager.hasClient("claap")).toBe(false);
   });
 
-  it("marks a refreshed transport that 401s while reconnecting as needing reconnect", async () => {
+  it.each([
+    new Error("401 Unauthorized"),
+    Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
+  ])("marks a refreshed transport that 401s while reconnecting as needing reconnect: %s", async (error) => {
     const terminal = vi.fn(async () => undefined);
     let connections = 0;
     const manager = new McpClientManager(
@@ -349,10 +426,10 @@ describe("McpClientManager", () => {
       {
         clientFactory: async (): Promise<McpClientHandle> => {
           connections += 1;
-          if (connections === 2) throw new Error("401 Unauthorized");
+          if (connections === 2) throw error;
           return {
             async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
-            async callTool() { throw new Error("401 Unauthorized"); },
+            async callTool() { throw error; },
             async close() {},
           };
         },
@@ -367,5 +444,6 @@ describe("McpClientManager", () => {
 
     await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
     expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
+    expect(connections).toBe(2);
   });
 });

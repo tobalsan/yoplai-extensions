@@ -37,6 +37,8 @@
 
 ### Fixed
 
+- MCP OAuth recovery detects empty-body HTTP 401 errors, preserving tools after token expiry (ALG-513).
+
 - Disconnected MCP stub names use the same canonical server sanitizer as connected tools, correcting unusual keys such as `--a__b--` and all-punctuation keys without changing normal names or collision suffixes (ALG-509).
 
 - MCP tool calls forward gateway cancellation signals, including OAuth refresh retries (ALG-488).

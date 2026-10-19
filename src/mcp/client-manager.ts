@@ -378,6 +378,7 @@ export class McpClientManager {
 
 function isUnauthorized(error: unknown): boolean {
   if (error instanceof Error && error.name === "AbortError") return false;
+  if (typeof error === "object" && error !== null && "code" in error && error.code === 401) return true;
   const message = error instanceof Error ? error.message : String(error);
   return /\b401\b|unauthori[sz]ed/i.test(message);
 }
