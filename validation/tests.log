@@ -1,0 +1,9 @@
+$ vitest run
+
+ RUN  v4.1.2 /Users/agents/orchestration/worker/workspaces/ALG-517/worktree
+
+
+ Test Files  73 passed (73)
+      Tests  1066 passed (1066)
+   Start at  20:23:25
+   Duration  4.53s (transform 2.71s, setup 0ms, import 6.98s, tests 12.10s, environment 4ms)

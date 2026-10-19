@@ -1,4 +1,5 @@
 import mammoth from "mammoth";
+import { extractPptxText, readPptxResponse } from "./pptx-text.js";
 import { setTimeout as delayRetry } from "node:timers/promises";
 import * as XLSX from "xlsx";
 import type { ToolExecutionContext } from "../tool-extension.js";
@@ -91,6 +92,11 @@ function looksLikeDocx(name: string, mimeType?: string | null): boolean {
   );
 }
 
+function looksLikePptx(name: string, mimeType: string | null): boolean {
+  return mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    || (mimeType !== "text/plain" && /\.pptx$/i.test(name));
+}
+
 const SPREADSHEET_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel.sheet.macroenabled.12",
@@ -134,14 +140,18 @@ export class GoogleDriveClient {
     this.#fetch = fetchImpl;
   }
 
+  request(url: string, init?: RequestInit): Promise<Response> {
+    return this.#request(url, init);
+  }
+
   async about(): Promise<DriveUser> {
     const response = await this.#request(DRIVE_ABOUT_URL);
     const data = (await response.json().catch(() => ({}))) as { user?: DriveUser };
     return data.user ?? {};
   }
 
-  async downloadFile(fileId: string, context?: ToolExecutionContext): Promise<unknown> {
-    return downloadFile(fileId, context, (url, init) => this.#request(url, init));
+  async downloadFile(fileId: string, context?: ToolExecutionContext, format: "office" | "pdf" = "office"): Promise<unknown> {
+    return downloadFile(fileId, context, (url, init) => this.#request(url, init), format);
   }
 
   async saveFile(params: SaveFileParams, context?: ToolExecutionContext): Promise<unknown> {
@@ -183,8 +193,9 @@ export class GoogleDriveClient {
       ? driveFileExportUrl(params.fileId, exportMime)
       : driveFileMediaUrl(params.fileId);
     const response = await this.#request(url);
-    const buffer = Buffer.from(await response.arrayBuffer());
     const effectiveMime = exportMime ?? metadata.mimeType ?? null;
+    const pptx = looksLikePptx(metadata.name, effectiveMime);
+    const buffer = pptx ? await readPptxResponse(response) : Buffer.from(await response.arrayBuffer());
     const text = await this.#extractText(buffer, metadata.name, effectiveMime);
 
     return {
@@ -434,6 +445,10 @@ export class GoogleDriveClient {
       return normalizeText(spreadsheetToText(buffer));
     }
 
+    if (looksLikePptx(name, mimeType)) {
+      return extractPptxText(buffer);
+    }
+
     if (looksBinary(buffer)) {
       return `[Binary file (${mimeType ?? "unknown type"}): no text extractor for this format.]`;
     }
@@ -457,16 +472,21 @@ export class GoogleDriveClient {
       if (response.status === 429 && attempt < 2) {
         const retryAfter = response.headers.get("retry-after");
         const seconds = retryAfter === null ? NaN : Number(retryAfter);
-        const delay = Number.isFinite(seconds) ? Math.min(30_000, Math.max(0, seconds * 1000)) : 1000 * (attempt + 1);
+        const delay = Number.isFinite(seconds) ? Math.min(2_000, Math.max(0, seconds * 1000)) : 1000 * (attempt + 1);
         void response.body?.cancel().catch(() => {});
         await delayRetry(delay, undefined, { signal });
         continue;
       }
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        const responseBody = body.slice(0, 500);
+        let message = body;
+        try {
+          const parsed = JSON.parse(body) as { error?: { message?: unknown } };
+          if (typeof parsed.error?.message === "string") message = parsed.error.message;
+        } catch { /* Google also returns plain-text errors. */ }
+        const responseBody = (message === body ? body : `${message}\n${body}`).slice(0, 500);
         throw new GoogleDriveRequestError(
-          `Google Drive request failed (HTTP ${response.status}) for ${url}${responseBody ? `: ${responseBody}` : ""}`,
+          `Google Drive request failed (HTTP ${response.status}) for ${url}${message ? `: ${message.slice(0, 500)}` : ""}`,
           response.status, url, responseBody,
         );
       }

@@ -179,7 +179,7 @@ it.each(["application/vnd.google-apps.document", "application/vnd.openxmlformats
 it.each(["cannotDownloadFile", "exportSizeLimitExceeded", "insufficientFilePermissions"])("keeps Google %s errors actionable instead of asking for OAuth reconnect", async (reason) => {
   const run = await tools();
   google(new Response(JSON.stringify({ error: { message: "File operation is restricted", errors: [{ reason }] } }), { status: 403 }));
-  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toThrow(reason);
+  await expect(run.execute("download_file", { fileId: "file-1" })).rejects.toMatchObject({ message: expect.stringContaining("File operation is restricted"), status: 403 });
 });
 it("honors caller cancellation before saving without contacting Drive", async () => {
   const run = await tools(true);

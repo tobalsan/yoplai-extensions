@@ -1,0 +1,15 @@
+ Vitest  "deps.inline" is deprecated. If you rely on vite-node directly, use "server.deps.inline" instead. Otherwise, consider using "deps.optimizer.ssr.include"
+
+ RUN  v2.1.9 /Users/agents/orchestration/worker/workspaces/ALG-517/platform-e2e
+
+(node:25028) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:25027) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/web/src/lib/chat-runtime.test.ts (8 tests) 6ms
+ ✓ apps/gateway/src/server/media.api.test.ts (11 tests) 1081ms
+
+ Test Files  2 passed (2)
+      Tests  19 passed (19)
+   Start at  20:18:00
+   Duration  1.29s (transform 397ms, setup 29ms, collect 52ms, tests 1.09s, environment 382ms, prepare 87ms)

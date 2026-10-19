@@ -1,0 +1,19 @@
+[
+  {
+    "id": "googleDrive",
+    "configValues": {
+      "allowWrite": false
+    },
+    "oauth": {
+      "provider": "google",
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/userinfo.email"
+      ],
+      "personalScopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/userinfo.email"
+      ]
+    }
+  }
+]

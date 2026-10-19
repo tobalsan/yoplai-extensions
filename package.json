@@ -17,14 +17,19 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "fast-xml-parser": "^5.11.2",
     "googleapis": "^171.4.0",
+    "image-size": "^2.0.4",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "5.6.205",
+    "pptxgenjs": "^4.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yauzl": "^3.4.0",
     "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.1",
+    "@types/yauzl": "^3.4.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2",
     "zod": "^3.25.76"

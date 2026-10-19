@@ -1,0 +1,1 @@
+PASS: fresh locked install loads compiled extension and creates a local-image native deck through execute(), using fake Google HTTP.

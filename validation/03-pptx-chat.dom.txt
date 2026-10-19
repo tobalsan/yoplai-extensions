@@ -1,0 +1,69 @@
+- generic [ref=f5e5]:
+  - complementary [ref=f5e6]:
+    - generic [ref=f5e7]:
+      - generic [ref=f5e8]:
+        - link "Yoplai" [ref=f5e9] [cursor=pointer]:
+          - /url: /
+        - generic [ref=f5e11]: DEV
+        - button "«" [ref=f5e12] [cursor=pointer]
+      - generic [ref=f5e13]:
+        - navigation "Primary" [ref=f5e14]:
+          - link "Agents" [ref=f5e15] [cursor=pointer]:
+            - /url: /agents
+            - generic [aria-hidden] [ref=f5e16]: 
+          - link "Dashboards" [ref=f5e18] [cursor=pointer]:
+            - /url: /dashboards
+            - generic [aria-hidden] [ref=f5e19]: 
+          - link "Teams" [ref=f5e21] [cursor=pointer]:
+            - /url: /teams
+            - generic [aria-hidden] [ref=f5e22]: 
+          - link "Admin" [ref=f5e24] [cursor=pointer]:
+            - /url: /admin/users
+            - generic [aria-hidden] [ref=f5e25]: 
+        - region "Sessions" [ref=f5e27]:
+          - generic [ref=f5e28]:
+            - generic [ref=f5e29]: Sessions
+            - button "Search sessions" [ref=f5e30] [cursor=pointer]: ⌕
+          - generic [ref=f5e31]:
+            - region "Projects" [ref=f5e32]:
+              - generic [ref=f5e33]:
+                - generic [ref=f5e34]: Projects
+                - button "New project" [ref=f5e35] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f5e36]: +
+            - region "Recent" [ref=f5e37]
+      - generic [ref=f5e39]:
+        - button "Account menu" [ref=f5e41] [cursor=pointer]:
+          - generic [ref=f5e43]: ST
+          - generic [ref=f5e44]:
+            - generic [ref=f5e45]: Slides tester
+            - generic [ref=f5e46]: admin@e2e.test
+          - generic [aria-hidden] [ref=f5e47]: 
+        - button "Switch to dark mode" [ref=f5e48] [cursor=pointer]:
+          - generic [ref=f5e51]: Dark
+        - button "Restart tour" [ref=f5e53] [cursor=pointer]
+  - generic [ref=f5e55]:
+    - banner [ref=f5e56]:
+      - link "Go back" [ref=f5e57] [cursor=pointer]:
+        - /url: /agents
+      - generic [ref=f5e61]:
+        - generic [ref=f5e62]: Slides E2E
+        - generic [ref=f5e64]: online
+      - generic [ref=f5e67]:
+        - button "Simple" [ref=f5e68] [cursor=pointer]
+        - button "Full" [ref=f5e69] [cursor=pointer]
+      - button "Start a new chat" [ref=f5e70] [cursor=pointer]: New chat
+      - button "Choose main agent" [ref=f5e73] [cursor=pointer]
+    - generic [ref=f5e76]:
+      - generic [ref=f5e78]:
+        - generic [ref=f5e79]: S
+        - heading "What's on the docket?" [level=1] [ref=f5e81]
+      - generic [ref=f5e82]:
+        - generic [ref=f5e97]:
+          - generic "upload.pptx" [ref=f5e98]
+          - button "Remove upload.pptx" [ref=f5e99] [cursor=pointer]: x
+        - generic [ref=f5e84]:
+          - button "Attach files" [ref=f5e85] [cursor=pointer]
+          - textbox "Message..." [ref=f5e88]
+          - button "Send message" [ref=f5e89] [cursor=pointer]
+        - generic [ref=f5e92]: No prompt suggestions configured for this agent.
+    - generic [ref=f5e95]: 0% context used

@@ -23,7 +23,7 @@ function safeFilename(value: string): string {
   return stem + extension;
 }
 
-export async function downloadFile(fileId: string, context: ToolExecutionContext | undefined, request: DriveRequest) {
+export async function downloadFile(fileId: string, context: ToolExecutionContext | undefined, request: DriveRequest, format: "office" | "pdf" = "office") {
   if (!context?.conversationFiles) throw new Error("A conversation files folder is required to download Drive files.");
   const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
   signal.throwIfAborted();
@@ -32,7 +32,9 @@ export async function downloadFile(fileId: string, context: ToolExecutionContext
   url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("fields", "id,name,mimeType,capabilities(canDownload)");
   const metadata = await (await request(url.toString(), { signal })).json() as { name: string; mimeType: string; capabilities?: { canDownload?: boolean } };
-  const office = OFFICE[metadata.mimeType];
+  const native = OFFICE[metadata.mimeType];
+  const office = native && format === "pdf" ? { extension: "pdf", mimeType: "application/pdf" } : native;
+  if (format === "pdf" && !office) throw new DriveFileError("PDF export requires a native Google Doc, Sheet or Slides deck.", 400);
   if (metadata.mimeType.startsWith("application/vnd.google-apps.") && !office) throw new DriveFileError(`Cannot download unsupported Google Drive type: ${metadata.mimeType}.`, 400);
   if (metadata.capabilities?.canDownload === false) throw new DriveFileError("Download is restricted by the file owner (canDownload=false).", 403);
   url.searchParams.delete("fields");
@@ -72,7 +74,7 @@ export async function downloadFile(fileId: string, context: ToolExecutionContext
   return { fileId, name, mimeType: office?.mimeType ?? metadata.mimeType, path: path.join(context.conversationFiles.runtimePath, filename), bytes };
 }
 
-export interface SaveFileParams { path: string; fileId?: string; name?: string; parentId?: string }
+export interface SaveFileParams { path: string; fileId?: string; name?: string; parentId?: string; convert?: boolean }
 
 const BINARY_MIME: Record<string, string> = {
   docx: OFFICE["application/vnd.google-apps.document"].mimeType,
@@ -88,19 +90,16 @@ function inside(folder: string, file: string): boolean {
   return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-export async function saveFile(params: SaveFileParams, context: ToolExecutionContext | undefined, request: DriveRequest) {
-  if (!context?.conversationFiles) throw new Error("A conversation files folder is required to save Drive files.");
-  const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+export async function readConversationFile(sourcePath: string, context: ToolExecutionContext | undefined, signal: AbortSignal, maxBytes?: number) {
+  if (!context?.conversationFiles) throw new Error("A conversation files folder is required to read local files.");
   signal.throwIfAborted();
-  if (!params.fileId && !params.name) throw new DriveFileError("Provide fileId to replace a file, or name to create a copy.", 400);
-  if (params.fileId && (params.name || params.parentId)) throw new DriveFileError("Provide either fileId or name with optional parentId, not both.", 400);
   const folder = await realpath(context.conversationFiles.hostPath);
   const { hostPath, runtimePath } = context.conversationFiles;
-  if (!path.isAbsolute(params.path)) throw new DriveFileError("Only files inside the current conversation folder may be saved.", 400);
+  if (!path.isAbsolute(sourcePath)) throw new DriveFileError("Only files inside the current conversation folder may be saved.", 400);
   let local: string;
-  if (inside(runtimePath, params.path)) local = path.resolve(folder, path.relative(runtimePath, params.path));
-  else if (inside(hostPath, params.path)) local = path.resolve(folder, path.relative(hostPath, params.path));
-  else if (inside(folder, params.path)) local = path.resolve(params.path);
+  if (inside(runtimePath, sourcePath)) local = path.resolve(folder, path.relative(runtimePath, sourcePath));
+  else if (inside(hostPath, sourcePath)) local = path.resolve(folder, path.relative(hostPath, sourcePath));
+  else if (inside(folder, sourcePath)) local = path.resolve(sourcePath);
   else throw new DriveFileError("File path is outside the current conversation folder.", 400);
   if (path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported.", 400);
   local = await realpath(local);
@@ -110,10 +109,35 @@ export async function saveFile(params: SaveFileParams, context: ToolExecutionCon
   let bytes: Buffer;
   try {
     if (!(await file.stat()).isFile()) throw new DriveFileError("Only regular files inside the current conversation folder may be saved.", 400);
-    bytes = await file.readFile({ signal });
+    if (maxBytes !== undefined && (await file.stat()).size > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
+    if (maxBytes === undefined) bytes = await file.readFile({ signal });
+    else {
+      const chunks: Buffer[] = [];
+      let length = 0;
+      for await (const chunk of file.createReadStream({ autoClose: false, signal })) {
+        length += chunk.length;
+        if (length > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
+        chunks.push(chunk);
+      }
+      bytes = Buffer.concat(chunks);
+    }
   } finally { await file.close(); }
-  let mimeType = BINARY_MIME[path.extname(params.path).slice(1).toLowerCase()] ?? "application/octet-stream";
+  const mimeType = BINARY_MIME[path.extname(sourcePath).slice(1).toLowerCase()] ?? "application/octet-stream";
+  return { bytes, mimeType };
+}
+
+export async function saveFile(params: SaveFileParams, context: ToolExecutionContext | undefined, request: DriveRequest) {
+  if (!context?.conversationFiles) throw new Error("A conversation files folder is required to save Drive files.");
+  const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+  signal.throwIfAborted();
+  if (params.convert && params.fileId) throw new DriveFileError("convert cannot be used with fileId; create a new copy instead.", 400);
+  if (params.convert && !/\.(docx|xlsx|pptx)$/i.test(params.path)) throw new DriveFileError("convert supports DOCX, XLSX and PPTX files only.", 400);
+  if (!params.fileId && !params.name) throw new DriveFileError("Provide fileId to replace a file, or name to create a copy.", 400);
+  if (params.fileId && (params.name || params.parentId)) throw new DriveFileError("Provide either fileId or name with optional parentId, not both.", 400);
+  let { bytes, mimeType } = await readConversationFile(params.path, context, signal);
+  const nativeMime = Object.entries(OFFICE).find(([, format]) => format.mimeType === mimeType)?.[0];
   let metadata: { name?: string; mimeType: string; parents?: string[] } = { name: params.name, mimeType, ...(params.parentId ? { parents: [params.parentId] } : {}) };
+  if (params.convert) metadata.mimeType = nativeMime!;
   if (params.fileId) {
     const target = await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(params.fileId)}?supportsAllDrives=true&fields=id,name,mimeType`, { signal })).json() as { mimeType: string };
     const office = OFFICE[target.mimeType];
@@ -122,14 +146,32 @@ export async function saveFile(params: SaveFileParams, context: ToolExecutionCon
     if (!office) mimeType = target.mimeType;
     metadata = { mimeType: target.mimeType };
   }
+  const result = await uploadDriveFile(metadata, mimeType, bytes, request, signal, params.fileId);
+  return { fileId: result.id, name: result.name, mimeType: result.mimeType, webViewLink: result.webViewLink ?? null };
+}
+
+export async function uploadDriveFile(metadata: { name?: string; mimeType: string; parents?: string[] }, mimeType: string, bytes: Buffer, request: DriveRequest, signal: AbortSignal, fileId?: string): Promise<{ id: string; name: string; mimeType: string; webViewLink?: string }> {
+  if (bytes.length > 5_000_000) {
+    const session = await request(`https://www.googleapis.com/upload/drive/v3/files${fileId ? `/${encodeURIComponent(fileId)}` : ""}?uploadType=resumable&supportsAllDrives=true&fields=id,name,mimeType,webViewLink`, {
+      method: fileId ? "PATCH" : "POST", signal,
+      headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mimeType, "X-Upload-Content-Length": String(bytes.length) },
+      body: JSON.stringify(metadata),
+    });
+    const location = session.headers.get("location");
+    if (!location) throw new Error("Google did not return a resumable upload location.");
+    const endpoint = new URL(location);
+    if (endpoint.protocol !== "https:" || endpoint.hostname !== "www.googleapis.com") throw new Error("Google returned an invalid resumable upload location.");
+    const response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length) }, body: new Uint8Array(bytes) });
+    return await response.json() as { id: string; name: string; mimeType: string; webViewLink?: string };
+  }
   const boundary = `yoplai-${crypto.randomUUID()}`;
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
     bytes, Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
-  const response = await request(`https://www.googleapis.com/upload/drive/v3/files${params.fileId ? `/${encodeURIComponent(params.fileId)}` : ""}?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink`, {
-    method: params.fileId ? "PATCH" : "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body, signal,
+  const response = await request(`https://www.googleapis.com/upload/drive/v3/files${fileId ? `/${encodeURIComponent(fileId)}` : ""}?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink`, {
+    method: fileId ? "PATCH" : "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body, signal,
   });
   const result = await response.json() as { id: string; name: string; mimeType: string; webViewLink?: string };
-  return { fileId: result.id, name: result.name, mimeType: result.mimeType, webViewLink: result.webViewLink ?? null };
+  return result;
 }

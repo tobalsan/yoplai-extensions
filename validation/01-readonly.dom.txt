@@ -1,0 +1,73 @@
+- generic [ref=f7e5]:
+  - complementary [ref=f7e6]:
+    - generic [ref=f7e7]:
+      - generic [ref=f7e8]:
+        - link "Yoplai" [ref=f7e9] [cursor=pointer]:
+          - /url: /
+        - generic [ref=f7e11]: DEV
+        - button "«" [ref=f7e12] [cursor=pointer]
+      - generic [ref=f7e13]:
+        - navigation "Primary" [ref=f7e14]:
+          - link "Agents" [ref=f7e15] [cursor=pointer]:
+            - /url: /agents
+            - generic [aria-hidden] [ref=f7e16]: 
+          - link "Dashboards" [ref=f7e18] [cursor=pointer]:
+            - /url: /dashboards
+            - generic [aria-hidden] [ref=f7e19]: 
+          - link "Teams" [ref=f7e21] [cursor=pointer]:
+            - /url: /teams
+            - generic [aria-hidden] [ref=f7e22]: 
+          - link "Admin" [ref=f7e24] [cursor=pointer]:
+            - /url: /admin/users
+            - generic [aria-hidden] [ref=f7e25]: 
+        - region "Sessions" [ref=f7e27]:
+          - generic [ref=f7e28]:
+            - generic [ref=f7e29]: Sessions
+            - button "Search sessions" [ref=f7e30] [cursor=pointer]: ⌕
+          - generic [ref=f7e31]:
+            - region "Projects" [ref=f7e32]:
+              - generic [ref=f7e33]:
+                - generic [ref=f7e34]: Projects
+                - button "New project" [ref=f7e35] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f7e36]: +
+            - region "Recent" [ref=f7e37]
+      - generic [ref=f7e39]:
+        - button "Account menu" [ref=f7e41] [cursor=pointer]:
+          - generic [ref=f7e43]: ST
+          - generic [ref=f7e44]:
+            - generic [ref=f7e45]: Slides tester
+            - generic [ref=f7e46]: admin@e2e.test
+          - generic [aria-hidden] [ref=f7e47]: 
+        - button "Switch to dark mode" [ref=f7e48] [cursor=pointer]:
+          - generic [ref=f7e51]: Dark
+        - button "Restart tour" [ref=f7e53] [cursor=pointer]
+  - generic [ref=f7e55]:
+    - link "← Back to agent" [ref=f7e56] [cursor=pointer]:
+      - /url: /agents/slides/edit
+    - heading "Google Drive" [level=1] [ref=f7e58]
+    - paragraph [ref=f7e59]: "Google Drive access (read-only by default, optional file, Sheets and Slides writes) via Google OAuth: connect your own account (Just me) or a shared team account (Whole team). List, search, read text, download files, and create, edit or render native Google Slides decks."
+    - generic [ref=f7e60]:
+      - tablist "Credentials for" [ref=f7e61]:
+        - tab "Just me Not set up Only used by you" [ref=f7e62] [cursor=pointer]:
+          - generic [ref=f7e66]:
+            - generic [ref=f7e67]:
+              - text: Just me
+              - generic [ref=f7e68]: Not set up
+            - generic [ref=f7e69]: Only used by you
+        - tab "Whole team Not set up Can be used by the whole team" [selected] [ref=f7e70]:
+          - generic [ref=f7e76]:
+            - generic [ref=f7e77]:
+              - text: Whole team
+              - generic [ref=f7e78]: Not set up
+            - generic [ref=f7e79]: Can be used by the whole team
+      - tabpanel [ref=f7e80]:
+        - generic [ref=f7e81]:
+          - generic [ref=f7e82]: Google Drive
+          - button "Connect Google Drive" [ref=f7e84] [cursor=pointer]
+        - generic [ref=f7e87]:
+          - generic [ref=f7e92]:
+            - generic [ref=f7e93] [cursor=pointer]:
+              - checkbox "Enable creating and writing files" [ref=f7e94]
+              - text: Enable creating and writing files
+            - generic [ref=f7e95]: Allow creating and editing Drive files, Google Sheets and Google Slides.
+          - generic [ref=f7e96]: Saved ✓
