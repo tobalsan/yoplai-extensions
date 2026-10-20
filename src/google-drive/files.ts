@@ -95,7 +95,10 @@ export async function readConversationFile(sourcePath: string, context: ToolExec
   signal.throwIfAborted();
   const folder = await realpath(context.conversationFiles.hostPath);
   const { hostPath, runtimePath } = context.conversationFiles;
-  if (!path.isAbsolute(sourcePath)) throw new DriveFileError("Only files inside the current conversation folder may be saved.", 400);
+  if (!path.isAbsolute(sourcePath)) {
+    if (path.basename(sourcePath) !== sourcePath || sourcePath === "." || sourcePath === "..") throw new DriveFileError(`Use a file in the conversation folder root, such as ${path.posix.join(runtimePath, "name.png")}.`, 400);
+    sourcePath = path.join(runtimePath, sourcePath);
+  }
   let local: string;
   if (inside(runtimePath, sourcePath)) local = path.resolve(folder, path.relative(runtimePath, sourcePath));
   else if (inside(hostPath, sourcePath)) local = path.resolve(folder, path.relative(hostPath, sourcePath));

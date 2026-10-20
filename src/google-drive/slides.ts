@@ -5,7 +5,7 @@ import { imageSize } from "image-size";
 import { readConversationFile, uploadDriveFile } from "./files.js";
 import type { ToolExecutionContext } from "../tool-extension.js";
 import type { DriveRequest } from "./files.js";
-import type { SlidesCreateParamsSchema, SlidesGetParamsSchema, SlidesBatchUpdateParamsSchema } from "./slides-models.js";
+import type { SlidesCreateParamsSchema, SlidesGetParamsSchema, SlidesBatchUpdateParamsSchema, SlideElementInput } from "./slides-models.js";
 
 const SLIDES = "https://slides.googleapis.com/v1/presentations";
 export class SlidesError extends Error {
@@ -20,26 +20,54 @@ export interface SlideElement {
 interface SlideText { textElements?: { textRun?: { content?: string; style?: unknown }; [key: string]: unknown }[]; [key: string]: unknown; }
 export interface Presentation { presentationId: string; title?: string; pageSize?: { width?: { magnitude?: number; unit?: string }; height?: { magnitude?: number; unit?: string } }; slides?: SlidePage[]; revisionId?: string; masters?: { objectId: string; masterProperties?: { displayName?: string; name?: string } }[]; layouts?: { objectId: string; layoutProperties?: { displayName?: string; name?: string } }[]; }
 function pageSize(deck: Presentation) { return { width: deck.pageSize?.width?.magnitude ?? 0, height: deck.pageSize?.height?.magnitude ?? 0, unit: deck.pageSize?.width?.unit ?? deck.pageSize?.height?.unit ?? "PT" }; }
+async function loadLocalImage(imagePath: string, context: ToolExecutionContext | undefined, signal: AbortSignal) {
+  const { bytes, mimeType } = await readConversationFile(imagePath, context, signal, 10_000_000);
+  if (!["image/png", "image/jpeg", "image/gif"].includes(mimeType)) throw new SlidesError("Local images must be PNG, JPEG or GIF files.", 400);
+  let dimensions: ReturnType<typeof imageSize>;
+  try { dimensions = imageSize(bytes); } catch { throw new SlidesError("Invalid local PNG, JPEG or GIF image.", 400); }
+  if (!["png", "jpg", "gif"].includes(dimensions.type ?? "") || dimensions.width <= 0 || dimensions.height <= 0) throw new SlidesError("Local images must contain valid PNG, JPEG or GIF bytes.", 400);
+  return { data: `data:${mimeType};base64,${bytes.toString("base64")}`, width: dimensions.width, height: dimensions.height };
+}
+async function addLocalImage(slide: ReturnType<InstanceType<typeof PptxGenJS>["addSlide"]>, imagePath: string, box: { x: number; y: number; width: number; height: number }, context: ToolExecutionContext | undefined, signal: AbortSignal) {
+  const image = await loadLocalImage(imagePath, context, signal);
+  const factor = Math.min(box.width / image.width, box.height / image.height);
+  const width = image.width * factor; const height = image.height * factor;
+  slide.addImage({ data: image.data, x: (box.x + (box.width - width) / 2) / 72, y: (box.y + (box.height - height) / 2) / 72, w: width / 72, h: height / 72 });
+}
+async function addElement(pptx: InstanceType<typeof PptxGenJS>, slide: ReturnType<InstanceType<typeof PptxGenJS>["addSlide"]>, element: SlideElementInput, context: ToolExecutionContext | undefined, signal: AbortSignal) {
+  const box = { x: element.x / 72, y: element.y / 72, w: element.w / 72, h: element.h / 72 };
+  if (element.kind === "image") {
+    if (!element.path) throw new SlidesError("Image elements in slides_create need a local path; use slides_add_elements for URL images.", 400);
+    return addLocalImage(slide, element.path, { x: element.x, y: element.y, width: element.w, height: element.h }, context, signal);
+  }
+  if (element.kind === "line") return void slide.addShape(pptx.ShapeType.line, { ...box, line: { color: element.outline?.color ?? element.color ?? "000000", width: element.outline?.weight ?? 1 } });
+  const shapes = { rect: pptx.ShapeType.rect, roundRect: pptx.ShapeType.roundRect, ellipse: pptx.ShapeType.ellipse } as const;
+  const isText = element.kind === "text";
+  slide.addText(element.text ?? "", {
+    ...box, ...(isText ? {} : { shape: element.radius === 0 ? shapes.rect : shapes[element.kind as keyof typeof shapes] }),
+    ...(element.radius ? { rectRadius: element.radius / 72 } : {}),
+    ...(element.font ? { fontFace: element.font } : {}), ...(element.size ? { fontSize: element.size } : {}),
+    ...(element.bold !== undefined ? { bold: element.bold } : {}), ...(element.italic !== undefined ? { italic: element.italic } : {}),
+    ...(element.color ? { color: element.color } : {}), align: element.align ?? "left", valign: element.valign ?? "top",
+    ...(element.lineSpacing ? { lineSpacingMultiple: element.lineSpacing / 100 } : {}),
+    ...(element.fill ? { fill: { color: element.fill } } : {}),
+    ...(element.outline ? { line: { color: element.outline.color, width: element.outline.weight ?? 1 } } : isText ? {} : { line: { type: "none" } }),
+  });
+}
 export async function slidesCreate(params: z.infer<typeof SlidesCreateParamsSchema>, context: ToolExecutionContext | undefined, request: DriveRequest) {
   const signal = context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
   signal.throwIfAborted();
   let created: { id: string; webViewLink?: string };
   if (params.slides?.length) {
     if (params.slides.length > 50) throw new SlidesError("Local-image decks are limited to 50 slides.", 413);
-    if (params.slides.reduce((count, slide) => count + slide.images.length, 0) > 30) throw new SlidesError("Local-image decks are limited to 30 images.", 413);
+    if (params.slides.reduce((count, slide) => count + slide.images.length + (slide.elements ?? []).filter(element => element.kind === "image").length, 0) > 30) throw new SlidesError("Local-image decks are limited to 30 images.", 413);
     const pptx = new PptxGenJS(); pptx.layout = "LAYOUT_16x9"; pptx.title = params.title;
     for (const input of params.slides) {
       const slide = pptx.addSlide();
-      for (const image of input.images) {
-        const { bytes, mimeType } = await readConversationFile(image.path, context, signal, 10_000_000);
-        if (!["image/png", "image/jpeg", "image/gif"].includes(mimeType)) throw new SlidesError("Local images must be PNG, JPEG or GIF files.", 400);
-        let dimensions: ReturnType<typeof imageSize>;
-        try { dimensions = imageSize(bytes); } catch { throw new SlidesError("Invalid local PNG, JPEG or GIF image.", 400); }
-        if (!["png", "jpg", "gif"].includes(dimensions.type ?? "") || dimensions.width <= 0 || dimensions.height <= 0) throw new SlidesError("Local images must contain valid PNG, JPEG or GIF bytes.", 400);
-        const factor = Math.min(image.width / dimensions.width, image.height / dimensions.height);
-        const width = dimensions.width * factor; const height = dimensions.height * factor;
-        slide.addImage({ data: `data:${mimeType};base64,${bytes.toString("base64")}`, x: (image.x + (image.width - width) / 2) / 72, y: (image.y + (image.height - height) / 2) / 72, w: width / 72, h: height / 72 });
-      }
+      if (input.background) slide.background = { color: input.background };
+      for (const image of input.images) await addLocalImage(slide, image.path, image, context, signal);
+      for (const element of input.elements ?? []) await addElement(pptx, slide, element, context, signal);
+      if (input.notes) slide.addNotes(input.notes);
     }
     const bytes = Buffer.from(await pptx.write({ outputType: "nodebuffer" }) as Uint8Array);
     if (bytes.byteLength > 50_000_000) throw new SlidesError("Generated PPTX exceeds the 50 MB PPTX limit.", 413);
@@ -54,9 +82,9 @@ export async function slidesCreate(params: z.infer<typeof SlidesCreateParamsSche
   const base = { presentationId: created.id, webViewLink: created.webViewLink ?? `https://docs.google.com/presentation/d/${created.id}/edit` };
   try {
     const deck = await (await request(`${SLIDES}/${encodeURIComponent(created.id)}`, { signal })).json() as Presentation;
-    return { ...base, pageSize: pageSize(deck), slideIds: (deck.slides ?? []).map(slide => slide.objectId), revisionId: deck.revisionId ?? null };
+    return { ...base, pageSize: pageSize(deck), slideIds: (deck.slides ?? []).map(slide => slide.objectId), revisionId: deck.revisionId ?? null, slides: (deck.slides ?? []).map(slide => ({ slideId: slide.objectId, elementIds: (slide.pageElements ?? []).map(element => element.objectId) })) };
   } catch (error) {
-    return { ...base, pageSize: null, slideIds: [], revisionId: null, inspectionError: { message: error instanceof Error ? error.message : String(error), ...(error instanceof Error && "status" in error ? { status: Number(error.status) } : {}) } };
+    return { ...base, pageSize: null, slideIds: [], revisionId: null, slides: [], inspectionError: { message: error instanceof Error ? error.message : String(error), ...(error instanceof Error && "status" in error ? { status: Number(error.status) } : {}) } };
   }
 }
 export function resolvePresentationId(params: { presentationId?: string; presentationUrl?: string }): string {
@@ -137,8 +165,39 @@ export async function slidesGet(params: z.infer<typeof SlidesGetParamsSchema>, r
   }
   return result;
 }
-export async function slidesBatchUpdate(params: z.infer<typeof SlidesBatchUpdateParamsSchema>, request: DriveRequest, context?: ToolExecutionContext) {
+export async function sendBatchUpdate(id: string, requests: unknown[], requiredRevisionId: string | undefined, request: DriveRequest, context?: ToolExecutionContext) {
+  const result = await (await request(`${SLIDES}/${encodeURIComponent(id)}:batchUpdate`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: context?.signal, body: JSON.stringify({ requests, ...(requiredRevisionId ? { writeControl: { requiredRevisionId } } : {}) }) })).json() as { replies?: unknown[]; writeControl?: { requiredRevisionId?: string } };
+  return { replies: result.replies ?? [], revisionId: result.writeControl?.requiredRevisionId ?? null };
+}
+export type RenderAfterWrite = (slideIds: string[]) => Promise<unknown>;
+export async function renderAfterWrite(render: RenderAfterWrite, slideIds: string[]): Promise<{ render: unknown } | { renderError: { message: string } }> {
+  try { return { render: await render(slideIds) }; }
+  catch (error) { return { renderError: { message: error instanceof Error ? error.message : String(error) } }; }
+}
+async function loadRequests(params: z.infer<typeof SlidesBatchUpdateParamsSchema>, context: ToolExecutionContext | undefined): Promise<unknown[]> {
+  if (Boolean(params.requests) === Boolean(params.requestsPath)) throw new SlidesError("Provide exactly one of requests or requestsPath.", 400);
+  let requests: unknown = params.requests;
+  if (params.requestsPath) {
+    const signal = context?.signal ?? AbortSignal.timeout(30_000);
+    const { bytes } = await readConversationFile(params.requestsPath, context, signal, 5_000_000).catch((error: unknown) => {
+      if (error instanceof Error && "status" in error && error.status === 413) throw new SlidesError("requestsPath file exceeds the 5 MB limit.", 413);
+      throw error;
+    });
+    let parsed: unknown;
+    try { parsed = JSON.parse(bytes.toString("utf8")); } catch { throw new SlidesError("requestsPath must contain valid JSON.", 400); }
+    requests = Array.isArray(parsed) ? parsed : (parsed as { requests?: unknown } | null)?.requests;
+    if (!Array.isArray(requests) || !requests.length || requests.some(item => typeof item !== "object" || item === null || Array.isArray(item))) throw new SlidesError("requestsPath must contain a non-empty JSON array of request objects, or { requests: [...] }.", 400);
+  }
+  return (requests as Record<string, unknown>[]).map(normalizeRequest);
+}
+function normalizeRequest(request: Record<string, unknown>): Record<string, unknown> {
+  const replace = request.replaceAllText as { containsText?: unknown } | undefined;
+  if (typeof replace?.containsText !== "string") return request;
+  return { ...request, replaceAllText: { ...replace, containsText: { text: replace.containsText, matchCase: true } } };
+}
+export async function slidesBatchUpdate(params: z.infer<typeof SlidesBatchUpdateParamsSchema>, request: DriveRequest, context?: ToolExecutionContext, render?: RenderAfterWrite) {
   const id = resolvePresentationId(params);
-  const result = await (await request(`${SLIDES}/${encodeURIComponent(id)}:batchUpdate`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: context?.signal, body: JSON.stringify({ requests: params.requests, ...(params.requiredRevisionId ? { writeControl: { requiredRevisionId: params.requiredRevisionId } } : {}) }) })).json() as { replies?: unknown[]; writeControl?: { requiredRevisionId?: string } };
-  return { presentationId: id, replies: result.replies ?? [], revisionId: result.writeControl?.requiredRevisionId ?? null };
+  const requests = await loadRequests(params, context);
+  const result = { presentationId: id, ...await sendBatchUpdate(id, requests, params.requiredRevisionId, request, context) };
+  return params.renderSlideIds?.length && render ? { ...result, ...await renderAfterWrite(render, params.renderSlideIds) } : result;
 }

@@ -13,15 +13,16 @@ Tools (mounted as `googleDrive_<name>`):
 - `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF, DOCX and PPTX text-extracted, with slide numbers and notes for PPTX)
 - `download_file({ fileId, format?: "office" | "pdf" })` — save original bytes into the current conversation's writable folder; Google Docs/Sheets/Slides export as docx/xlsx/pptx by default, or PDF
 - `slides_get({ presentationId? | presentationUrl?, slideIds?, startSlideId? })` — overview or selected details, revision guard value and budgeted continuation
-- `slides_render({ presentationId? | presentationUrl?, slideIds? })` — selected slide PNGs saved into this conversation, in presentation order
+- `slides_render({ presentationId? | presentationUrl?, slideIds? })` — selected slide PNGs saved into this conversation, in presentation order; with more than one slide also one 2-column contact-sheet PNG (`contactSheet: { path, columns, slideIds } | null`, `contactSheetError` if it could not be built) — read that first, open single slides only for detail
 - `validate` — confirm the connection is live; returns the connected Google account
 
 Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file`, `spreadsheets` and `presentations`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets; `presentations` permits editing existing decks when the user has edit permission. Existing write-enabled connections reconnect once for the new scope. Read tools retain `drive.readonly`.
 
 Write tools (only mounted when `allowWrite: true`):
 
-- `slides_create({ title, parentId?, slides? })` — native deck, optionally seeded with local PNG/JPEG/GIF image slides
-- `slides_batch_update({ presentationId? | presentationUrl?, requests, requiredRevisionId? })` — pass-through Google Slides requests; revision-guarded edits in place
+- `slides_create({ title, parentId?, slides? })` — native deck; each slide takes `elements` (point-based text/rect/roundRect/ellipse/line/image), `background`, `notes` and legacy `images`; returns `slides: [{ slideId, elementIds }]`
+- `slides_add_elements({ presentationId? | presentationUrl?, slideId? | newSlide?, elements, requiredRevisionId?, render? })` — add point-based elements to a slide or a new blank slide in one batch update
+- `slides_batch_update({ presentationId? | presentationUrl?, requests? | requestsPath?, requiredRevisionId?, renderSlideIds? })` — pass-through Google Slides requests (or a conversation-root JSON file: array or `{ requests }`, max 5 MB); revision-guarded edits in place; a string `replaceAllText.containsText` is normalized to `{ text, matchCase: true }`
 - `create_folder` — name and optional parent folder id
 - `save_file({ path, fileId? | name + parentId?, convert? })` — upload a local conversation file as a new copy or replace an app-accessible file while keeping its format
 - `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
@@ -57,9 +58,13 @@ Availability uses the existing per-agent Google Drive opt-in, `allowWrite` for w
 
 References accept exactly one of `presentationId` and `presentationUrl`, including Slides and Drive file links. An omitted/empty `slideIds` returns an overview in `slides_get`, or renders all slides in `slides_render`. Non-empty selections return presentation order with one-based slide numbers. Get responses have hard JSON budgets (40,000 overview / 60,000 details characters); use `nextSlideId` as `startSlideId` to continue. Oversized details return 413 with guidance to use the overview and render.
 
-Prefer public PNG, JPEG or GIF URLs for `createImage`; private Drive links, local paths and SVG files do not work. For a private logo, skill asset or chat upload, first copy the image into the conversation folder root, then pass `slides: [{ images: [{ path, x, y, width, height }] }]` to `slides_create`. Each slide uses a 720 x 405 pt (16:9) page; image boxes preserve aspect ratio and center without cropping. Blank image lists create blank slides. Add text/shapes afterward with `slides_batch_update`. Local images are supported at creation only; existing decks use public image URLs.
+Prefer public PNG, JPEG or GIF URLs for `createImage`; private Drive links, local paths and SVG files do not work. For a private logo, skill asset or chat upload, first copy the image into the conversation folder root, then pass `slides: [{ images: [{ path, x, y, width, height }] }]` to `slides_create`. Each slide uses a 720 x 405 pt (16:9) page; image boxes preserve aspect ratio and center without cropping. Blank image lists create blank slides. Local images are supported at creation only; existing decks use public image URLs.
 
-Local-image limits: 50 slides, 30 images, 10 MB/image and 50 MB generated PPTX. The extension builds and imports the PPTX itself, using multipart upload up to 5 MB and resumable upload above that. A creation inspection failure returns the created id/link and error: inspect that deck with `slides_get`, without creating another copy.
+Element format (`slides_create` slides and `slides_add_elements`), all geometry in points on the 720 x 405 page: `{ kind: text|rect|roundRect|ellipse|line|image, id?, x, y, w, h, text?, font?, size?, bold?, italic?, color?, align?, valign?, lineSpacing? (percent), fill?, outline?: { color, weight? }, radius?, url?, path? }`. Colors are `#RRGGBB`; `\n` separates paragraphs; no `outline` means no outline. `id` is only used by `slides_add_elements`. `roundRect.radius` (points) works only in `slides_create` — the Slides API cannot set corner radius, but the imported PPTX keeps it. Images: `path` (conversation-root file) in `slides_create`, public https `url` in `slides_add_elements`. `slides_create` returns `slides[].elementIds` in drawing order: legacy `images` first, then `elements`. Rename the new file with `rename_move_file`.
+
+Recommended loop: one `slides_create` with all slides' elements → `slides_render` once and read `contactSheet.path` → fix with `slides_add_elements`/`slides_batch_update` → re-render only changed slides.
+
+Local-image limits (element images count too): 50 slides, 30 images, 10 MB/image and 50 MB generated PPTX. The extension builds and imports the PPTX itself, using multipart upload up to 5 MB and resumable upload above that. A creation inspection failure returns the created id/link and error: inspect that deck with `slides_get`, without creating another copy.
 
 Renders use at most three parallel requests, with 30 seconds per thumbnail/download and 120 seconds overall. Each image is limited to 10 MB. Failure/cancellation removes only files created by that call; signed URLs and bearer tokens never appear in the output. Render only changed slides: thumbnails cost expensive-read quota (60/user/minute, 300/project/minute). Short retries cannot replenish quota; after `rate_limited`, wait.
 

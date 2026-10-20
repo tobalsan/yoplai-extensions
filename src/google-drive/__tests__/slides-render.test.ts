@@ -301,7 +301,7 @@ it("returns an empty render list for a deck without slides", async () => {
   const run = await setup();
   const fetcher = vi.fn(async () => Response.json({ slides: [] }));
   vi.stubGlobal("fetch", fetcher);
-  await expect(run.execute({ presentationId: "deck" })).resolves.toEqual({ presentationId: "deck", slides: [] });
+  await expect(run.execute({ presentationId: "deck" })).resolves.toEqual({ presentationId: "deck", slides: [], contactSheet: null });
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(await readdir(run.hostPath)).toEqual([]);
 });

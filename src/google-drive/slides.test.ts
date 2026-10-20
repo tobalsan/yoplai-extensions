@@ -33,7 +33,7 @@ it("creates a native deck in the requested folder, then inspects the actual empt
   const run = await tools();
   const fetch = google(Response.json({ id: "deck-1", webViewLink: "https://docs.google.com/presentation/d/deck-1/edit" }), Response.json(deck()));
   await expect(run.execute("slides_create", { title: "Brand", parentId: "folder-1" })).resolves.toEqual({
-    presentationId: "deck-1", webViewLink: "https://docs.google.com/presentation/d/deck-1/edit", pageSize: { width: 720, height: 405, unit: "PT" }, slideIds: [], revisionId: "revision-1",
+    presentationId: "deck-1", webViewLink: "https://docs.google.com/presentation/d/deck-1/edit", pageSize: { width: 720, height: 405, unit: "PT" }, slideIds: [], revisionId: "revision-1", slides: [],
   });
   const calls = fetch.mock.calls as unknown as [string, RequestInit][];
   expect(JSON.parse(calls[0][1].body as string)).toEqual({ name: "Brand", mimeType: "application/vnd.google-apps.presentation", parents: ["folder-1"] });

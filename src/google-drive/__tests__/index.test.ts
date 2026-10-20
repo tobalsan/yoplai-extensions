@@ -151,7 +151,7 @@ describe("write mode", () => {
     const names = (merged: Record<string, unknown>) => extension.createTools({ global: {}, agent: {}, merged }).map((tool) => tool.name);
     expect(names({})).toEqual(["list_files", "search_files", "read_file", "download_file", "sheets_list_spreadsheets", "sheets_inspect", "sheets_read_sheet", "sheets_read_range", "slides_get", "slides_render", "validate"]);
     expect(names({ allowWrite: false })).toEqual(names({}));
-    expect(names({ allowWrite: true })).toEqual([...names({}), "save_file", "slides_create", "slides_batch_update", "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
+    expect(names({ allowWrite: true })).toEqual([...names({}), "save_file", "slides_create", "slides_batch_update", "slides_add_elements", "create_folder", "create_file", "update_file_content", "rename_move_file", "sheets_update_range", "sheets_append_rows"]);
     expect(extension.configJsonSchema).toMatchObject({ properties: { allowWrite: { type: "boolean", default: false, title: "Enable creating and writing files" } } });
   });
 

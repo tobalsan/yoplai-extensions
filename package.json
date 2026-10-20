@@ -22,6 +22,7 @@
     "image-size": "^2.0.4",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "5.6.205",
+    "pngjs": "^7.0.0",
     "pptxgenjs": "^4.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "^3.4.0",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.1",
+    "@types/pngjs": "^6.0.5",
     "@types/yauzl": "^3.4.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2",
