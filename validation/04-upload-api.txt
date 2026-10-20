@@ -1,0 +1,28 @@
+### Result
+[{"inputMime":"application/vnd.openxmlformats-officedocument.presentationml.presentation","status":200,"outputMime":"application/vnd.openxmlformats-officedocument.presentationml.presentation","error":null},{"inputMime":"","status":200,"outputMime":"application/vnd.openxmlformats-officedocument.presentationml.presentation","error":null},{"inputMime":"application/octet-stream","status":200,"outputMime":"application/vnd.openxmlformats-officedocument.presentationml.presentation","error":null},{"inputMime":"application/pdf","status":400,"outputMime":null,"error":"File extension .pptx does not match MIME type application/pdf"}]
+### Ran Playwright code
+```js
+await (async page => {
+  const results = await page.evaluate(async () => {
+    const source = document.querySelector('input[type=file]').files[0];
+    const results = [];
+    for (const type of ['application/vnd.openxmlformats-officedocument.presentationml.presentation', '', 'application/octet-stream', 'application/pdf']) {
+      const data = new FormData();
+      data.set('file', new File([source], 'validation.pptx', {type}));
+      data.set('agentId', 'slides');
+      const response = await fetch('/api/media/upload', {method:'POST', body:data});
+      const body = await response.json();
+      results.push({inputMime:type, status:response.status, outputMime:body.mimeType ?? null, error:body.error ?? null});
+    }
+    return results;
+  });
+  return results;
+}
+)(page);
+```
+### Page
+- Page URL: http://127.0.0.1:3180/chat/slides
+- Page Title: [DEV :3180] Slides E2E — Yoplai
+- Console: 4 errors, 1 warnings
+### Events
+- New console entries: .playwright-cli/console-2026-10-19T18-18-48-626Z.log#L5

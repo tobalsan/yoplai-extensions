@@ -1,0 +1,682 @@
+$ pnpm exec tsx scripts/dev.ts
+[dev] Finding free ports...
+(node:21942) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[dev] Starting web UI...
+[dev] Starting gateway...
+$ pnpm exec tsx scripts/dev.ts
+(node:22021) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+  VITE v6.4.1  ready in 592 ms
+
+  ➜  Local:   http://127.0.0.1:3180/
+[oauth] oauth.encryptionKey is not set — OAuth tokens are encrypted at rest, so connecting a new account will FAIL until you set a key. Set oauth.encryptionKey (e.g. $env:OAUTH_ENCRYPTION_KEY) to enable the OAuth connect flow.
+(node:22060) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[extensions] agent "slides" references unknown extension "googleDrive"
+[components] loaded: canvas, sessionHistory, multiUser
+[components] skipped: googleDrive
+Loaded config with 1 agent(s)
+Starting gateway server on 127.0.0.1:4180
+
+╔════════════════════════════════════════╗
+║           DEV MODE ACTIVE              ║
+║  Gateway: http://127.0.0.1:4180        ║
+║  Web UI:  http://127.0.0.1:3180        ║
+║  Scheduler: OFF  Heartbeat: OFF        ║
+╚════════════════════════════════════════╝
+
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 18ms
+<-- POST /api/auth/sign-up/email
+--> POST /api/auth/sign-up/email 200 80ms
+<-- GET /api/agents
+--> GET /api/agents 200 2ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 3ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/impersonation/status
+--> GET /api/impersonation/status 401 0ms
+<-- GET /api/agents
+--> GET /api/agents 200 1ms
+<-- POST /api/auth/sign-in/email
+--> POST /api/auth/sign-in/email 200 66ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 0ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/onboarding
+--> GET /api/me/onboarding 200 2ms
+<-- GET /api/impersonation/status
+--> GET /api/impersonation/status 200 1ms
+<-- GET /api/me/main-agent
+<-- GET /api/agents
+<-- GET /api/pool-actions
+--> GET /api/me/main-agent 200 2ms
+--> GET /api/agents 200 2ms
+--> GET /api/pool-actions 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/me/main-agent
+<-- GET /api/pool
+<-- GET /api/pool-actions
+--> GET /api/me/main-agent 200 1ms
+--> GET /api/pool 200 1ms
+--> GET /api/pool-actions 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 1ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/onboarding
+--> GET /api/me/onboarding 200 1ms
+<-- GET /api/impersonation/status
+--> GET /api/impersonation/status 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 534ms
+<-- GET /api/agents/slides/extensions
+<-- GET /api/chat-projects
+--> GET /api/agents/slides/extensions 200 20ms
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+[gateway] Graceful shutdown initiated
+
+[dev] Received SIGINT, shutting down...
+$ pnpm exec tsx scripts/dev.ts
+[dev] Finding free ports...
+(node:24331) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[dev] Starting web UI...
+[dev] Starting gateway...
+$ pnpm exec tsx scripts/dev.ts
+(node:24399) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+  VITE v6.4.1  ready in 239 ms
+
+  ➜  Local:   http://127.0.0.1:3180/
+8:17:02 PM [vite] http proxy error: /api/agents/sessions
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:17:02 PM [vite] http proxy error: /api/chat-projects
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:17:02 PM [vite] http proxy error: /api/theme.css
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+[oauth] oauth.encryptionKey is not set — OAuth tokens are encrypted at rest, so connecting a new account will FAIL until you set a key. Set oauth.encryptionKey (e.g. $env:OAUTH_ENCRYPTION_KEY) to enable the OAuth connect flow.
+(node:24407) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[components] loaded: canvas, sessionHistory, multiUser, googleDrive
+[components] skipped: none
+Loaded config with 1 agent(s)
+Starting gateway server on 127.0.0.1:4180
+
+╔════════════════════════════════════════╗
+║           DEV MODE ACTIVE              ║
+║  Gateway: http://127.0.0.1:4180        ║
+║  Web UI:  http://127.0.0.1:3180        ║
+║  Scheduler: OFF  Heartbeat: OFF        ║
+╚════════════════════════════════════════╝
+
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 22ms
+<-- GET /api/me/onboarding
+<-- GET /api/impersonation/status
+--> GET /api/me/onboarding 200 2ms
+--> GET /api/impersonation/status 200 2ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 428ms
+<-- GET /api/oauth/google/status?agent=slides&scope=team
+<-- GET /api/oauth/google/status?agent=slides&scope=personal
+--> GET /api/oauth/google/status?agent=slides&scope=team 200 2ms
+--> GET /api/oauth/google/status?agent=slides&scope=personal 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 10ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 3ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/onboarding
+<-- GET /api/impersonation/status
+--> GET /api/me/onboarding 200 3ms
+--> GET /api/impersonation/status 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 9ms
+<-- GET /api/oauth/google/status?agent=slides&scope=team
+<-- GET /api/oauth/google/status?agent=slides&scope=personal
+--> GET /api/oauth/google/status?agent=slides&scope=team 200 1ms
+--> GET /api/oauth/google/status?agent=slides&scope=personal 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 8ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- PATCH /api/agents/slides/extensions/googleDrive
+--> PATCH /api/agents/slides/extensions/googleDrive 200 42ms
+<-- GET /api/oauth/google/status?agent=slides&scope=team
+<-- GET /api/oauth/google/status?agent=slides&scope=personal
+--> GET /api/oauth/google/status?agent=slides&scope=team 200 1ms
+--> GET /api/oauth/google/status?agent=slides&scope=personal 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 11ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 1ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/agents
+--> GET /api/agents 200 1ms
+<-- GET /api/me/onboarding
+<-- GET /api/impersonation/status
+<-- GET /api/me/connect-prompt/slides
+--> GET /api/me/onboarding 200 2ms
+--> GET /api/impersonation/status 200 2ms
+--> GET /api/me/connect-prompt/slides 200 2ms
+<-- GET /api/top-extensions
+<-- GET /api/agents/slides/extensions
+--> GET /api/top-extensions 200 0ms
+<-- GET /api/mcp/servers?agent=slides
+--> GET /api/mcp/servers?agent=slides 404 8ms
+<-- GET /api/top-extensions
+--> GET /api/agents/slides/extensions 200 12ms
+<-- GET /api/tool-labels
+--> GET /api/top-extensions 200 3ms
+<-- GET /api/agents/slides
+<-- GET /api/pool-actions
+--> GET /api/tool-labels 200 1ms
+--> GET /api/agents/slides 200 1ms
+<-- GET /api/agents/slides/suggestions
+--> GET /api/pool-actions 200 1ms
+<-- GET /api/capabilities
+--> GET /api/agents/slides/suggestions 200 1ms
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/main-agent
+--> GET /api/me/main-agent 200 1ms
+<-- GET /api/me/connect-prompt/slides
+--> GET /api/me/connect-prompt/slides 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/top-extensions
+<-- GET /api/agents/slides/extensions
+--> GET /api/top-extensions 200 1ms
+<-- GET /api/mcp/servers?agent=slides
+--> GET /api/mcp/servers?agent=slides 404 7ms
+--> GET /api/agents/slides/extensions 200 11ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 3ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 1ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 1ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 400 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 1ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 2ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 200 1ms
+<-- POST /api/media/upload
+--> POST /api/media/upload 400 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 0ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+8:19:30 PM [tsx] change in ./../../../worktree/dist/google-sheets.js Restarting...
+[gateway] Graceful shutdown initiated
+8:19:30 PM [tsx] change in ./../../../worktree/dist/google-drive/index.js Process hasn't exited. Killing process...
+c8:19:30 PM [vite] http proxy error: /api/agents/sessions
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:30 PM [vite] http proxy error: /api/chat-projects
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:31 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+[oauth] oauth.encryptionKey is not set — OAuth tokens are encrypted at rest, so connecting a new account will FAIL until you set a key. Set oauth.encryptionKey (e.g. $env:OAUTH_ENCRYPTION_KEY) to enable the OAuth connect flow.
+8:19:32 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:33 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:33 PM [vite] http proxy error: /api/agents/sessions
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:33 PM [vite] http proxy error: /api/chat-projects
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:19:34 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+(node:25773) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[components] loaded: canvas, sessionHistory, multiUser, googleDrive
+[components] skipped: none
+Loaded config with 1 agent(s)
+Starting gateway server on 127.0.0.1:4180
+
+╔════════════════════════════════════════╗
+║           DEV MODE ACTIVE              ║
+║  Gateway: http://127.0.0.1:4180        ║
+║  Web UI:  http://127.0.0.1:3180        ║
+║  Scheduler: OFF  Heartbeat: OFF        ║
+╚════════════════════════════════════════╝
+
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 5ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+8:20:23 PM [tsx] change in ./../../../worktree/node_modules/.pnpm/xlsx@https+++cdn.sheetjs.com+xlsx-0.20.3+xlsx-0.20.3.tgz/node_modules/xlsx/xlsx.mjs Restarting...
+[gateway] Graceful shutdown initiated
+
+Shutting down...
+c8:20:24 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:20:24 PM [vite] http proxy error: /api/agents/sessions
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:20:24 PM [vite] http proxy error: /api/chat-projects
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+[oauth] oauth.encryptionKey is not set — OAuth tokens are encrypted at rest, so connecting a new account will FAIL until you set a key. Set oauth.encryptionKey (e.g. $env:OAUTH_ENCRYPTION_KEY) to enable the OAuth connect flow.
+8:20:25 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+(node:26351) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[components] loaded: canvas, sessionHistory, multiUser, googleDrive
+[components] skipped: none
+Loaded config with 1 agent(s)
+Starting gateway server on 127.0.0.1:4180
+
+╔════════════════════════════════════════╗
+║           DEV MODE ACTIVE              ║
+║  Gateway: http://127.0.0.1:4180        ║
+║  Web UI:  http://127.0.0.1:3180        ║
+║  Scheduler: OFF  Heartbeat: OFF        ║
+╚════════════════════════════════════════╝
+
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+[gateway] Graceful shutdown initiated
+
+[dev] Received SIGINT, shutting down...
+$ pnpm exec tsx scripts/dev.ts
+[dev] Finding free ports...
+(node:26541) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[dev] Starting web UI...
+[dev] Starting gateway...
+$ pnpm exec tsx scripts/dev.ts
+(node:26596) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+  VITE v6.4.1  ready in 157 ms
+
+  ➜  Local:   http://127.0.0.1:3180/
+8:20:42 PM [vite] http proxy error: /api/agents/sessions
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:20:42 PM [vite] http proxy error: /api/chat-projects
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:20:43 PM [vite] ws proxy error:
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+8:20:43 PM [vite] http proxy error: /api/theme.css
+Error: connect ECONNREFUSED 127.0.0.1:4180
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)
+[oauth] oauth.encryptionKey is not set — OAuth tokens are encrypted at rest, so connecting a new account will FAIL until you set a key. Set oauth.encryptionKey (e.g. $env:OAUTH_ENCRYPTION_KEY) to enable the OAuth connect flow.
+(node:26597) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[components] loaded: canvas, sessionHistory, multiUser, googleDrive
+[components] skipped: none
+Loaded config with 1 agent(s)
+Starting gateway server on 127.0.0.1:4180
+
+╔════════════════════════════════════════╗
+║           DEV MODE ACTIVE              ║
+║  Gateway: http://127.0.0.1:4180        ║
+║  Web UI:  http://127.0.0.1:3180        ║
+║  Scheduler: OFF  Heartbeat: OFF        ║
+╚════════════════════════════════════════╝
+
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 19ms
+<-- GET /api/agents
+--> GET /api/agents 200 2ms
+<-- GET /api/me/onboarding
+<-- GET /api/impersonation/status
+<-- GET /api/me/connect-prompt/slides
+--> GET /api/me/onboarding 200 3ms
+--> GET /api/impersonation/status 200 3ms
+--> GET /api/me/connect-prompt/slides 200 3ms
+<-- GET /api/top-extensions
+<-- GET /api/agents/slides/extensions
+--> GET /api/top-extensions 200 2ms
+<-- GET /api/mcp/servers?agent=slides
+--> GET /api/mcp/servers?agent=slides 404 311ms
+<-- GET /api/top-extensions
+<-- GET /api/tool-labels
+--> GET /api/agents/slides/extensions 200 318ms
+--> GET /api/top-extensions 200 5ms
+<-- GET /api/agents/slides
+<-- GET /api/pool-actions
+--> GET /api/tool-labels 200 6ms
+--> GET /api/agents/slides 200 1ms
+<-- GET /api/agents/slides/suggestions
+--> GET /api/pool-actions 200 1ms
+<-- GET /api/capabilities
+--> GET /api/agents/slides/suggestions 200 1ms
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/main-agent
+--> GET /api/me/main-agent 200 1ms
+<-- GET /api/me/connect-prompt/slides
+--> GET /api/me/connect-prompt/slides 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/top-extensions
+<-- GET /api/agents/slides/extensions
+<-- GET /api/mcp/servers?agent=slides
+--> GET /api/top-extensions 200 1ms
+--> GET /api/mcp/servers?agent=slides 404 11ms
+--> GET /api/agents/slides/extensions 200 16ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/theme.css
+--> GET /api/theme.css 204 1ms
+<-- GET /api/capabilities
+--> GET /api/capabilities 200 1ms
+<-- GET /api/me/onboarding
+<-- GET /api/impersonation/status
+--> GET /api/me/onboarding 200 1ms
+--> GET /api/impersonation/status 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 10ms
+<-- GET /api/oauth/google/status?agent=slides&scope=team
+<-- GET /api/oauth/google/status?agent=slides&scope=personal
+--> GET /api/oauth/google/status?agent=slides&scope=team 200 2ms
+--> GET /api/oauth/google/status?agent=slides&scope=personal 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- PATCH /api/agents/slides/extensions/googleDrive
+--> PATCH /api/agents/slides/extensions/googleDrive 200 31ms
+<-- GET /api/oauth/google/status?agent=slides&scope=team
+<-- GET /api/oauth/google/status?agent=slides&scope=personal
+--> GET /api/oauth/google/status?agent=slides&scope=team 200 1ms
+--> GET /api/oauth/google/status?agent=slides&scope=personal 200 1ms
+<-- GET /api/agents/slides/extensions
+--> GET /api/agents/slides/extensions 200 9ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 4ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 2ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 3ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+<-- GET /api/chat-projects
+--> GET /api/chat-projects 200 1ms
+[gateway] Graceful shutdown initiated
+
+[dev] Received SIGINT, shutting down...

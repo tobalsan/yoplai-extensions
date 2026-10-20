@@ -1,0 +1,18 @@
+$ node scripts/check-pdfjs-version.mjs && tsc && node scripts/copy-assets.mjs
+[notion] PDF.js API/worker version 5.6.205 verified
+copied confluence/icon.svg
+copied exa/icon.svg
+copied firecrawl/icon.svg
+copied gmail/icon.svg
+copied google-calendar/icon.svg
+copied google-drive/icon.svg
+copied gsheets/icon.svg
+copied hiveage/icon.png
+copied jira/icon.svg
+copied mcp/icon.png
+copied notion/icon.svg
+copied pennylane/icon.svg
+copied people-enrich/icon.png
+copied pipedrive/icon.png
+copied zendesk/icon.svg
+copy-assets: 15 icon(s) copied to dist/

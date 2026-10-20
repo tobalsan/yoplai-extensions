@@ -1,0 +1,8 @@
+
+ RUN  v4.1.2 /Users/agents/orchestration/worker/workspaces/ALG-517/worktree
+
+
+ Test Files  1 passed (1)
+      Tests  37 passed (37)
+   Start at  20:20:31
+   Duration  1.45s (transform 61ms, setup 0ms, import 149ms, tests 1.21s, environment 0ms)

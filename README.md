@@ -19,7 +19,7 @@ The source directory is the build/install directory name. The extension ID is th
 | `firecrawl` | `firecrawl` | Web scraping, crawling, mapping, and extraction | API key |
 | [`google-calendar`](src/google-calendar/README.md) | `googleCalendar` | Google Calendar events and availability | Host-managed Google OAuth |
 | [`gmail`](src/gmail/README.md) | `gmail` | Gmail drafts, threads, and labels | Host-managed Google OAuth |
-| [`google-drive`](src/google-drive/README.md) | `googleDrive` | Drive search and text extraction; file and folder writes are opt-in (`allowWrite`) | Host-managed Google OAuth |
+| [`google-drive`](src/google-drive/README.md) | `googleDrive` | Drive search, file round-trips, and native Slides creation/editing/rendering; writes opt in with `allowWrite` | Host-managed Google OAuth |
 | `gsheets` | `gsheets` | Spreadsheet discovery, reads, row appends, and range updates | Google service-account JSON |
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |

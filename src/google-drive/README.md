@@ -1,6 +1,6 @@
 # Google Drive extension
 
-Google Drive access for an agent (read-only by default; optional file and Sheets writes), via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
+Google Drive access for an agent (read-only by default; optional file, Sheets and Slides writes), via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host resolves a fresh access token when it builds the agent's tools, or injects a clean "not connected" signal.
 
 Tools (mounted as `googleDrive_<name>`):
 
@@ -10,16 +10,20 @@ Tools (mounted as `googleDrive_<name>`):
 - `sheets_inspect` — tabs, dimensions, detected headers
 - `sheets_read_sheet` — one tab as headers + row objects (`rowOffset`, `maxRows`, `columns`)
 - `sheets_read_range` — raw values for an A1 range (`majorDimension`)
-- `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF and DOCX text-extracted)
-- `download_file({ fileId })` — save original bytes into the current conversation's writable folder; Google Docs/Sheets/Slides export as docx/xlsx/pptx
+- `read_file` — download by id and extract text (Google Docs/Sheets/Slides exported to text/CSV; PDF, DOCX and PPTX text-extracted, with slide numbers and notes for PPTX)
+- `download_file({ fileId, format?: "office" | "pdf" })` — save original bytes into the current conversation's writable folder; Google Docs/Sheets/Slides export as docx/xlsx/pptx by default, or PDF
+- `slides_get({ presentationId? | presentationUrl?, slideIds?, startSlideId? })` — overview or selected details, revision guard value and budgeted continuation
+- `slides_render({ presentationId? | presentationUrl?, slideIds? })` — selected slide PNGs saved into this conversation, in presentation order
 - `validate` — confirm the connection is live; returns the connected Google account
 
-Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file` and `spreadsheets`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets.
+Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file`, `spreadsheets` and `presentations`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets; `presentations` permits editing existing decks when the user has edit permission. Existing write-enabled connections reconnect once for the new scope. Read tools retain `drive.readonly`.
 
 Write tools (only mounted when `allowWrite: true`):
 
+- `slides_create({ title, parentId?, slides? })` — native deck, optionally seeded with local PNG/JPEG/GIF image slides
+- `slides_batch_update({ presentationId? | presentationUrl?, requests, requiredRevisionId? })` — pass-through Google Slides requests; revision-guarded edits in place
 - `create_folder` — name and optional parent folder id
-- `save_file({ path, fileId? | name + parentId? })` — upload a local conversation file as a new copy or replace an app-accessible file while keeping its format
+- `save_file({ path, fileId? | name + parentId?, convert? })` — upload a local conversation file as a new copy or replace an app-accessible file while keeping its format
 - `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
 - `update_file_content` — overwrite content (text for Docs, CSV for Sheets)
 - `rename_move_file` — rename and/or add/remove parent folders
@@ -32,15 +36,36 @@ Read the target before writing, confirm when ambiguous, and report what changed.
 
 ## Work with real files
 
-Use `read_file` for extracted text. When layout, headers, footers, logos, images or styles matter, use `download_file` → edit its returned local `path` → `save_file`. Send the edited local file to the user with `send_file` where useful.
+Use `read_file` for extracted text. For native Slides, use the deck workflow below. For Docs, Sheets and binary files, when layout, headers, footers, logos, images or styles matter, use `download_file` → edit its returned local `path` → `save_file`. Send the edited local file to the user with `send_file` where useful.
 
 `download_file` returns `{ fileId, name, mimeType, path, bytes }`. The host supplies a trusted `conversationFiles: { hostPath, runtimePath }` execution context, never an agent-derived shared folder. The returned path works inside the active runtime; local runtimes use the host path and containers use `/workspace/files`. Files remain private to the current conversation. Binary downloads retain exact bytes and stop at 25 MiB counted on the stream, even without Content-Length. Native exports use Google's 10 MB limit. Owner download restrictions, unsupported native types (including folders and shortcuts), cancellation and timeout leave no partial file. Shared-drive metadata and media requests use `supportsAllDrives=true`.
 
-`save_file` accepts an absolute runtime path (or a host path inside the same conversation folder), rejects path escapes and symlinks pointing outside, and returns `{ fileId, name, mimeType, webViewLink }`. Save regular files directly in the conversation folder root; nested paths are rejected to prevent mutable ancestor symlinks from escaping the folder. Without `fileId`, supply `name` and optionally `parentId` to create a binary file in its local format. With `fileId`, omit `name` and `parentId`: binary formats stay binary and native Docs/Sheets/Slides import the matching docx/xlsx/pptx back into the original native file. A mismatched replacement format is rejected.
+`save_file` accepts an absolute runtime path (or a host path inside the same conversation folder), rejects path escapes and symlinks pointing outside, and returns `{ fileId, name, mimeType, webViewLink }`. Save regular files directly in the conversation folder root; nested paths are rejected to prevent mutable ancestor symlinks from escaping the folder. Without `fileId`, supply `name` and optionally `parentId` to create a binary file in its local format. With `fileId`, omit `name` and `parentId`: binary formats stay binary and native Docs/Sheets/Slides import the matching docx/xlsx/pptx back into the original native file. A mismatched replacement format is rejected. For a new copy only, `convert: true` imports DOCX, XLSX or PPTX as native Docs, Sheets or Slides. Conversion with `fileId`, or conversion of other formats, is rejected. Chat uploads are read-only: copy them into the conversation folder root first.
 
 Google documents that [Office upload conversion during an update replaces the complete contents of an existing Google Doc, Sheet or Slide](https://developers.google.com/workspace/drive/api/guides/manage-uploads#convert_to_google_docs_types). Multipart uploads use Office media Content-Type and the target's existing native MIME type in metadata. Actual Google conversion and fidelity must also be verified against a connected test account.
 
 The approved scope remains `drive.file`, not full `drive`. Creating copies works; replacing arbitrary user-owned files does not. Replace only files the app created or the user explicitly authorized for this app. A Google Sheets grant alone does not authorize a Drive media replacement of an arbitrary existing Sheet. For Frederic's template, download the original docx, edit only its body, and save a new docx copy.
+
+## Native Google Slides
+
+Availability uses the existing per-agent Google Drive opt-in, `allowWrite` for writes, user consent and an enabled Google Slides API. No separate Slides extension or agent runtime software is required. `slides_get` and `slides_render` remain available in read-only mode.
+
+1. Read the agent skill's brand rules, get the page size and convert its design units to slide units (thumbnail pixels are not slide units).
+2. Create or edit with Slides tools. Before editing an existing deck not created in this conversation, call `slides_get` and pass its `revisionId` as `requiredRevisionId`; after a stale revision, read again before retrying.
+3. Render changed slides, look at every render and fix overlaps, cut text, wrong fonts and wrong colors. Use exact Google Fonts family names: Google silently substitutes Arial for unknown names.
+4. Deliver the Drive link and explain what changed.
+
+References accept exactly one of `presentationId` and `presentationUrl`, including Slides and Drive file links. An omitted/empty `slideIds` returns an overview in `slides_get`, or renders all slides in `slides_render`. Non-empty selections return presentation order with one-based slide numbers. Get responses have hard JSON budgets (40,000 overview / 60,000 details characters); use `nextSlideId` as `startSlideId` to continue. Oversized details return 413 with guidance to use the overview and render.
+
+Prefer public PNG, JPEG or GIF URLs for `createImage`; private Drive links, local paths and SVG files do not work. For a private logo, skill asset or chat upload, first copy the image into the conversation folder root, then pass `slides: [{ images: [{ path, x, y, width, height }] }]` to `slides_create`. Each slide uses a 720 x 405 pt (16:9) page; image boxes preserve aspect ratio and center without cropping. Blank image lists create blank slides. Add text/shapes afterward with `slides_batch_update`. Local images are supported at creation only; existing decks use public image URLs.
+
+Local-image limits: 50 slides, 30 images, 10 MB/image and 50 MB generated PPTX. The extension builds and imports the PPTX itself, using multipart upload up to 5 MB and resumable upload above that. A creation inspection failure returns the created id/link and error: inspect that deck with `slides_get`, without creating another copy.
+
+Renders use at most three parallel requests, with 30 seconds per thumbnail/download and 120 seconds overall. Each image is limited to 10 MB. Failure/cancellation removes only files created by that call; signed URLs and bearer tokens never appear in the output. Render only changed slides: thumbnails cost expensive-read quota (60/user/minute, 300/project/minute). Short retries cannot replenish quota; after `rate_limited`, wait.
+
+PPTX extraction follows presentation relationships for slide order, including shapes, groups, tables and notes. Limits are 25 MiB input, 2,000 ZIP entries, 20 MB inflated per entry and 100 MB total, checked during extraction.
+
+Release together with the Drive download/save round-trip and platform PPTX upload support (`73268aee`). Platform web MIME validation retains its documented permissive behavior; gateway validation rejects a wrong MIME with a `.pptx` filename.
 
 ---
 
@@ -76,8 +101,8 @@ Root `extensions.googleDrive.allowWrite` sets the shared default; an agent's exp
 
 In the [Google Cloud Console](https://console.cloud.google.com/):
 
-1. **Enable the Google Drive API** (and Google Sheets API for write mode) (APIs & Services → Library).
-2. **OAuth consent screen** — add `.../auth/drive.readonly` and `userinfo.email`; write mode also needs `.../auth/drive.file` and `.../auth/spreadsheets`.
+1. **Enable the Google Drive API, Google Sheets API and Google Slides API** (APIs & Services → Library).
+2. **OAuth consent screen** — add `.../auth/drive.readonly` and `userinfo.email`; write mode also needs `.../auth/drive.file`, `.../auth/spreadsheets` and `.../auth/presentations`.
 3. **Credentials → Create OAuth client ID → Web application.**
 4. Under **Authorized redirect URIs**, add — byte-for-byte, per deployment:
 
@@ -153,3 +178,13 @@ Use the external-testing Google OAuth app (no agent-driven OAuth E2E):
 5. Confirm an agent `allowWrite: false` overrides a root `true` default and hides write tools.
 
 Requires the platform release with config-dependent OAuth requirements; land platform first.
+
+## Human Slides verification before release
+
+Thinh owns these live checks using the external-testing OAuth app; agents do not run OAuth end to end.
+
+1. Give a brief and create a 10-slide deck in a named folder, using the brand skill and its real public or local logo.
+2. Verify 16:9 geometry, design-unit conversion, exact Google Fonts and weights, logo variants and colors.
+3. View all ten renders and fix findings before delivery.
+4. Upload a PPTX in chat, convert it to a native deck and restyle it.
+5. Mandatory hybrid check: import local PNG, JPEG and GIF images; verify positions, aspect ratios, PNG transparency, slide order and 16:9 page size after Google conversion.
