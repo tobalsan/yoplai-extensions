@@ -993,10 +993,12 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const info = manager.getServerInfo(name);
       const displayName = trimValue(server?.displayName) ?? info.title;
       const description = trimValue(server?.description) ?? info.description;
+      const instructions = manager.getInstructions(name);
       return {
         name: sanitizeSegment(name),
         ...(displayName ? { displayName } : {}),
         ...(description ? { description: description.slice(0, 500) } : {}),
+        ...(instructions ? { instructions: instructions.slice(0, 4000) } : {}),
       };
     };
     const connectedTools = tools.map((tool, index) => ({

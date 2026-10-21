@@ -54,6 +54,7 @@ export interface McpClientHandle {
   close(): Promise<void>;
   getServerIcon?(): string | undefined;
   getServerInfo?(): McpServerLabel;
+  getInstructions?(): string | undefined;
 }
 
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
@@ -117,6 +118,10 @@ export class SdkMcpClientHandle implements McpClientHandle {
 
   getServerInfo(): McpServerLabel {
     return labelFromServerInfo(this.client.getServerVersion());
+  }
+
+  getInstructions(): string | undefined {
+    return this.client.getInstructions()?.trim() || undefined;
   }
 
   async close(): Promise<void> {
@@ -306,6 +311,10 @@ export class McpClientManager {
 
   getServerIcon(server: string): string | undefined {
     return this.clients.get(server)?.getServerIcon?.();
+  }
+
+  getInstructions(server: string): string | undefined {
+    return this.clients.get(server)?.getInstructions?.();
   }
 
   getServerInfo(server: string): McpServerLabel {

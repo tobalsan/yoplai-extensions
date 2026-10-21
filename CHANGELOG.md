@@ -4,6 +4,8 @@
 
 ### Added
 
+- MCP server instructions from the initialize handshake reach the agent as `namespace.instructions` (capped at 4000 characters).
+
 - Google Drive native Slides authoring, guarded edits and PNG previews, local image import, PPTX text extraction, Office-to-native conversion and PDF export (ALG-517).
 
 - Output schemas for high-traffic Pipedrive, Zendesk, People Enrich, Google Drive and all MCP tools, so codemode scripts can read structured results. Connection/reconnection refusals carry `isError: true` (ALG-507).

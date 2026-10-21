@@ -181,6 +181,24 @@ describe("mcp extension", () => {
     }
   });
 
+  it("passes server instructions into the namespace", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node" } } }));
+    const mockedExtension = createMcpExtension(async () => ({
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async callTool() { return "pong"; },
+      async close() {},
+      getInstructions: () => "Use X for Y",
+    }));
+    try {
+      const tools = await mockedExtension.getAgentTools({ id: "casey", workspaceDir: agentDir }, { config: {} });
+      expect(tools[0]?.namespace).toEqual({ name: "local", instructions: "Use X for Y" });
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { labels: { displayName: " Config title " }, info: { title: "Reported title", description: "Reported description" }, expected: { name: "local", displayName: "Config title", description: "Reported description" } },
     { labels: { description: " Config description " }, info: { title: "Reported title", description: "Reported description" }, expected: { name: "local", displayName: "Reported title", description: "Config description" } },
