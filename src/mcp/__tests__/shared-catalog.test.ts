@@ -125,6 +125,38 @@ describe("shared MCP catalog", () => {
     await t.extension.stop();
   });
 
+  it("uses selected shared metadata as a fallback for a same-key local server", async () => {
+    const t = await setup({ "mcp.json": { mcpServers: { cloudi_fi: { url: "https://local.example.test/mcp" } }, sharedServers: ["cloudi_fi"] } }, { mcpServers: {
+      cloudi_fi: { url: "https://shared.example.test/mcp", displayName: "Cloudi-Fi platform", description: "Shared platform description" },
+    } });
+    try {
+      const list = await t.call("GET /mcp/servers", ctx("user", undefined, { agent: "a1" }));
+      expect(list.servers).toEqual([expect.objectContaining({ name: "cloudi_fi", title: "Cloudi-Fi platform", description: "Shared platform description", url: "https://local.example.test/mcp" })]);
+    } finally { await t.extension.stop(); }
+  });
+
+  it("prefers explicit local labels over selected shared metadata", async () => {
+    const t = await setup({ "mcp.json": { mcpServers: { docs: { url: "https://local.example.test/mcp", displayName: "Local title", description: "Local description" } }, sharedServers: ["docs"] } }, { mcpServers: {
+      docs: { url: "https://shared.example.test/mcp", displayName: "Shared title", description: "Shared description" },
+    } });
+    try {
+      const list = await t.call("GET /mcp/servers", ctx("user", undefined, { agent: "a1" }));
+      expect(list.servers).toEqual([expect.objectContaining({ name: "docs", title: "Local title", description: "Local description", url: "https://local.example.test/mcp" })]);
+    } finally { await t.extension.stop(); }
+  });
+
+  it("does not inherit shared labels for a local-only same-key server", async () => {
+    const t = await setup({ "mcp.json": { mcpServers: { docs: { url: "https://local.example.test/mcp" } } } }, { mcpServers: {
+      docs: { url: "https://shared.example.test/mcp", displayName: "Shared title", description: "Shared description" },
+    } });
+    try {
+      const list = await t.call("GET /mcp/servers", ctx("user", undefined, { agent: "a1" }));
+      expect(list.servers).toEqual([expect.objectContaining({ name: "docs", title: "Reported", description: "Reported description", url: "https://local.example.test/mcp" })]);
+      expect(list.servers[0]).not.toHaveProperty("title", "Shared title");
+      expect(list.servers[0]).not.toHaveProperty("description", "Shared description");
+    } finally { await t.extension.stop(); }
+  });
+
   it("lets a local server with the same key or URL hide the catalog entry and keeps other fields", async () => {
     const t = await setup({ "mcp.json": { keep: 1, mcpServers: { claap: { url: "https://api.claap.io/mcp" }, mine: { url: "https://dup.example.test/mcp/" } } } }, { mcpServers: {
       claap: { url: "https://other.example.test/mcp" }, dup: { url: "https://DUP.example.test/mcp" }, extra: { url: "https://extra.example.test/mcp" } } });

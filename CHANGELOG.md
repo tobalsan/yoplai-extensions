@@ -24,6 +24,8 @@
 
 ### Changed
 
+- Agent MCP cards use shared catalog labels and descriptions as fallbacks for selected same-key local servers. Explicit local metadata remains in control.
+
 - Extension prompt addenda omit generated and redundant literal tool catalogs while retaining usage guidance (ALG-509).
 
 - `GET /mcp/servers/personal-status?agent=&url=` reports whether the user already has a usable shared personal grant for a server URL, so adding it "Just me" needs no OAuth popup.

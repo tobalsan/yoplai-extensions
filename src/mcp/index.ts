@@ -373,8 +373,14 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
     const known = server.type === "http" ? knownServer(server.url) : undefined;
-    let title = rawText("displayName") ?? known?.title;
-    let description = rawText("description");
+    const selectedShared = !shared && (() => {
+      if (!raw?.sharedServers || !Array.isArray(raw.sharedServers) || !raw.sharedServers.includes(server.name)) return false;
+      const catalogEntry = catalogServers()[server.name];
+      return catalogEntry;
+    })();
+    const sharedText = (field: string) => isRecord(selectedShared) && typeof selectedShared[field] === "string" && selectedShared[field].trim() ? selectedShared[field].trim() : undefined;
+    let title = rawText("displayName") ?? sharedText("displayName") ?? known?.title;
+    let description = rawText("description") ?? sharedText("description");
     const siteIcon = server.type === "http" ? resolveIcon?.(server.url) : undefined;
     const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
     if (active) try {
