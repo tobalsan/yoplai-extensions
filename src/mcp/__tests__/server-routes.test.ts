@@ -319,6 +319,10 @@ describe("MCP server config routes", () => {
     expect(page.value).toContain('class="card"');
     expect(page.value).toContain("Connection failed");
     expect(page.value).not.toContain("<b>");
+    const denied = await routes.routes.get("GET /mcp/oauth/callback")!(context({ state: "s", error: "invalid_scope<b>" }));
+    expect(denied.status).toBe(400);
+    expect(denied.value).toContain("OAuth connection failed: invalid_scope");
+    expect(denied.value).not.toContain("<b>");
   });
 
   it("rejects adding a server URL that is already configured", async () => {

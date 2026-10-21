@@ -924,10 +924,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
     app.get("/mcp/oauth/callback", async (c) => {
-      const code = c.req.query("code"); const state = c.req.query("state");
-      if (!code || !state || !oauth || c.req.query("error")) {
+      const code = c.req.query("code"); const state = c.req.query("state"); const error = c.req.query("error");
+      if (!code || !state || !oauth || error) {
         if (state) oauth?.cancel(state);
-        return c.html(html("", false, "OAuth connection failed"), 400);
+        return c.html(html("", false, error ? `OAuth connection failed: ${error}` : "OAuth connection failed"), 400);
       }
       try { const flow = await oauth.finish(state, code, (connected) => audit({ ...(connected.actor ?? actor(c)), action: "mcp.connect", agentId: connected.agent, targetType: "mcp", targetId: connected.server, scope: connected.scope.type, changes: [{ field: "credentials", secret: "set" }] })); oauthServers.add(`${flow.agent}:${flow.server}`); await resetManagers(flow.agent); return c.html(html(flow.server, true, "MCP server connected")); }
       catch (error) { return c.html(html("", false, error instanceof Error ? error.message : "OAuth connection failed"), 400); }
