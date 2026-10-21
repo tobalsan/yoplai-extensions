@@ -4,12 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { credentials } from "./credentials.js";
 import { createMcpExtension } from "../index.js";
-import { routeApp, tempDirs } from "./harness.js";
+import { McpOAuthStore } from "../oauth.js";
+import { routeApp, routeContext, tempDirs } from "./harness.js";
 
 const dirs = tempDirs();
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js");
   vi.resetModules();
   await dirs.cleanup();
@@ -29,6 +31,52 @@ function context(query: Record<string, string>, body?: unknown) {
 }
 
 describe("MCP server cards and self-service routes", () => {
+  it.each([
+    ["tools", "failure"], ["tools", "timeout"], ["status", "failure"], ["status", "timeout"], ["recovery", "failure"],
+  ] as const)("logs a shared refresh %s/%s with requester context and no second manager error", async (logPath, outcome) => {
+    const dir = await dirs.make("mcp-refresh-context-");
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp", oauth: { clientId: "client" } } } }));
+    const host = credentials();
+    const store = new McpOAuthStore(dir, "http://localhost/callback", host);
+    await store.write("casey", "remote", {
+      client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "expired", refresh_token: "refresh", token_type: "Bearer" },
+      connectedAt: "2026-01-01T00:00:00Z", ...(logPath === "recovery" ? {} : { expiresAt: "2020-01-01T00:00:00Z" }), authorizationServerUrl: "https://auth.example.test",
+    });
+    let started!: () => void;
+    let fail!: (error: Error) => void;
+    const refreshing = new Promise<void>((resolve) => { started = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes(".well-known")) return Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] });
+      started(); return new Promise<Response>((_resolve, reject) => { fail = reject; });
+    }));
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const extension = createMcpExtension(async () => ({
+      async listTools() { throw Object.assign(new Error("401 Unauthorized"), { code: 401 }); },
+      async callTool() { throw new Error("not listed"); }, async close() {},
+    }));
+    const agent = { id: "casey", workspaceDir: dir };
+    await extension.start({ credentials: host, getDataDir: () => dir, getConfig: () => ({}), getAgent: () => agent });
+    const routes = app(); extension.registerRoutes(routes);
+    vi.useFakeTimers();
+    try {
+      const pending = Array.from({ length: 3 }, () => logPath !== "status"
+        ? extension.getAgentTools(agent, { userId: "alice", config: {} })
+        : routes.routes.get("GET /mcp/oauth/status")!(routeContext({ agent: "casey" }, { user: { id: "alice" } })));
+      await refreshing;
+      if (outcome === "timeout") await vi.advanceTimersByTimeAsync(10_001);
+      else fail(new Error("provider unavailable"));
+      await Promise.all(pending);
+      expect(output.mock.calls).toHaveLength(1);
+      expect(JSON.parse(output.mock.calls[0]![0])).toEqual({
+        level: "error", msg: outcome === "timeout" ? '[mcp] server "remote" unavailable: OAuth refresh timed out' : '[mcp] server "remote" unavailable: provider unavailable',
+        server: "remote", agentId: "casey", userId: "alice", path: logPath === "recovery" ? "tools" : logPath, reason: "refresh_failed", scope: "team",
+      });
+      if (logPath !== "status") expect(info.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(expect.objectContaining({ reason: "refresh_failed", level: "info" }));
+      else expect(info.mock.calls).toEqual([]);
+    } finally { await extension.stop(); }
+  });
+
   it("lists existing stdio and HTTP servers, adds no-auth HTTP, and removes only the selected raw config", async () => {
     const dir = await dirs.make("mcp-servers-");
     const file = path.join(dir, "mcp.json");
