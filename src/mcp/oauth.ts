@@ -270,7 +270,8 @@ export class McpOAuthStore {
         fetchFn: oauthFetch,
         clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
       });
-    const scopes = staticClient?.scopes?.length ? staticClient.scopes : preRegistered ? info.resourceMetadata?.scopes_supported ?? [] : [];
+    // MCP scope selection: without a configured list, request every scope the resource advertises (some servers reject an empty scope).
+    const scopes = staticClient?.scopes?.length ? staticClient.scopes : info.resourceMetadata?.scopes_supported ?? [];
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,

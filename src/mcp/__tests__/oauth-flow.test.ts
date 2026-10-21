@@ -42,6 +42,25 @@ describe("MCP OAuth flow", () => {
     expect(onConnected).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agent: "casey", server: "claap", scope: { type: "personal", userId: "user-a" }, actor: { actorUserId: "user-a", actorEmail: "user@example.test" } }));
   });
 
+  it("requests the resource scopes with a dynamically registered client", async () => {
+    const start = vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://auth.test/authorize"), codeVerifier: "verifier" });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+      discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register", authorization_endpoint: "https://auth.test/authorize", token_endpoint: "https://auth.test/token" }, resourceMetadata: { resource: "https://mcp.test/server", authorization_servers: ["https://auth.test"], scopes_supported: ["locations:read", "tickets:read"] } }),
+      registerClient: vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: ["http://gateway.test/callback"] }),
+      startAuthorization: start,
+      exchangeAuthorization: vi.fn(),
+      refreshAuthorization: vi.fn(),
+    }));
+    const { McpOAuthStore } = await import("../oauth.js");
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
+    dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
+    const started = await store.begin("casey", "cloudi_fi", "https://mcp.test/server");
+
+    expect(start).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ scope: "locations:read tickets:read", clientInformation: expect.objectContaining({ client_id: "client" }) }));
+    expect(new URL(started.authorizationUrl).searchParams.get("prompt")).toBeNull();
+  });
+
   it("uses a pre-registered client when the server lacks dynamic registration", async () => {
     const register = vi.fn();
     const start = vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://accounts.test/auth"), codeVerifier: "verifier" });
