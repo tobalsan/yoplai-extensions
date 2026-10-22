@@ -85,6 +85,7 @@ export interface AuditActor {
 interface Tombstone { tombstone: true; deletedAt: string }
 
 export interface PendingOAuthFlow {
+  returnTo?: string;
   actor?: AuditActor;
   onComplete?: (targetId: string) => Promise<void>;
   scope: CredentialScope;
@@ -95,6 +96,12 @@ export interface PendingOAuthFlow {
   codeVerifier: string;
   createdAt: number;
   client: OAuthClientInformationFull;
+}
+
+export class McpOAuthFlowError extends Error {
+  constructor(error: unknown, readonly flow: PendingOAuthFlow) {
+    super(error instanceof Error ? error.message : "OAuth connection failed", { cause: error });
+  }
 }
 
 function filePart(value: string): string {
@@ -252,7 +259,7 @@ export class McpOAuthStore {
     if (connection) await this.write(agent, server, { ...connection, state: "needs_reconnect" }, scope);
   }
 
-  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>, actor?: AuditActor): Promise<{ state: string; authorizationUrl: string }> {
+  async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>, actor?: AuditActor, returnTo?: string): Promise<{ state: string; authorizationUrl: string }> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
     const dynamic = Boolean(info.authorizationServerMetadata?.registration_endpoint);
@@ -288,23 +295,28 @@ export class McpOAuthStore {
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");
     }
-    this.pending.set(state, { actor, onComplete, scope, agent, server, url, identity, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
+    this.pending.set(state, { returnTo, actor, onComplete, scope, agent, server, url, identity, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }
 
-  cancel(state: string): void { this.pending.delete(state); }
-
-  async finish(state: string, code: string, onConnected?: (flow: PendingOAuthFlow) => void): Promise<{ agent: string; server: string; scope: CredentialScope; actor?: AuditActor }> {
+  cancel(state: string): PendingOAuthFlow | undefined {
     const pending = this.pending.get(state);
     this.pending.delete(state);
-    if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000) throw new Error("OAuth state is invalid or expired");
-    const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
-    const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
-    const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
-    await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
-    onConnected?.(pending);
-    await pending.onComplete?.(pending.server);
-    return pending;
+    return pending && Date.now() - pending.createdAt <= 10 * 60 * 1000 ? pending : undefined;
+  }
+
+  async finish(state: string, code: string, onConnected?: (flow: PendingOAuthFlow) => void): Promise<PendingOAuthFlow> {
+    const pending = this.cancel(state);
+    if (!pending) throw new Error("OAuth state is invalid or expired");
+    try {
+      const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
+      const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
+      const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
+      await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
+      onConnected?.(pending);
+      await pending.onComplete?.(pending.server);
+      return pending;
+    } catch (error) { throw new McpOAuthFlowError(error, pending); }
   }
 
   /** Resolves and persists the account label of a connection that predates it; one attempt per credential per process, waiting at most `waitMs`. */

@@ -31,6 +31,29 @@ function context(query: Record<string, string>, body?: unknown) {
 }
 
 describe("MCP server cards and self-service routes", () => {
+  it("loads only the requested server and leaves other servers uncontacted", async () => {
+    const dir = await dirs.make("mcp-filter-");
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { selected: { command: "selected" }, other: { command: "other" } } }));
+    const contacted: string[] = [];
+    const extension = createMcpExtension(async (server) => {
+      contacted.push(server.name);
+      return {
+        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+        async callTool() { return "pong"; },
+        async close() {},
+      };
+    });
+    await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "casey", workspaceDir: dir }) });
+    const routes = app(); extension.registerRoutes(routes);
+    try {
+      const result = await routes.routes.get("GET /mcp/servers")!(context({ agent: "casey", server: "selected" }));
+      expect(result).toMatchObject({ servers: [{ name: "selected", state: "connected" }], canConfigureTeam: true, canEditLabels: true });
+      expect(contacted).toEqual(["selected"]);
+      await expect(routes.routes.get("GET /mcp/servers")!(context({ agent: "casey", server: "missing" }))).resolves.toMatchObject({ servers: [], canConfigureTeam: true, canEditLabels: true });
+      expect(contacted).toEqual(["selected"]);
+    } finally { await extension.stop(); }
+  });
+
   it.each([
     ["tools", "failure"], ["tools", "timeout"], ["status", "failure"], ["status", "timeout"], ["recovery", "failure"],
   ] as const)("logs a shared refresh %s/%s with requester context and no second manager error", async (logPath, outcome) => {
