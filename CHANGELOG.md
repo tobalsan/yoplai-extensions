@@ -24,6 +24,8 @@
 
 ### Changed
 
+- MCP OAuth accepts same-site return paths for full-page settings connections, and server cards can be loaded individually without checking other servers (ALG-528).
+
 - Agent MCP cards use shared catalog labels and descriptions as fallbacks for selected same-key local servers. Explicit local metadata remains in control.
 
 - Extension prompt addenda omit generated and redundant literal tool catalogs while retaining usage guidance (ALG-509).

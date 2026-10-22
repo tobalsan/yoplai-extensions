@@ -11,7 +11,7 @@ import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type 
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
-import { McpOAuthStore, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor } from "./oauth.js";
+import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
@@ -73,6 +73,14 @@ function processEnvRecord(): Record<string, string> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function returnPath(value: unknown): string | undefined {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f\\]/.test(value)) return undefined;
+  try {
+    const url = new URL(value, "https://yoplai.invalid");
+    return url.origin === "https://yoplai.invalid" && !url.pathname.startsWith("//") ? `${url.pathname}${url.search}${url.hash}` : undefined;
+  } catch { return undefined; }
 }
 
 function resolveEnvRefs(value: unknown): unknown {
@@ -442,6 +450,17 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
 <p style="margin-top:16px;color:#5f6368;font-size:13px">You can close this window and return to Yoplai.</p></div><script>window.opener?.postMessage({type:"yoplai-oauth",extension:"mcp",server:${JSON.stringify(server)},success:${success}},"*")</script>`;
   }
 
+  function oauthResult(c: RouteContext, flow: PendingOAuthFlow | undefined, success: boolean, message: string): unknown {
+    if (flow?.returnTo) {
+      const url = new URL(flow.returnTo, "https://yoplai.invalid");
+      url.searchParams.set("oauth", success ? "connected" : "error");
+      url.searchParams.set("oauth_scope", flow.scope.type);
+      if (!success) url.searchParams.set("oauth_error", message);
+      return c.redirect(`${url.pathname}${url.search}${url.hash}`);
+    }
+    return c.html(html(flow?.server ?? "", success, message), success ? 200 : 400);
+  }
+
   async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>): Promise<boolean> {
     const key = `${agent}:${server.name}`;
     if (server.oauth) return true;
@@ -660,7 +679,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (unauthenticated) return unauthenticated;
       const agent = runtime?.getAgent(agentId);
       const merged = agent && runtime ? mergedForAgent(agent, runtime.getConfig()) : undefined;
-      const servers = merged ? await Promise.all(merged.all.servers.map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined))) : [];
+      const name = c.req.query("server");
+      const servers = merged ? await Promise.all(merged.all.servers.filter((server) => name === undefined || server.name === name).map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined))) : [];
       return c.json({ servers, canConfigureTeam: canConfigureTeam(c), canEditLabels: isSuperadmin(c) });
     });
     app.post("/mcp/servers", async (c) => {
@@ -694,7 +714,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           if (!oauth) throw new Error("OAuth is unavailable");
           const store = oauth;
           let timedOut = false;
-          const pending = store.begin(agentId, name, server.url, undefined, scope, undefined, actor(c));
+          const pending = store.begin(agentId, name, server.url, undefined, scope, undefined, actor(c), returnPath(input.returnTo));
           void pending.then((late) => { if (timedOut) store.cancel(late.state); }).catch(() => {});
           try {
             flow = await withTimeout(pending, 30_000, "MCP OAuth authorization timed out");
@@ -941,23 +961,29 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (!agent || !server || server.headers || !oauth) return c.text("Unknown OAuth MCP server", 404);
       if (!userId(c) && multiUserEnabled()) return c.text("Authentication required", 401);
       const scope = requestedScope(c);
+      const returnTo = returnPath(c.req.query("returnTo"));
       if (!scope) {
         if (c.req.query("scope")) return c.text("Invalid credential scope", 400);
-        const base = `/api/mcp/oauth/authorize?agent=${encodeURIComponent(agent)}&server=${encodeURIComponent(server.name)}`;
+        const base = `/api/mcp/oauth/authorize?agent=${encodeURIComponent(agent)}&server=${encodeURIComponent(server.name)}${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""}`;
         return c.html(`<!doctype html><title>Connect MCP</title><h1>Who can use this connection?</h1><a href="${base}&scope=personal">Just me</a>${canConfigureTeam(c) ? ` <a href="${base}&scope=team">Whole team</a>` : ""}`);
       }
       if (scope.type === "team" && !canConfigureTeam(c)) return c.text("Team connections are unavailable", 403);
-      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope, undefined, actor(c))).authorizationUrl); }
+      try { return c.redirect((await oauth.begin(agent, server.name, server.url, server.oauth, scope, undefined, actor(c), returnTo)).authorizationUrl); }
       catch (error) { return c.text(error instanceof Error ? error.message : String(error), 400); }
     });
     app.get("/mcp/oauth/callback", async (c) => {
       const code = c.req.query("code"); const state = c.req.query("state"); const error = c.req.query("error");
       if (!code || !state || !oauth || error) {
-        if (state) oauth?.cancel(state);
-        return c.html(html("", false, error ? `OAuth connection failed: ${error}` : "OAuth connection failed"), 400);
+        const flow = state ? oauth?.cancel(state) : undefined;
+        return oauthResult(c, flow, false, error ? `OAuth connection failed: ${error}` : "OAuth connection failed");
       }
-      try { const flow = await oauth.finish(state, code, (connected) => audit({ ...(connected.actor ?? actor(c)), action: "mcp.connect", agentId: connected.agent, targetType: "mcp", targetId: connected.server, scope: connected.scope.type, changes: [{ field: "credentials", secret: "set" }] })); oauthServers.add(`${flow.agent}:${flow.server}`); await resetManagers(flow.agent); return c.html(html(flow.server, true, "MCP server connected")); }
-      catch (error) { return c.html(html("", false, error instanceof Error ? error.message : "OAuth connection failed"), 400); }
+      try {
+        const flow = await oauth.finish(state, code, (connected) => audit({ ...(connected.actor ?? actor(c)), action: "mcp.connect", agentId: connected.agent, targetType: "mcp", targetId: connected.server, scope: connected.scope.type, changes: [{ field: "credentials", secret: "set" }] }));
+        oauthServers.add(`${flow.agent}:${flow.server}`);
+        await resetManagers(flow.agent);
+        return oauthResult(c, flow, true, "MCP server connected");
+      }
+      catch (error) { return oauthResult(c, error instanceof McpOAuthFlowError ? error.flow : undefined, false, error instanceof Error ? error.message : "OAuth connection failed"); }
     });
     app.post("/mcp/oauth/disconnect", async (c) => {
       const scope = requestedScope(c);
