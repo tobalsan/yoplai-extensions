@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpExtension } from "../index.js";
 import { McpOAuthStore, type OAuthConnection } from "../oauth.js";
 import { credentials } from "./credentials.js";
+import { routeApp, routeContext } from "./harness.js";
 const dirs: string[] = [];
 afterEach(async () => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
 function connection(token: string): OAuthConnection {
@@ -12,6 +13,56 @@ function connection(token: string): OAuthConnection {
 }
 async function directory() { const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-requester-")); dirs.push(dir); return dir; }
 describe("MCP requester isolation", () => {
+  it("logs one unconnected state across tool loads, fresh status managers and execution identity", async () => {
+    vi.useFakeTimers();
+    const dir = await directory();
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp", oauth: { clientId: "client" } } } }));
+    const host = credentials();
+    const store = new McpOAuthStore(dir, "http://localhost/callback", host, () => ({ url: "https://remote.example.test/mcp", clientId: "client" }));
+    await store.write("casey", "remote", { ...connection("A"), account: "Alice" }, { type: "personal", userId: "alice" });
+    // Icon discovery is an external adapter, unrelated to connection/logging behavior.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })));
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const extension = createMcpExtension(async (server) => ({
+      async listTools() { return [{ server: server.name, name: "data", description: "Data", inputSchema: { type: "object" } }]; },
+      async callTool() { return "ok"; }, async close() {},
+    }));
+    const agent = { id: "casey", workspaceDir: dir };
+    await extension.start({ credentials: host, getDataDir: () => dir, getConfig: () => ({}), getAgent: () => agent });
+    const app = routeApp(); extension.registerRoutes(app);
+    try {
+      const [tool] = await extension.getAgentTools(agent, { userId: "alice", config: {} });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await extension.getAgentTools(agent, { userId: "bob", config: {} });
+        await app.routes.get("GET /mcp/servers")!(routeContext({ agent: "casey" }, { user: { id: "bob" } }));
+        await expect(tool!.execute({}, { userId: "bob" })).resolves.toMatchObject({ connected: false });
+      }
+      expect(errors.mock.calls).toEqual([]);
+      expect(info.mock.calls).toHaveLength(1);
+      expect(JSON.parse(info.mock.calls[0]![0])).toEqual({
+        level: "info", msg: '[mcp] server "remote" unavailable: OAuth connection required',
+        server: "remote", agentId: "casey", userId: "bob", path: "tools", reason: "not_connected",
+      });
+      await tool!.execute({});
+      expect(JSON.parse(info.mock.calls[1]![0])).toMatchObject({ userId: "anonymous", path: "call" });
+      await vi.advanceTimersByTimeAsync(3_599_999);
+      await tool!.execute({}, { userId: "bob" });
+      expect(info.mock.calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await tool!.execute({}, { userId: "bob" });
+      expect(info.mock.calls).toHaveLength(3);
+      await store.write("casey", "remote", { ...connection("B"), account: "Bob" }, { type: "personal", userId: "bob" });
+      await expect(tool!.execute({}, { userId: "bob" })).resolves.toBe("ok");
+      await store.delete("casey", "remote", { type: "personal", userId: "bob" });
+      await tool!.execute({}, { userId: "bob" });
+      expect(info.mock.calls).toHaveLength(4);
+      await extension.stop();
+      await extension.getAgentTools(agent, { userId: "bob", config: {} });
+      expect(info.mock.calls).toHaveLength(5);
+    } finally { await extension.stop(); }
+  });
+
   it("uses executor identity instead of discovery identity, including revoked personal credentials", async () => {
     const dir = await directory();
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://claap.example.test/mcp", oauth: { clientId: "client" } } } }));
@@ -40,6 +91,29 @@ describe("MCP requester isolation", () => {
       await expect(tool!.execute({}, { userId: "A" })).resolves.toBe("team");
     } finally { await extension.stop(); }
   });
+  it.each(["personal", "team"] as const)("logs known reconnect state at info with selected %s scope", async (type) => {
+    const dir = await directory();
+    await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp", oauth: { clientId: "client" } } } }));
+    const host = credentials();
+    const store = new McpOAuthStore(dir, "http://localhost/callback", host);
+    await store.write("casey", "remote", { ...connection("known-token"), state: "needs_reconnect" }, type === "personal" ? { type, userId: "alice" } : { type });
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const factory = vi.fn(async () => { throw new Error("must not connect without a token"); });
+    const extension = createMcpExtension(factory);
+    const agent = { id: "casey", workspaceDir: dir };
+    await extension.start({ credentials: host, getDataDir: () => dir, getConfig: () => ({}), getAgent: () => agent });
+    try {
+      await extension.getAgentTools(agent, { userId: "alice", config: {} });
+      expect(errors.mock.calls).toEqual([]);
+      expect(factory).not.toHaveBeenCalled();
+      expect(info.mock.calls).toHaveLength(1);
+      expect(JSON.parse(info.mock.calls[0]![0])).toEqual({
+        level: "info", msg: '[mcp] server "remote" unavailable: OAuth connection required',
+        server: "remote", agentId: "casey", userId: "alice", path: "tools", reason: "needs_reconnect", scope: type,
+      });
+    } finally { await extension.stop(); }
+  });
   it("bounds a hanging personal refresh and leaves team credentials usable", async () => {
     const store = new McpOAuthStore(await directory(), "http://localhost/callback", credentials());
     await store.write("casey", "claap", connection("team"));
@@ -58,6 +132,7 @@ describe("MCP requester isolation", () => {
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ state: "connected" });
   });
   it.each(["delete", "reconnect"] as const)("does not overwrite a credential after %s during refresh", async (action) => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = new McpOAuthStore(await directory(), "http://localhost/callback", credentials());
     const scope = { type: "personal" as const, userId: "A" };
     await store.write("casey", "claap", { ...connection("A"), tokens: { access_token: "A", refresh_token: "refresh", token_type: "Bearer" }, expiresAt: "2020-01-01T00:00:00Z" }, scope);
@@ -77,6 +152,7 @@ describe("MCP requester isolation", () => {
     await expect(refresh).resolves.toBeUndefined();
     if (action === "delete") await expect(store.read("casey", "claap", scope)).resolves.toBeUndefined();
     else await expect(store.read("casey", "claap", scope)).resolves.toMatchObject({ tokens: { access_token: "new" }, state: "connected" });
+    expect(output.mock.calls).toEqual([]);
   });
 
 });

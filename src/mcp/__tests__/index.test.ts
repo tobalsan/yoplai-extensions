@@ -14,6 +14,30 @@ async function loadFreshModule(): Promise<typeof import("../index.js")> {
 }
 
 describe("mcp extension", () => {
+  it("logs configuration errors once per agent, config path and revision", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-config-log-"));
+    const file = path.join(dir, "mcp.json");
+    const config = { mcpServers: { broken: { command: "${ALG_521_MISSING_COMMAND}" } } };
+    fs.writeFileSync(file, JSON.stringify(config));
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mockedExtension = createMcpExtension();
+    const agent = { id: "casey", workspaceDir: dir };
+    try {
+      await mockedExtension.getAgentTools(agent, { userId: "alice", config: {} });
+      await mockedExtension.getAgentTools(agent, { userId: "bob", config: {} });
+      expect(output.mock.calls).toHaveLength(1);
+      expect(JSON.parse(output.mock.calls[0]![0])).toMatchObject({ level: "warn", server: "broken", agentId: "casey", userId: "alice", path: "tools", reason: "config_invalid" });
+      fs.writeFileSync(file, JSON.stringify({ ...config, revision: 2 }));
+      await mockedExtension.getAgentTools(agent, { config: {} });
+      expect(output.mock.calls).toHaveLength(2);
+      await mockedExtension.getAgentTools({ ...agent, id: "other" }, { config: {} });
+      expect(output.mock.calls).toHaveLength(3);
+      await mockedExtension.stop();
+      await mockedExtension.getAgentTools(agent, { config: {} });
+      expect(output.mock.calls).toHaveLength(4);
+    } finally { await mockedExtension.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env.MCP_CONFIG_PATH;
@@ -489,6 +513,7 @@ describe("mcp extension", () => {
     process.env.AIHUB_HOME = "   ";
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connect = vi.fn();
     const mockedExtension = createMcpExtension(async (server) => {
       connect(server);
@@ -502,7 +527,7 @@ describe("mcp extension", () => {
 
     // No home dir means MCP_CMD is never defined, so the server fails to resolve.
     expect(connect).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('server "local" unavailable'));
+    expect(errorSpy.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(expect.objectContaining({ server: "local", reason: "config_invalid" }));
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("AIHUB_HOME"));
     await mockedExtension.stop();
   });

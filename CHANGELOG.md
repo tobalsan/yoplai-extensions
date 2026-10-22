@@ -43,6 +43,8 @@
 
 ### Fixed
 
+- MCP unavailable logs include requester context and cause-based severity, suppress repeated known states for one hour, and report shared OAuth refresh failures once (ALG-521).
+
 - MCP OAuth recovery detects empty-body HTTP 401 errors, preserving tools after token expiry (ALG-513).
 
 - Disconnected MCP stub names use the same canonical server sanitizer as connected tools, correcting unusual keys such as `--a__b--` and all-punctuation keys without changing normal names or collision suffixes (ALG-509).

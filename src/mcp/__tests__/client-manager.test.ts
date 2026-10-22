@@ -3,12 +3,53 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpClientManager, type McpClientHandle } from "../client-manager.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.doUnmock("@modelcontextprotocol/sdk/client/index.js");
   vi.doUnmock("@modelcontextprotocol/sdk/client/stdio.js");
   vi.resetModules();
 });
 
 describe("McpClientManager", () => {
+  it.each([
+    "Authorization: Bearer private-access\nCookie: session=private-cookie\naccess_token=private-token",
+    'HTTP 401 {"headers":{"Authorization":"Bearer private-access","Cookie":"session=private-cookie"}}',
+    "HTTP error with Bearer private-access",
+  ])("removes credential details from logged errors and caps the reason at 300 characters: %s", async (message) => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
+      clientFactory: async () => { throw new Error(`${message}\n${"x".repeat(500)}`); },
+    });
+    await manager.connect();
+    const line = output.mock.calls[0]![0];
+    expect(line).not.toMatch(/private-access|private-cookie|private-token|[\r\n]/);
+    const { msg } = JSON.parse(line);
+    expect(msg).toContain('[mcp] server "local" unavailable: ');
+    expect(msg.length).toBeLessThanOrEqual(334);
+  });
+
+  it("logs every transport failure as sanitized single-line JSON without changing errors or retries", async () => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const message = "Connection closed https://example.test/mcp?token=abc\ntry again";
+    const factory = vi.fn(async () => { throw new Error(message); });
+    const manager = new McpClientManager([{ type: "http", name: "remote", url: "https://example.test/mcp" }], {
+      clientFactory: factory,
+      logContext: { agentId: "casey", userId: "alice", path: "status" },
+    });
+    await manager.connect();
+    await manager.connect();
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(manager.getErrors()).toEqual([{ server: "remote", message }, { server: "remote", message }]);
+    expect(output.mock.calls).toHaveLength(2);
+    for (const [line] of output.mock.calls) {
+      expect(line.startsWith('{"level"')).toBe(true);
+      expect(line).not.toMatch(/[\r\n]|token=abc/);
+      expect(JSON.parse(line)).toEqual({
+        level: "warn", msg: '[mcp] server "remote" unavailable: Connection closed https://example.test/mcp try again',
+        server: "remote", agentId: "casey", userId: "alice", path: "status", reason: "transport_failed",
+      });
+    }
+  });
+
   it("forwards RequestOptions to the SDK and rejects with the abort reason", async () => {
     const controller = new AbortController();
     const reason = new Error("401 cancelled by gateway");
@@ -355,6 +396,7 @@ describe("McpClientManager", () => {
     new Error("401 Unauthorized"),
     Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
   ])("marks a still-unauthorized refreshed transport as needing reconnect: %s", async (error) => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const terminal = vi.fn(async () => undefined);
     const refresh = vi.fn(async () => true);
     const close = vi.fn(async () => undefined);
@@ -382,12 +424,14 @@ describe("McpClientManager", () => {
     expect(callTool).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledTimes(2);
     expect(manager.hasClient("claap")).toBe(false);
+    expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual([expect.objectContaining({ level: "error", reason: "unrecoverable_auth" })]);
   });
 
   it.each([
     new Error("401 Unauthorized"),
     Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
   ])("marks a still-unauthorized refreshed transport during discovery as needing reconnect: %s", async (error) => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const terminal = vi.fn(async () => undefined);
     const refresh = vi.fn(async () => true);
     const close = vi.fn(async () => undefined);
@@ -413,12 +457,14 @@ describe("McpClientManager", () => {
     expect(listTools).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledTimes(2);
     expect(manager.hasClient("claap")).toBe(false);
+    expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual([expect.objectContaining({ level: "error", reason: "unrecoverable_auth" })]);
   });
 
   it.each([
     new Error("401 Unauthorized"),
     Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: "), { code: 401 }),
   ])("marks a refreshed transport that 401s while reconnecting as needing reconnect: %s", async (error) => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const terminal = vi.fn(async () => undefined);
     let connections = 0;
     const manager = new McpClientManager(
@@ -445,5 +491,6 @@ describe("McpClientManager", () => {
     await expect(manager.invoke("claap__search", {})).resolves.toEqual({ connected: false, server: "claap", reason: "needs_reconnect" });
     expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }));
     expect(connections).toBe(2);
+    expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual([expect.objectContaining({ level: "error", reason: "unrecoverable_auth" })]);
   });
 });

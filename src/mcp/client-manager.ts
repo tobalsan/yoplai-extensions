@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import type { McpServerConfig } from "./loader.js";
+import { logMcpUnavailable, type McpLogContext, type McpLogEvent, type McpLogLevel } from "./logging.js";
 import { withTimeout as withDeadline } from "./timeout.js";
 
 const withTimeout = <T>(task: Promise<T>, message: string): Promise<T> => withDeadline(task, 10_000, message);
@@ -58,13 +59,22 @@ export interface McpClientHandle {
 }
 
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
-export type McpTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
+export interface McpTokenResult {
+  token?: string;
+  reason?: "not_connected" | "needs_reconnect" | "refresh_failed";
+  scope?: "personal" | "team";
+}
+export type McpTokenProvider = (server: McpServerConfig) => Promise<string | McpTokenResult | undefined>;
+type McpAuthRecovery = (server: McpServerConfig) => Promise<boolean | McpTokenResult>;
 export type McpNotConnectedResponse = (server: string) => unknown;
 
 export interface McpClientManagerOptions {
+  logContext?: McpLogContext;
+  logUnavailable?: (level: McpLogLevel, message: string, event: McpLogEvent) => void;
+  onConnected?: (server: string) => void;
   clientFactory?: McpClientFactory;
   tokenProvider?: McpTokenProvider;
-  onAuthFailure?: (server: McpServerConfig) => Promise<boolean>;
+  onAuthFailure?: McpAuthRecovery;
   requiresOAuth?: (server: McpServerConfig) => Promise<boolean>;
   notConnectedResponse?: McpNotConnectedResponse;
   onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>;
@@ -165,6 +175,10 @@ function mergeHeaders(
 }
 
 export class McpClientManager {
+  private readonly logContext: McpLogContext;
+  private readonly logUnavailable: typeof logMcpUnavailable;
+  private readonly onConnected?: (server: string) => void;
+  private readonly tokenResults = new Map<string, McpTokenResult>();
   private readonly clients = new Map<string, McpClientHandle>();
   private readonly toolIndex = new Map<string, { server: string; tool: string }>();
   private readonly errors: McpServerError[] = [];
@@ -173,12 +187,15 @@ export class McpClientManager {
 
   private readonly clientFactory: McpClientFactory;
   private readonly tokenProvider?: McpTokenProvider;
-  private readonly onAuthFailure?: (server: McpServerConfig) => Promise<boolean>;
+  private readonly onAuthFailure?: McpAuthRecovery;
   private readonly requiresOAuth?: (server: McpServerConfig) => Promise<boolean>;
   private readonly notConnectedResponse?: McpNotConnectedResponse;
   private readonly onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>;
 
   constructor(private readonly servers: McpServerConfig[], options: McpClientManagerOptions = {}) {
+    this.logContext = options.logContext ?? { agentId: "unknown", path: "tools" };
+    this.logUnavailable = options.logUnavailable ?? logMcpUnavailable;
+    this.onConnected = options.onConnected;
     this.clientFactory = options.clientFactory ?? SdkMcpClientHandle.connect;
     this.tokenProvider = options.tokenProvider;
     this.onAuthFailure = options.onAuthFailure;
@@ -204,11 +221,14 @@ export class McpClientManager {
   }
 
   private async connectServer(server: McpServerConfig): Promise<void> {
-    const accessToken = server.type === "http" && !server.headers && this.tokenProvider
+    const provided = server.type === "http" && !server.headers && this.tokenProvider
       ? await this.tokenProvider(server)
       : undefined;
+    const result = typeof provided === "string" ? { token: provided } : provided;
+    this.tokenResults.set(server.name, result ?? {});
+    const accessToken = result?.token;
     if (server.type === "http" && !server.headers && this.tokenProvider && await this.requiresOAuth?.(server) && !accessToken) {
-      throw new Error("OAuth connection required");
+      throw new OAuthConnectionRequired(result?.reason ?? "not_connected");
     }
     const pending = this.clientFactory(server, accessToken);
     let timedOut = false;
@@ -218,6 +238,7 @@ export class McpClientManager {
       throw error;
     });
     this.clients.set(server.name, client);
+    this.onConnected?.(server.name);
   }
 
   private async recover(server: McpServerConfig): Promise<boolean> {
@@ -233,7 +254,10 @@ export class McpClientManager {
   }
 
   private async recoverServer(server: McpServerConfig): Promise<boolean> {
-    if (!this.onAuthFailure || !await this.onAuthFailure(server)) return false;
+    if (!this.onAuthFailure) return false;
+    const recovery = await this.onAuthFailure(server);
+    if (typeof recovery !== "boolean") this.tokenResults.set(server.name, recovery);
+    if (typeof recovery === "boolean" ? !recovery : !recovery.token) return false;
     const client = this.clients.get(server.name);
     this.clients.delete(server.name);
     if (client) {
@@ -248,7 +272,7 @@ export class McpClientManager {
       return true;
     } catch (error) {
       if (isUnauthorized(error)) await this.onUnrecoverableAuthFailure?.(server);
-      this.recordError(server.name, error);
+      this.recordError(server.name, error, isUnauthorized(error) ? "unrecoverable_auth" : "transport_failed");
       return false;
     }
   }
@@ -276,7 +300,7 @@ export class McpClientManager {
                 return await withTimeout(refreshed.listTools(), `MCP server "${server}" tool listing timed out`);
               } catch (retryError) {
                 if (isUnauthorized(retryError)) await this.onUnrecoverableAuthFailure?.(config);
-                this.recordError(server, retryError);
+                this.recordError(server, retryError, isUnauthorized(retryError) ? "unrecoverable_auth" : "transport_failed");
                 await this.discardClient(server, refreshed);
                 return [];
               }
@@ -351,7 +375,7 @@ export class McpClientManager {
               if (options?.signal?.aborted) throw options.signal.reason ?? retryError;
               if (isUnauthorized(retryError)) {
                 await this.onUnrecoverableAuthFailure?.(config);
-                this.recordError(server, retryError);
+                this.recordError(server, retryError, "unrecoverable_auth");
                 await this.discardClient(server, refreshed);
                 if (this.notConnectedResponse) return this.notConnectedResponse(server);
               }
@@ -378,11 +402,21 @@ export class McpClientManager {
     this.toolIndex.clear();
   }
 
-  private recordError(server: string, error: unknown): void {
+  private recordError(server: string, error: unknown, reason = "transport_failed"): void {
     const message = error instanceof Error ? error.message : String(error);
     this.errors.push({ server, message });
-    console.error(`[mcp] server "${server}" unavailable: ${message}`);
+    const result = this.tokenResults.get(server);
+    const scope = result?.scope;
+    const oauthReason = error instanceof OAuthConnectionRequired ? error.reason : isUnauthorized(error) ? result?.reason : undefined;
+    this.logUnavailable(oauthReason ? "info" : reason === "unrecoverable_auth" ? "error" : "warn", message, {
+      ...this.logContext, server, reason: oauthReason ?? reason,
+      ...(scope ? { scope } : {}),
+    });
   }
+}
+
+class OAuthConnectionRequired extends Error {
+  constructor(readonly reason: NonNullable<McpTokenResult["reason"]>) { super("OAuth connection required"); }
 }
 
 function isUnauthorized(error: unknown): boolean {
