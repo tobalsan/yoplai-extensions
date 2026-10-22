@@ -1,10 +1,12 @@
+export class McpTimeoutError extends Error {}
+
 /** Rejects with `message` if `task` has not settled within `ms`. */
 export async function withTimeout<T>(task: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       task,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new McpTimeoutError(message)), ms); }),
     ]);
   } finally {
     clearTimeout(timer);

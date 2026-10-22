@@ -85,12 +85,15 @@ export function createIconResolver(dataDir: string) {
     return icon;
   }
 
-  return (serverUrl: string): Promise<string | undefined> => {
+  const cached = (serverUrl: string): string | undefined => {
+    try { return cache[new URL(serverUrl).hostname]; } catch { return undefined; }
+  };
+  return Object.assign((serverUrl: string): Promise<string | undefined> => {
     let hostname: string;
     try { hostname = new URL(serverUrl).hostname; } catch { return Promise.resolve(undefined); }
     if (cache[hostname]) return Promise.resolve(cache[hostname]);
     // Misses stay memoized for the process lifetime to avoid re-probing on every refresh.
     if (!pending.has(hostname)) pending.set(hostname, lookup(serverUrl).catch(() => undefined));
     return pending.get(hostname)!;
-  };
+  }, { cached });
 }
