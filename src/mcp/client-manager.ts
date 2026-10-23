@@ -7,6 +7,7 @@ import {
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
+import { classifyMcpError, isUnauthorized, type McpErrorCategory } from "./errors.js";
 import type { McpServerConfig } from "./loader.js";
 import { logMcpUnavailable, type McpLogContext, type McpLogEvent, type McpLogLevel } from "./logging.js";
 import { withTimeout as withDeadline } from "./timeout.js";
@@ -60,6 +61,7 @@ export interface McpClientHandle {
 
 export type McpClientFactory = (server: McpServerConfig, accessToken?: string) => Promise<McpClientHandle>;
 export interface McpTokenResult {
+  error?: { category: McpErrorCategory; message: string };
   token?: string;
   reason?: "not_connected" | "needs_reconnect" | "refresh_failed";
   scope?: "personal" | "team";
@@ -69,6 +71,7 @@ type McpAuthRecovery = (server: McpServerConfig) => Promise<boolean | McpTokenRe
 export type McpNotConnectedResponse = (server: string) => unknown;
 
 export interface McpClientManagerOptions {
+  statusOnly?: boolean;
   logContext?: McpLogContext;
   logUnavailable?: (level: McpLogLevel, message: string, event: McpLogEvent) => void;
   onConnected?: (server: string) => void;
@@ -83,6 +86,7 @@ export interface McpClientManagerOptions {
 export interface McpServerError {
   server: string;
   message: string;
+  category?: McpErrorCategory;
 }
 
 export class SdkMcpClientHandle implements McpClientHandle {
@@ -92,12 +96,16 @@ export class SdkMcpClientHandle implements McpClientHandle {
     private readonly transport: Transport
   ) {}
 
-  static async connect(server: McpServerConfig, accessToken?: string): Promise<SdkMcpClientHandle> {
+  static async connect(server: McpServerConfig, accessToken?: string, statusOnly = false): Promise<SdkMcpClientHandle> {
     const client = new Client({ name: "yoplai-mcp", version: "0.1.0" });
     const transport = createTransport(server, accessToken);
     try {
       await withTimeout(client.connect(transport), `MCP server "${server.name}" connection timed out`);
     } catch (error) {
+      if (statusOnly) {
+        void withTimeout(transport.close(), `MCP server "${server.name}" close timed out`).catch(() => {});
+        throw error;
+      }
       try { await withTimeout(transport.close(), `MCP server "${server.name}" close timed out`); }
       catch { /* The original connection error is more useful. */ }
       throw error;
@@ -192,11 +200,11 @@ export class McpClientManager {
   private readonly notConnectedResponse?: McpNotConnectedResponse;
   private readonly onUnrecoverableAuthFailure?: (server: McpServerConfig) => Promise<void>;
 
-  constructor(private readonly servers: McpServerConfig[], options: McpClientManagerOptions = {}) {
+  constructor(private readonly servers: McpServerConfig[], private readonly options: McpClientManagerOptions = {}) {
     this.logContext = options.logContext ?? { agentId: "unknown", path: "tools" };
     this.logUnavailable = options.logUnavailable ?? logMcpUnavailable;
     this.onConnected = options.onConnected;
-    this.clientFactory = options.clientFactory ?? SdkMcpClientHandle.connect;
+    this.clientFactory = options.clientFactory ?? ((server, token) => SdkMcpClientHandle.connect(server, token, options.statusOnly));
     this.tokenProvider = options.tokenProvider;
     this.onAuthFailure = options.onAuthFailure;
     this.requiresOAuth = options.requiresOAuth;
@@ -211,7 +219,10 @@ export class McpClientManager {
         try {
           await this.connectServer(server);
         } catch (error) {
-          if (isUnauthorized(error) && await this.recover(server)) return;
+          if (!(error instanceof OAuthConnectionRequired) && (this.options.statusOnly ? classifyMcpError(error) === "authentication" : isUnauthorized(error))) {
+            if (this.options.statusOnly) error = await this.statusAuthFailure(server, error);
+            else if (await this.recover(server)) return;
+          }
           this.recordError(server.name, error);
         }
       })
@@ -228,7 +239,7 @@ export class McpClientManager {
     this.tokenResults.set(server.name, result ?? {});
     const accessToken = result?.token;
     if (server.type === "http" && !server.headers && this.tokenProvider && await this.requiresOAuth?.(server) && !accessToken) {
-      throw new OAuthConnectionRequired(result?.reason ?? "not_connected");
+      throw new OAuthConnectionRequired(result?.reason ?? "not_connected", result?.error);
     }
     const pending = this.clientFactory(server, accessToken);
     let timedOut = false;
@@ -239,6 +250,15 @@ export class McpClientManager {
     });
     this.clients.set(server.name, client);
     this.onConnected?.(server.name);
+  }
+
+  private async statusAuthFailure(server: McpServerConfig, error: unknown): Promise<unknown> {
+    const result = await this.onAuthFailure?.(server);
+    if (result && typeof result !== "boolean") {
+      this.tokenResults.set(server.name, result);
+      if (result.error) return new OAuthConnectionRequired(result.reason ?? "refresh_failed", result.error);
+    }
+    return error;
   }
 
   private async recover(server: McpServerConfig): Promise<boolean> {
@@ -293,7 +313,8 @@ export class McpClientManager {
           return await withTimeout(client.listTools(), `MCP server "${server}" tool listing timed out`);
         } catch (error) {
           const config = this.servers.find((item) => item.name === server);
-          if (config && isUnauthorized(error) && await this.recover(config)) {
+          if (config && this.options.statusOnly && classifyMcpError(error) === "authentication") error = await this.statusAuthFailure(config, error);
+          if (config && isUnauthorized(error) && !this.options.statusOnly && await this.recover(config)) {
             const refreshed = this.clients.get(server);
             if (refreshed) {
               try {
@@ -307,6 +328,11 @@ export class McpClientManager {
             }
           }
           this.recordError(server, error);
+          if (this.options.statusOnly) {
+            this.clients.delete(server);
+            void withTimeout(client.close(), `MCP server "${server}" close timed out`).catch(() => {});
+            return [];
+          }
           try {
             await withTimeout(client.close(), `MCP server "${server}" close timed out`);
           } catch (closeError) {
@@ -404,7 +430,7 @@ export class McpClientManager {
 
   private recordError(server: string, error: unknown, reason = "transport_failed"): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.errors.push({ server, message });
+    this.errors.push({ server, message, ...(this.options.statusOnly ? { category: error instanceof OAuthConnectionRequired ? error.failure?.category ?? "authentication" : classifyMcpError(error) } : {}) });
     const result = this.tokenResults.get(server);
     const scope = result?.scope;
     const oauthReason = error instanceof OAuthConnectionRequired ? error.reason : isUnauthorized(error) ? result?.reason : undefined;
@@ -416,12 +442,5 @@ export class McpClientManager {
 }
 
 class OAuthConnectionRequired extends Error {
-  constructor(readonly reason: NonNullable<McpTokenResult["reason"]>) { super("OAuth connection required"); }
-}
-
-function isUnauthorized(error: unknown): boolean {
-  if (error instanceof Error && error.name === "AbortError") return false;
-  if (typeof error === "object" && error !== null && "code" in error && error.code === 401) return true;
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b401\b|unauthori[sz]ed/i.test(message);
+  constructor(readonly reason: NonNullable<McpTokenResult["reason"]>, readonly failure?: McpTokenResult["error"]) { super(failure?.message ?? "OAuth connection required"); }
 }

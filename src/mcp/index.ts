@@ -5,7 +5,8 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import { McpClientManager, type McpClientFactory } from "./client-manager.js";
+import { McpClientManager, type McpServerError, type McpClientFactory } from "./client-manager.js";
+import { classifyMcpError } from "./errors.js";
 import { logMcpUnavailable, type McpLogPath } from "./logging.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
@@ -368,14 +369,14 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     return { agent, path: resolveConfigPath(agent, resolveExtensionConfig(agent, runtime.getConfig())) };
   }
 
-  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }) {
+  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }, mode: "default" | "fast" | "status" = "default") {
     const active = !shared || shared.enabled;
-    const oauthServer = active && server.type === "http" && !server.headers && await isOAuthServer(agentId, server);
-    const auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
-    const personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
-    const team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
-    const accountOf = (connection: typeof personal, scope: CredentialScope) => connection && server.type === "http" ? oauth?.backfillAccount(agentId, server.name, server.url, scope, connection, 2_000, { userId: requesterUserId, path: "status" }) : undefined;
-    const [personalAccount, teamAccount] = await Promise.all([accountOf(personal, { type: "personal", userId: requesterUserId ?? "" }), accountOf(team, { type: "team" })]);
+    let oauthServer = (active || mode !== "default") && server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, mode === "default");
+    let auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
+    let personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
+    let team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
+    const accountOf = (connection: typeof personal, scope: CredentialScope) => mode !== "default" ? connection?.account : connection && server.type === "http" ? oauth?.backfillAccount(agentId, server.name, server.url, scope, connection, 2_000, { userId: requesterUserId, path: "status" }) : undefined;
+    let [personalAccount, teamAccount] = await Promise.all([accountOf(personal, { type: "personal", userId: requesterUserId ?? "" }), accountOf(team, { type: "team" })]);
     const scopeState = (connection: typeof personal) => connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected";
     const config = configForAgent(agentId);
     const rawPath = shared ? catalogPath() : config?.path;
@@ -383,6 +384,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     const rawServer = isRecord(raw?.mcpServers) ? raw.mcpServers[server.name] : undefined;
     const managed = !shared && isRecord(rawServer) && rawServer.yoplaiManaged === true;
     let connected = false;
+    let failure: McpServerError | undefined;
+    const statusController = mode === "status" ? new AbortController() : undefined;
     let iconUrl: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
@@ -393,31 +396,56 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       return catalogEntry;
     })();
     const sharedText = (field: string) => isRecord(selectedShared) && typeof selectedShared[field] === "string" && selectedShared[field].trim() ? selectedShared[field].trim() : undefined;
-    let title = rawText("displayName") ?? sharedText("displayName") ?? known?.title;
+    let title = rawText("displayName") ?? sharedText("displayName") ?? known?.title ?? (mode !== "default" && shared ? rawText("serverTitle") : undefined);
     let description = rawText("description") ?? sharedText("description");
-    const siteIcon = server.type === "http" ? resolveIcon?.(server.url) : undefined;
+    const siteIcon = server.type === "http" ? mode === "default" ? resolveIcon?.(server.url) : resolveIcon?.cached(server.url) : undefined;
     const key = `${agentId}:status:${server.name}:${requesterUserId ?? "anonymous"}:${crypto.randomUUID()}`;
-    if (active) try {
-      const manager = await getManager(key, agentId, [server], "status", requesterUserId);
-      const tools = await manager.listTools();
-      connected = manager.hasClient(server.name) && tools.some((tool) => tool.server === server.name);
-      if (known && !rawText("displayName") && managed && config) saveLabel(config.path, server.name, { title });
-      if (!title && !description && connected) {
-        ({ title, description } = manager.getServerInfo(server.name));
-        if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
-      }
-      if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
-      const icon = manager.getServerIcon(server.name);
-      if (icon) {
-        try {
-          const candidate = new URL(icon, server.type === "http" ? server.url : undefined);
-          if (candidate.protocol === "http:" || candidate.protocol === "https:") iconUrl = candidate.toString();
-        } catch { /* Ignore invalid server-provided icons. */ }
-      }
+    if (active && mode !== "fast") try {
+      const check = async () => {
+        const manager = await getManager(key, agentId, [server], "status", requesterUserId, mode === "status", statusController?.signal);
+        statusController?.signal.throwIfAborted();
+        const tools = await manager.listTools();
+        statusController?.signal.throwIfAborted();
+        connected = manager.hasClient(server.name) && (mode === "status" || tools.some((tool) => tool.server === server.name));
+        failure = manager.getErrors()[0];
+        if (known && !rawText("displayName") && managed && config) saveLabel(config.path, server.name, { title });
+        if (!title && !description && connected) {
+          ({ title, description } = manager.getServerInfo(server.name));
+          if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
+        }
+        if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
+        const icon = manager.getServerIcon(server.name);
+        if (icon) {
+          try {
+            const candidate = new URL(icon, server.type === "http" ? server.url : undefined);
+            if (candidate.protocol === "http:" || candidate.protocol === "https:") iconUrl = candidate.toString();
+          } catch { /* Ignore invalid server-provided icons. */ }
+        }
+      };
+      if (mode === "status") await withTimeout(check(), 10_000, "MCP server status timed out");
+      else await check();
+    } catch (error) {
+      if (mode !== "status") throw error;
+      statusController?.abort(error);
+      failure = { server: server.name, message: error instanceof Error ? error.message : String(error), category: classifyMcpError(error) };
     } finally {
-      const manager = await managers.get(key);
+      const pending = managers.get(key);
       managers.delete(key);
-      if (manager) void manager.close().catch(() => {});
+      if (pending) void pending.then((manager) => manager.close()).catch(() => {});
+    }
+    if (mode === "status") {
+      oauthServer = server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, false);
+      auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
+      personal = oauthServer && requesterUserId ? await oauth?.read(agentId, server.name, { type: "personal", userId: requesterUserId }) : undefined;
+      team = oauthServer ? await oauth?.read(agentId, server.name, { type: "team" }) : undefined;
+      personalAccount = personal?.account;
+      teamAccount = team?.account;
+    }
+    let state = connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected";
+    if (mode === "fast") state = "disconnected";
+    else if (mode === "status" && failure) {
+      if (failure.category === "network" || failure.category === "timeout") state = "unreachable";
+      else if (failure.category === "protocol" || failure.category === "configuration") state = "disconnected";
     }
     return {
       name: server.name,
@@ -426,7 +454,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       type: server.type,
       ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? await siteIcon } : iconUrl ? { iconUrl } : {}),
       auth,
-      state: connected ? "connected" : personal?.state === "needs_reconnect" || team?.state === "needs_reconnect" ? "needs_reconnect" : "disconnected",
+      ...(mode === "fast" ? { status: "pending" } : {}),
+      ...(mode === "status" && failure ? { error: failure.message } : {}),
+      state,
       ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team), ...(personalAccount ? { personalAccount } : {}), ...(teamAccount ? { teamAccount } : {}) } : {}),
       readOnly: !managed,
       ...(shared ? { shared: true, enabled: shared.enabled } : {}),
@@ -461,10 +491,11 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     return c.html(html(flow?.server ?? "", success, message), success ? 200 : 400);
   }
 
-  async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>): Promise<boolean> {
+  async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>, requesterUserId?: string, allowProbe = true): Promise<boolean> {
     const key = `${agent}:${server.name}`;
     if (server.oauth) return true;
-    if (oauthServers.has(key) || await oauth?.read(agent, server.name)) return true;
+    if (oauthServers.has(key) || await oauth?.resolve(agent, server.name, requesterUserId)) return true;
+    if (!allowProbe) return false;
     const probeKey = `${key}:${server.url}`;
     const cached = oauthProbeResults.get(probeKey);
     if (cached && cached.until > Date.now()) return cached.result;
@@ -506,7 +537,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     agentId: string,
     servers: LoadedMcpConfig["servers"],
     logPath: McpLogPath,
-    requesterUserId?: string
+    requesterUserId?: string,
+    statusOnly = false,
+    statusSignal?: AbortSignal
   ): Promise<McpClientManager> {
     const cached = managers.get(key);
     if (cached) {
@@ -520,6 +553,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         servers,
         {
         clientFactory,
+        statusOnly,
         logContext: { agentId, userId: requesterUserId, path: logPath },
         logUnavailable: (level, message, event) => {
           const stateKey = `${JSON.stringify([event.agentId, event.userId ?? "anonymous", event.server])}:${event.reason}`;
@@ -535,21 +569,21 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           for (const key of loggedStates.keys()) if (key.startsWith(prefix)) loggedStates.delete(key);
         },
         tokenProvider: async (server) => {
-          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server)) return undefined;
+          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server, requesterUserId, !statusOnly)) return undefined;
           const selected = await oauth.resolve(agentId, server.name, requesterUserId);
           if (!selected) return { reason: "not_connected" };
           selectedScopes.set(server.name, selected.scope);
-          return { ...await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath), scope: selected.scope.type };
+          return { ...await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath, statusOnly, statusSignal), scope: selected.scope.type };
         },
         onAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
             const scope = selectedScopes.get(server.name);
-            return scope && oauth ? oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath) : false;
+            return scope && oauth ? oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal) : false;
           }
           return false;
         },
-        requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server),
+        requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, !statusOnly),
         notConnectedResponse: (server) => ({ isError: true, connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
         onUnrecoverableAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
@@ -680,7 +714,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const agent = runtime?.getAgent(agentId);
       const merged = agent && runtime ? mergedForAgent(agent, runtime.getConfig()) : undefined;
       const name = c.req.query("server");
-      const servers = merged ? await Promise.all(merged.all.servers.filter((server) => name === undefined || server.name === name).map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined))) : [];
+      const servers = merged ? await Promise.all(merged.all.servers.filter((server) => name === undefined || server.name === name).map((server) => serverCard(agentId, server, userId(c), merged.shared.has(server.name) ? { enabled: merged.enabled.has(server.name) } : undefined, c.req.query("live") === "0" ? "fast" : name !== undefined ? "status" : "default"))) : [];
       return c.json({ servers, canConfigureTeam: canConfigureTeam(c), canEditLabels: isSuperadmin(c) });
     });
     app.post("/mcp/servers", async (c) => {
@@ -710,7 +744,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (input.credentialScope === "personal" && scope.type !== "personal") return c.text("Authentication required for personal connection", 401);
       let flow: { state: string; authorizationUrl: string } | undefined;
       try {
-        if (!await hasUsablePersonalGrant(agentId, name, scope, server.url) && await isOAuthServer(agentId, server)) {
+        if (!await hasUsablePersonalGrant(agentId, name, scope, server.url) && await isOAuthServer(agentId, server, userId(c))) {
           if (!oauth) throw new Error("OAuth is unavailable");
           const store = oauth;
           let timedOut = false;
@@ -947,7 +981,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const store = oauth;
       const servers = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http").map(async (server) => {
         if (server.headers) return { name: server.name, url: server.url, auth: "static", state: "static" };
-        if (!await isOAuthServer(agent, server)) return { name: server.name, url: server.url, auth: "static", state: "static" };
+        if (!await isOAuthServer(agent, server, userId(c))) return { name: server.name, url: server.url, auth: "static", state: "static" };
         const connection = await store.read(agent, server.name, scope);
         const account = connection ? await store.backfillAccount(agent, server.name, server.url, scope, connection, 2_000, { userId: userId(c), path: "status" }) : undefined;
         return { name: server.name, url: server.url, auth: "oauth", state: connection?.state === "needs_reconnect" ? "needs_reconnect" : connection ? "connected" : "disconnected", ...(connection ? { connectedAt: connection.connectedAt, expiresAt: connection.expiresAt, ...(account ? { account } : {}) } : {}) };
@@ -1070,7 +1104,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         }
         const definition = definitions[index]!;
         const target = loaded.servers.find((server) => server.name === definition.server)!;
-        if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target)) return tool.execute(params, execution);
+        if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target, execution?.userId)) return tool.execute(params, execution);
         const requester = execution?.userId;
         const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
         const fresh = await getManager(key, agent.id, [target], "call", requester);
@@ -1082,7 +1116,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       },
     }));
     const disconnected = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http" && !server.headers).map(async (server) => {
-      if (!await isOAuthServer(agent.id, server) || await oauth?.accessToken(agent.id, server.name, 60_000, context.userId, undefined, "tools")) return undefined;
+      if (!await isOAuthServer(agent.id, server, context.userId) || await oauth?.accessToken(agent.id, server.name, 60_000, context.userId, undefined, "tools")) return undefined;
       return {
         name: `mcp__${sanitizeSegment(server.name)}__not_connected`,
         namespace: namespaceForServer(server.name),

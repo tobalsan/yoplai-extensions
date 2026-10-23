@@ -249,16 +249,15 @@ describe("MCP server cards and self-service routes", () => {
 
   it("starts OAuth on add and shows connected only after a live MCP connection", async () => {
     const redirectUri = "http://localhost:4000/api/mcp/oauth/callback";
-    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-      discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register" } }),
-      registerClient: vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: [redirectUri] }),
-      startAuthorization: vi.fn().mockImplementation((_url, options) => ({ authorizationUrl: new URL(`https://auth.test/authorize?state=${options.state}`), codeVerifier: "verifier" })),
-      exchangeAuthorization: vi.fn().mockResolvedValue({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 }),
-      refreshAuthorization: vi.fn(), discoverAuthorizationServerMetadata: vi.fn(),
-    }));
-    const { createMcpExtension: createExtension } = await import("../index.js");
     const dir = await dirs.make("mcp-servers-");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("oauth-protected-resource")) return Response.json({ resource: "https://oauth.example.test/mcp", authorization_servers: ["https://auth.test"] });
+      if (url.includes(".well-known")) return Response.json({ issuer: "https://auth.test", authorization_endpoint: "https://auth.test/authorize", token_endpoint: "https://auth.test/token", registration_endpoint: "https://auth.test/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"] });
+      if (url === "https://auth.test/register") return Response.json({ client_id: "client", redirect_uris: [redirectUri], token_endpoint_auth_method: "none" });
+      if (url === "https://auth.test/token") return Response.json({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 });
+      return new Response(null, { status: 401 });
+    }));
     const factory = vi.fn(async (server: { name: string }, token?: string) => {
       if (!token) throw new Error("missing token");
       return {
@@ -266,10 +265,11 @@ describe("MCP server cards and self-service routes", () => {
         async callTool() { return "pong"; }, async close() {},
       };
     });
-    const extension = createExtension(factory);
+    const extension = createMcpExtension(factory);
     await extension.start({ credentials: credentials(), getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
     const routes = app(); extension.registerRoutes(routes);
     const added = await routes.routes.get("POST /mcp/servers")!(context({ agent: "agent-a" }, { url: "https://oauth.example.test/mcp", credentialScope: "team" }));
+    expect(added).toMatchObject({ authorizationUrl: expect.any(String) });
     expect(added.authorizationUrl).toMatch(/^https:\/\/auth\.test\/authorize\?/);
     expect(added.server.state).toBe("disconnected");
     expect(JSON.parse(await fs.readFile(path.join(dir, "mcp.json"), "utf8")).mcpServers[added.server.name]).toMatchObject({ url: "https://oauth.example.test/mcp" });

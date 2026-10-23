@@ -24,6 +24,8 @@
 
 ### Changed
 
+- MCP cards support a network-free `live=0` list and individual 10-second status checks with retryable unreachable states, while personal OAuth grants and transient refresh failures retain the correct connection UI (ALG-529).
+
 - MCP OAuth accepts same-site return paths for full-page settings connections, and server cards can be loaded individually without checking other servers (ALG-528).
 
 - Agent MCP cards use shared catalog labels and descriptions as fallbacks for selected same-key local servers. Explicit local metadata remains in control.
