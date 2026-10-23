@@ -38,7 +38,7 @@ export function adaptMcpTools(
   tools: McpToolDefinition[],
   manager: McpClientManager
 ): (Omit<ToolExtensionTool, "execute"> & {
-  execute(params: unknown, execution?: { agentId?: string; userId?: string; signal?: AbortSignal }): Promise<unknown>;
+  execute(params: unknown, execution?: { agentId?: string; userId?: string; sessionId?: string; signal?: AbortSignal }): Promise<unknown>;
 })[] {
   const seen = new Map<string, number>();
   return tools.map((tool) => {

@@ -5,6 +5,7 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
+import { McpCallClientCache } from "./call-client-cache.js";
 import { McpClientManager, type McpServerError, type McpClientFactory } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
 import { logMcpUnavailable, type McpLogPath } from "./logging.js";
@@ -12,7 +13,7 @@ import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type 
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
-import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
+import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type McpCredentialSnapshot, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
 import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
@@ -305,6 +306,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   const loggedStates = new Map<string, number>();
   const loggedConfigErrors = new Set<string>();
   const managers = new Map<string, Promise<McpClientManager>>();
+  const callClients = new McpCallClientCache();
   const oauthServers = new Set<string>();
   const oauthProbeResults = new Map<string, { result: boolean; until: number }>();
   const oauthProbes = new Map<string, Promise<boolean>>();
@@ -313,6 +315,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   let connect: CredentialConnectHost | undefined;
   let resolveIcon: ReturnType<typeof createIconResolver> | undefined;
   let unregister: (() => void) | undefined;
+  let unsubscribeCredentials: (() => void) | undefined;
 
   function logConfigErrors(loaded: LoadedMcpConfig, agentId: string, configPath: string, revision: string, userId?: string): void {
     for (const error of loaded.errors) {
@@ -524,6 +527,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
   }
 
   async function resetManagers(agent?: string): Promise<void> {
+    await callClients.invalidate((identity) => !agent || identity.agentId === agent);
     const keys = [...managers.keys()].filter((key) => !agent || key.startsWith(`${agent}:`));
     for (const key of keys) {
       const pending = managers.get(key);
@@ -539,7 +543,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     logPath: McpLogPath,
     requesterUserId?: string,
     statusOnly = false,
-    statusSignal?: AbortSignal
+    statusSignal?: AbortSignal,
+    pinnedScope?: CredentialScope,
+    pinnedCredential?: McpCredentialSnapshot
   ): Promise<McpClientManager> {
     const cached = managers.get(key);
     if (cached) {
@@ -549,11 +555,13 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     }
     const managerPromise = (async () => {
       const selectedScopes = new Map<string, CredentialScope>();
+      const credentialUnchanged = (server: string) => pinnedCredential === undefined || Boolean(oauth && pinnedScope && oauth.credentialVersion(agentId, server, pinnedScope) === pinnedCredential.version);
       const manager = new McpClientManager(
         servers,
         {
         clientFactory,
         statusOnly,
+        preserveSessionOnAuthRecovery: logPath === "call",
         logContext: { agentId, userId: requesterUserId, path: logPath },
         logUnavailable: (level, message, event) => {
           const stateKey = `${JSON.stringify([event.agentId, event.userId ?? "anonymous", event.server])}:${event.reason}`;
@@ -568,18 +576,23 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           const prefix = `${JSON.stringify([agentId, requesterUserId ?? "anonymous", server])}:`;
           for (const key of loggedStates.keys()) if (key.startsWith(prefix)) loggedStates.delete(key);
         },
-        tokenProvider: async (server) => {
-          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server, requesterUserId, !statusOnly)) return undefined;
-          const selected = await oauth.resolve(agentId, server.name, requesterUserId);
+        tokenProvider: async (server, termination) => {
+          if (server.type !== "http" || server.headers || !oauth || (!pinnedScope && !await isOAuthServer(agentId, server, requesterUserId, !statusOnly))) return undefined;
+          if (!credentialUnchanged(server.name)) return termination ? { token: pinnedCredential?.token } : { reason: "not_connected" };
+          const selected = pinnedScope ? { scope: pinnedScope } : await oauth.resolve(agentId, server.name, requesterUserId);
           if (!selected) return { reason: "not_connected" };
           selectedScopes.set(server.name, selected.scope);
-          return { ...await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath, statusOnly, statusSignal), scope: selected.scope.type };
+          const result = await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath, statusOnly, statusSignal);
+          if (termination && (!credentialUnchanged(server.name) || !result.token)) return { token: pinnedCredential?.token };
+          return { ...(credentialUnchanged(server.name) ? result : { reason: "not_connected" as const }), scope: selected.scope.type };
         },
         onAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
             const scope = selectedScopes.get(server.name);
-            return scope && oauth ? oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal) : false;
+            if (!scope || !oauth || !credentialUnchanged(server.name)) return false;
+            const result = await oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal);
+            return credentialUnchanged(server.name) ? result : { reason: "not_connected" };
           }
           return false;
         },
@@ -588,7 +601,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         onUnrecoverableAuthFailure: async (server) => {
           if (server.type === "http" && !server.headers) {
             const scope = selectedScopes.get(server.name);
-            if (scope) await oauth?.markNeedsReconnect(agentId, server.name, scope);
+            if (scope && credentialUnchanged(server.name)) await oauth?.markNeedsReconnect(agentId, server.name, scope);
           }
         }
         }
@@ -614,6 +627,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       try { server = loadedForAgent(agentId)?.servers.find((item) => item.name === name); } catch { return undefined; }
       return server?.type === "http" ? { url: server.url, clientId: server.oauth?.clientId } : undefined;
     }, () => ctx.getConfig().oauth?.providers);
+    unsubscribeCredentials?.();
+    unsubscribeCredentials = oauth.onCredentialChange((credential) => { void callClients.invalidate((identity) => identity.credential === credential); });
     connect = ctx.credentialConnect;
     resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {
@@ -1054,10 +1069,13 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
   async stop() {
     unregister?.();
     unregister = undefined;
+    unsubscribeCredentials?.();
+    unsubscribeCredentials = undefined;
     connect = undefined;
     oauthProbeResults.clear();
     oauthProbes.clear();
     oauthServers.clear();
+    await callClients.close();
     const resolvedManagers = await Promise.all([...managers.values()]);
     await Promise.all(resolvedManagers.map((manager) => manager.close()));
     managers.clear();
@@ -1070,6 +1088,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     const extensionConfig = resolveExtensionConfig(agent, context.config);
     const configPath = resolveConfigPath(agent, extensionConfig);
     const merged = mergedForAgent(agent, context.config);
+    await callClients.invalidate((identity) => identity.agentId === agent.id && (identity.configPath !== configPath || identity.revision !== merged?.fingerprint));
     if (!merged) return [];
     const revision = merged.fingerprint;
     const loaded = merged.loaded;
@@ -1096,23 +1115,31 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       outputSchema: zodToJsonSchema(tool.outputSchema!, { $refStrategy: "none" }) as Record<string, unknown>,
-      execute: async (params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => {
-        let now: string | undefined;
-        try { now = mergedForAgent(agent, context.config)?.fingerprint; } catch { /* treated as changed */ }
-        if (now !== revision) {
+      execute: async (params: unknown, execution?: { userId?: string; sessionId?: string; signal?: AbortSignal }) => {
+        let now: ReturnType<typeof mergedForAgent>;
+        try { now = mergedForAgent(agent, context.config); } catch { /* treated as changed */ }
+        if (now?.fingerprint !== revision || now.configPath !== configPath) {
+          await callClients.invalidate((identity) => identity.agentId === agent.id && (identity.configPath !== now?.configPath || identity.revision !== now?.fingerprint));
           return { connected: false, provider: "mcp", reason: "configuration_changed", message: "MCP server settings changed. Reload the agent's tools." };
         }
         const definition = definitions[index]!;
         const target = loaded.servers.find((server) => server.name === definition.server)!;
         if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target, execution?.userId)) return tool.execute(params, execution);
         const requester = execution?.userId;
-        const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
-        const fresh = await getManager(key, agent.id, [target], "call", requester);
-        try {
-          const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
+        const selected = await oauth?.resolve(agent.id, target.name, requester);
+        const scope = selected?.scope;
+        const pinnedCredential = scope && oauth ? oauth.credentialSnapshot(agent.id, target.name, scope, selected?.connection.tokens.access_token) : undefined;
+        const credentialVersion = pinnedCredential?.version ?? 0;
+        return callClients.run({ agentId: agent.id, configPath, revision, server: target.name, requester, scope: JSON.stringify(scope), credentialVersion, sessionId: scope ? execution?.sessionId : undefined, credential: scope && oauth ? oauth.credentialKey(agent.id, target.name, scope) : "" }, async () => {
+          const key = `${agent.id}:call:${crypto.randomUUID()}`;
+          const fresh = await getManager(key, agent.id, [target], "call", requester, false, undefined, scope, pinnedCredential);
+          managers.delete(key);
+          return { manager: fresh, tools: await fresh.listTools() };
+        }, async ({ manager: fresh, tools }) => {
+          const current = tools.find((entry) => entry.name === definition.name && entry.server === definition.server);
           if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params, { signal: execution?.signal }));
           return connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
-        } finally { managers.delete(key); await fresh.close(); }
+        });
       },
     }));
     const disconnected = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http" && !server.headers).map(async (server) => {
@@ -1123,7 +1150,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         description: `Connect ${server.name} from the agent's extensions before using its tools.`,
         parameters: { type: "object", properties: {}, additionalProperties: false },
         outputSchema: zodToJsonSchema(McpCallToolResultSchema, { $refStrategy: "none" }) as Record<string, unknown>,
-        execute: async (_params: unknown, execution?: { userId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { isError: true, connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
+        execute: async (_params: unknown, execution?: { userId?: string; sessionId?: string; signal?: AbortSignal }) => connectResponse(server.name, execution, { isError: true, connected: false, provider: "mcp", server: server.name, reason: "not_connected", message: `${server.name} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agent.id) }),
       };
     }));
     return [...connectedTools, ...disconnected.filter((tool): tool is NonNullable<typeof tool> => Boolean(tool))];

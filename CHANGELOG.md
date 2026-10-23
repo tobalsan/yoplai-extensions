@@ -47,6 +47,8 @@
 
 ### Fixed
 
+- OAuth MCP calls reuse an isolated session per chat, preserve state through token refresh, retry expired sessions with a reset notice, and end sessions on idle expiry, credential/config changes, and shutdown (ALG-531).
+
 - MCP unavailable logs include requester context and cause-based severity, suppress repeated known states for one hour, and report shared OAuth refresh failures once (ALG-521).
 
 - MCP OAuth recovery detects empty-body HTTP 401 errors, preserving tools after token expiry (ALG-513).

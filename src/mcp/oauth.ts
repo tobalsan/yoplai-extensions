@@ -133,12 +133,53 @@ const oauthFetch: typeof fetch = async (input, init) => {
   } finally { clearTimeout(timer); }
 };
 
+type CredentialChangeListener = (key: string) => void;
+const credentialListeners = new WeakMap<ScopedCredentials, Set<CredentialChangeListener>>();
+export type McpCredentialSnapshot = { version: number; token?: string };
+const credentialSnapshots = new WeakMap<ScopedCredentials, Map<string, McpCredentialSnapshot>>();
+
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
   private readonly refreshes = new Map<string, Promise<McpTokenResult>>();
   private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly hostProviders?: HostOAuthProviders) {}
+
+  credentialKey(agent: string, server: string, scope: CredentialScope): string {
+    return JSON.stringify(this.key(agent, server, scope));
+  }
+
+  credentialVersion(agent: string, server: string, scope: CredentialScope): number {
+    return this.credentialSnapshot(agent, server, scope).version;
+  }
+
+  /** Sessions retain this grant's latest token for cleanup after removal, never for tool calls. */
+  credentialSnapshot(agent: string, server: string, scope: CredentialScope, token?: string): McpCredentialSnapshot {
+    if (!this.credentials) return { version: 0 };
+    let snapshots = credentialSnapshots.get(this.credentials);
+    if (!snapshots) { snapshots = new Map(); credentialSnapshots.set(this.credentials, snapshots); }
+    const key = this.credentialKey(agent, server, scope);
+    let snapshot = snapshots.get(key);
+    if (!snapshot) { snapshot = { version: 0, token }; snapshots.set(key, snapshot); }
+    return snapshot;
+  }
+
+  onCredentialChange(listener: CredentialChangeListener): () => void {
+    if (!this.credentials) return () => {};
+    let listeners = credentialListeners.get(this.credentials);
+    if (!listeners) { listeners = new Set(); credentialListeners.set(this.credentials, listeners); }
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }
+
+  private credentialChanged(agent: string, server: string, scope: CredentialScope, identity?: McpServerIdentity, token?: string): void {
+    if (!this.credentials) return;
+    const key = JSON.stringify(this.key(agent, server, scope, identity));
+    let snapshots = credentialSnapshots.get(this.credentials);
+    if (!snapshots) { snapshots = new Map(); credentialSnapshots.set(this.credentials, snapshots); }
+    snapshots.set(key, { version: (snapshots.get(key)?.version ?? 0) + 1, token });
+    for (const listener of credentialListeners.get(this.credentials) ?? []) listener(key);
+  }
 
   private legacyKey(agent: string, server: string, scope: CredentialScope): CredentialKey {
     return { agentId: agent, integration: `mcp:${server}`, scope };
@@ -217,8 +258,14 @@ export class McpOAuthStore {
   }
 
   async write(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope = TEAM, identity?: McpServerIdentity): Promise<void> {
+    await this.persist(agent, server, connection, scope, identity, true);
+  }
+
+  private async persist(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope, identity?: McpServerIdentity, changed = false): Promise<void> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     this.credentials.save(this.key(agent, server, scope, identity), connection);
+    if (changed) this.credentialChanged(agent, server, scope, identity, connection.tokens.access_token);
+    else this.credentialSnapshot(agent, server, scope).token = connection.tokens.access_token;
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
@@ -228,6 +275,7 @@ export class McpOAuthStore {
     if (scope.type === "personal" && key.agentId === SHARED_AGENT) this.credentials?.save<Tombstone>(key, { tombstone: true, deletedAt: new Date().toISOString() });
     else this.credentials?.delete(key);
     if (scope.type === "personal") this.credentials?.delete(this.legacyKey(agent, server, scope));
+    this.credentialChanged(agent, server, scope);
     if (scope.type === "team") await fs.rm(this.file(agent, server), { force: true });
   }
 
@@ -337,7 +385,7 @@ export class McpOAuthStore {
       const account = await resolveAccountLabel({ serverUrl: url, authorizationServerUrl: latest.authorizationServerUrl, tokens: { ...latest.tokens, access_token: token } });
       const current = account ? await this.read(agent, server, scope) : undefined;
       // Skip while a refresh is in flight; refresh keeps account-only changes, so a later status call retries.
-      if (account && current?.connectedAt === connection.connectedAt && current.state !== "needs_reconnect" && !this.refreshes.has(JSON.stringify(this.key(agent, server, scope)))) await this.write(agent, server, { ...current, account }, scope);
+      if (account && current?.connectedAt === connection.connectedAt && current.state !== "needs_reconnect" && !this.refreshes.has(JSON.stringify(this.key(agent, server, scope)))) await this.persist(agent, server, { ...current, account }, scope);
       return account;
     })().catch(() => undefined);
     this.accountLookups.set(key, lookup);
@@ -419,7 +467,7 @@ export class McpOAuthStore {
       const latest = await unchanged();
       if (statusSignal?.aborted) return expired();
       if (!latest) return { reason: "not_connected", scope: scope.type };
-      await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
+      await this.persist(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
       return { token: tokens.access_token, scope: scope.type };
     } catch (error) {
       logMcpUnavailable("error", error instanceof Error ? error.message : String(error), {
