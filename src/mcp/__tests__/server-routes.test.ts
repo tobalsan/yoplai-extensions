@@ -38,7 +38,8 @@ describe("MCP server cards and self-service routes", () => {
     const extension = createMcpExtension(async (server) => {
       contacted.push(server.name);
       return {
-        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+        async readResource() { return { contents: [] }; },
         async callTool() { return "pong"; },
         async close() {},
       };
@@ -76,6 +77,7 @@ describe("MCP server cards and self-service routes", () => {
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
     const extension = createMcpExtension(async () => ({
       async listTools() { throw Object.assign(new Error("401 Unauthorized"), { code: 401 }); },
+      async readResource() { return { contents: [] }; },
       async callTool() { throw new Error("not listed"); }, async close() {},
     }));
     const agent = { id: "casey", workspaceDir: dir };
@@ -111,7 +113,8 @@ describe("MCP server cards and self-service routes", () => {
     vi.stubEnv("MCP_TOKEN", "secret");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
-      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerIcon: () => server.name === "docs" ? "https://docs.example.test/icon.png" : undefined,
@@ -159,7 +162,8 @@ describe("MCP server cards and self-service routes", () => {
     const factory = vi.fn(async (server: { name: string }) => {
       if (!online) throw new Error("offline");
       return {
-        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+        async readResource() { return { contents: [] }; },
         async callTool() { return "pong"; }, async close() {},
       };
     });
@@ -214,7 +218,8 @@ describe("MCP server cards and self-service routes", () => {
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { ready: { url: "https://ready.example.test/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const extension = createMcpExtension(async (server) => ({
-      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() { return new Promise<void>(() => {}); },
     }));
@@ -261,7 +266,8 @@ describe("MCP server cards and self-service routes", () => {
     const factory = vi.fn(async (server: { name: string }, token?: string) => {
       if (!token) throw new Error("missing token");
       return {
-        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+        async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+        async readResource() { return { contents: [] }; },
         async callTool() { return "pong"; }, async close() {},
       };
     });
@@ -323,7 +329,8 @@ describe("MCP server config routes", () => {
     await fs.writeFile(file, JSON.stringify({ mcpServers: {} }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
-      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerInfo: () => ({ title: "Linear", description: "Issues and projects" }),
@@ -347,7 +354,8 @@ describe("MCP server config routes", () => {
       aimx: { command: "node", args: ["server.js"], displayName: "AIMX Mail", description: "Agent mailboxes" },
     } }));
     const factory = vi.fn(async (server: { name: string }) => ({
-      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
     }));
@@ -364,7 +372,8 @@ describe("MCP server config routes", () => {
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1", yoplaiManaged: true } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
-      async listTools() { return [{ server: server.name, name: "list_events", description: "List", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "list_events", description: "List", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return ""; },
       async close() {},
       getServerInfo: () => ({ title: "StatelessServer" }),

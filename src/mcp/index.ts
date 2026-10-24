@@ -5,7 +5,7 @@ import { parseEnv } from "node:util";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
-import { McpClientManager, type McpServerError, type McpClientFactory } from "./client-manager.js";
+import { McpClientManager, OAuthConnectionRequired, type McpServerError, type McpClientFactory } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
 import { logMcpUnavailable, type McpLogPath } from "./logging.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
@@ -13,7 +13,7 @@ import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, siteLabel } from "./icon.js";
 import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
-import { defineToolExtension, type ResolvedToolExtensionConfig } from "../tool-extension.js";
+import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
 const McpExtensionConfigSchema = z
   .object({
@@ -491,36 +491,44 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     return c.html(html(flow?.server ?? "", success, message), success ? 200 : 400);
   }
 
-  async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>, requesterUserId?: string, allowProbe = true): Promise<boolean> {
+  async function isOAuthServer(agent: string, server: Extract<McpServerConfig, { type: "http" }>, requesterUserId?: string, allowProbe = true, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
     const key = `${agent}:${server.name}`;
     if (server.oauth) return true;
-    if (oauthServers.has(key) || await oauth?.resolve(agent, server.name, requesterUserId)) return true;
+    const known = oauthServers.has(key) || await oauth?.resolve(agent, server.name, requesterUserId);
+    signal?.throwIfAborted();
+    if (known) return true;
     if (!allowProbe) return false;
     const probeKey = `${key}:${server.url}`;
     const cached = oauthProbeResults.get(probeKey);
     if (cached && cached.until > Date.now()) return cached.result;
-    const active = oauthProbes.get(probeKey);
+    const active = signal ? undefined : oauthProbes.get(probeKey);
     if (active) return active;
     const probe = (async () => {
       let result = false;
       try {
-        const response = await withTimeout(fetch(server.url, {
+        signal?.throwIfAborted();
+        const pending = fetch(server.url, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          signal: AbortSignal.timeout(10_000),
+          signal: signal ?? AbortSignal.timeout(10_000),
           body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-detection", method: "initialize", params: {} }),
-        }), 10_000, "MCP OAuth detection timed out");
-        result = response.status === 401 || await hasProtectedResourceAuthServers(server.url);
+        });
+        const response = await (signal ? pending : withTimeout(pending, 10_000, "MCP OAuth detection timed out"));
+        signal?.throwIfAborted();
+        result = response.status === 401 || await hasProtectedResourceAuthServers(server.url, signal);
+        signal?.throwIfAborted();
         if (result) oauthServers.add(key);
       } catch {
+        signal?.throwIfAborted();
         // Connection failures are not evidence that this server uses OAuth.
       }
       oauthProbeResults.set(probeKey, { result, until: Date.now() + 30_000 });
       return result;
     })();
-    oauthProbes.set(probeKey, probe);
+    if (!signal) oauthProbes.set(probeKey, probe);
     try { return await probe; }
-    finally { oauthProbes.delete(probeKey); }
+    finally { if (!signal) oauthProbes.delete(probeKey); }
   }
 
   async function resetManagers(agent?: string): Promise<void> {
@@ -539,7 +547,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     logPath: McpLogPath,
     requesterUserId?: string,
     statusOnly = false,
-    statusSignal?: AbortSignal
+    statusSignal?: AbortSignal,
+    throwOnError = false
   ): Promise<McpClientManager> {
     const cached = managers.get(key);
     if (cached) {
@@ -554,6 +563,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         {
         clientFactory,
         statusOnly,
+        signal: statusSignal,
+        throwOnError,
         logContext: { agentId, userId: requesterUserId, path: logPath },
         logUnavailable: (level, message, event) => {
           const stateKey = `${JSON.stringify([event.agentId, event.userId ?? "anonymous", event.server])}:${event.reason}`;
@@ -569,23 +580,28 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           for (const key of loggedStates.keys()) if (key.startsWith(prefix)) loggedStates.delete(key);
         },
         tokenProvider: async (server) => {
-          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server, requesterUserId, !statusOnly)) return undefined;
+          if (server.type !== "http" || server.headers || !oauth || !await isOAuthServer(agentId, server, requesterUserId, !statusOnly, statusSignal)) return undefined;
+          statusSignal?.throwIfAborted();
           const selected = await oauth.resolve(agentId, server.name, requesterUserId);
+          statusSignal?.throwIfAborted();
           if (!selected) return { reason: "not_connected" };
           selectedScopes.set(server.name, selected.scope);
           return { ...await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath, statusOnly, statusSignal), scope: selected.scope.type };
         },
         onAuthFailure: async (server) => {
+          statusSignal?.throwIfAborted();
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
             const scope = selectedScopes.get(server.name);
-            return scope && oauth ? oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal) : false;
+            if (scope && oauth) return oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal);
+            return throwOnError ? { reason: "not_connected" } : false;
           }
           return false;
         },
-        requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, !statusOnly),
+        requiresOAuth: async (server) => server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, !statusOnly, statusSignal),
         notConnectedResponse: (server) => ({ isError: true, connected: false, provider: "mcp", server, reason: "needs_reconnect", message: `${server} is not connected. Connect it from the agent's extensions.`, authorizeUrl: extensionHub(agentId) }),
         onUnrecoverableAuthFailure: async (server) => {
+          statusSignal?.throwIfAborted();
           if (server.type === "http" && !server.headers) {
             const scope = selectedScopes.get(server.name);
             if (scope) await oauth?.markNeedsReconnect(agentId, server.name, scope);
@@ -605,8 +621,68 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     }
   }
 
+  async function runApp<T>(ctx: McpAppsContext, serverName: string, milliseconds: number, operation: (manager: McpClientManager, signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const abort = () => controller.abort(new McpAppsError("aborted", "MCP App operation aborted"));
+    if (ctx.signal?.aborted) abort();
+    else ctx.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => controller.abort(new McpAppsError("timeout", "MCP App operation timed out")), milliseconds);
+    const signal = controller.signal;
+    const key = ctx.agentId + ":apps:" + crypto.randomUUID();
+    let manager: McpClientManager | undefined;
+    let rejectAbort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      rejectAbort = () => reject(signal.reason);
+      if (signal.aborted) rejectAbort();
+      else signal.addEventListener("abort", rejectAbort, { once: true });
+    });
+    try {
+      return await Promise.race([cancelled, (async () => {
+        signal.throwIfAborted();
+        const agent = runtime?.getAgent(ctx.agentId);
+        if (!runtime || !agent) throw new McpAppsError("unknown_agent", "Unknown MCP App agent");
+        const server = mergedForAgent(agent, runtime.getConfig())?.loaded.servers.find((entry) => entry.name === serverName);
+        if (!server) throw new McpAppsError("unknown_server", "Unknown or disabled MCP server: " + serverName);
+        const pending = getManager(key, ctx.agentId, [server], "call", ctx.userId, false, signal, true);
+        void pending.then((connected) => { if (signal.aborted) void connected.close().catch(() => {}); }).catch(() => {});
+        manager = await pending;
+        signal.throwIfAborted();
+        return operation(manager, signal);
+      })()]);
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      if (error instanceof McpAppsError) throw error;
+      if (error instanceof OAuthConnectionRequired) {
+        const reason = error.reason === "not_connected" ? "not_connected" : "needs_reconnect";
+        throw new McpAppsError(reason, error.message, extensionHub(ctx.agentId));
+      }
+      throw new McpAppsError("upstream", error instanceof Error ? error.message : String(error));
+    } finally {
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", abort);
+      signal.removeEventListener("abort", rejectAbort);
+      managers.delete(key);
+      if (manager) void manager.close().catch(() => {});
+    }
+  }
+
   return {
   ...baseExtension,
+  mcpApps: {
+    callTool(ctx: McpAppsContext, server: string, tool: string, args: Record<string, unknown>) {
+      return runApp(ctx, server, 25_000, async (manager, signal) => {
+        const catalog = await manager.listTools({ signal });
+        signal.throwIfAborted();
+        const definition = catalog.find((entry) => entry.server === server && entry.name === tool);
+        if (!definition) throw new McpAppsError("unknown_tool", "Unknown MCP App tool: " + tool);
+        if (!definition.visibility.includes("app")) throw new McpAppsError("not_app_visible", "MCP tool is not app-visible: " + tool);
+        return await manager.invokeTool(server, tool, args, { signal }) as Record<string, unknown>;
+      });
+    },
+    readResource(ctx: McpAppsContext, server: string, uri: string) {
+      return runApp(ctx, server, 10_000, (manager, signal) => manager.readResource(server, uri, { signal }));
+    },
+  } satisfies McpApps,
   async start(ctx: McpRuntime) {
     runtime = ctx;
     oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials, (agentId, name) => {
@@ -1090,9 +1166,12 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         ...(instructions ? { instructions: instructions.slice(0, 4000) } : {}),
       };
     };
-    const connectedTools = tools.map((tool, index) => ({
+    const connectedTools = tools.map((tool, index) => ({ tool, definition: definitions[index]! }))
+      .filter(({ definition }) => definition.visibility.includes("model"))
+      .map(({ tool, definition }) => ({
       name: tool.name,
-      namespace: namespaceForServer(definitions[index]!.server),
+      mcp: tool.mcp,
+      namespace: namespaceForServer(definition.server),
       description: tool.description,
       parameters: tool.jsonSchemaParameters ?? {},
       outputSchema: zodToJsonSchema(tool.outputSchema!, { $refStrategy: "none" }) as Record<string, unknown>,
@@ -1102,7 +1181,6 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         if (now !== revision) {
           return { connected: false, provider: "mcp", reason: "configuration_changed", message: "MCP server settings changed. Reload the agent's tools." };
         }
-        const definition = definitions[index]!;
         const target = loaded.servers.find((server) => server.name === definition.server)!;
         if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target, execution?.userId)) return tool.execute(params, execution);
         const requester = execution?.userId;

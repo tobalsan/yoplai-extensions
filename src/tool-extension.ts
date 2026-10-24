@@ -100,9 +100,28 @@ export interface ToolExecutionContext {
   conversationFiles?: { hostPath: string; runtimePath: string };
 }
 
+export type McpToolVisibility = ("model" | "app")[];
+export type McpToolUi = { resourceUri: string; visibility: McpToolVisibility };
+export type McpAppsContext = { agentId: string; userId?: string; signal?: AbortSignal };
+export type McpResourceContent = {
+  uri: string; mimeType?: string; text?: string; blob?: string; _meta?: Record<string, unknown>;
+};
+export type McpAppsErrorReason =
+  | "unknown_agent" | "unknown_server" | "unknown_tool" | "not_app_visible"
+  | "not_connected" | "needs_reconnect" | "timeout" | "aborted" | "upstream";
+export class McpAppsError extends Error {
+  readonly name = "McpAppsError";
+  constructor(readonly reason: McpAppsErrorReason, message: string, readonly authorizeUrl?: string) { super(message); }
+}
+export type McpApps = {
+  readResource(ctx: McpAppsContext, server: string, uri: string): Promise<{ contents: McpResourceContent[] }>;
+  callTool(ctx: McpAppsContext, server: string, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
+};
+
 export interface ToolExtensionTool {
   name: string;
   description: string;
+  mcp?: { server: string; tool: string; ui?: McpToolUi };
   annotations?: { readOnlyHint?: boolean };
   parameters: z.ZodTypeAny;
   outputSchema?: z.ZodTypeAny;

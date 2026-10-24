@@ -48,6 +48,7 @@ export function adaptMcpTools(
     const name = count === 0 ? baseName : `${baseName}__${count + 1}`;
     return {
       name,
+      mcp: { server: tool.server, tool: tool.name, ...(tool.ui ? { ui: tool.ui } : {}) },
       description: tool.description,
       parameters: z.object({}).passthrough(),
       outputSchema: McpCallToolResultSchema,

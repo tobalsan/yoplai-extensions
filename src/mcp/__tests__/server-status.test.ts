@@ -188,7 +188,7 @@ it("accepts a successful zero-tool connection and never waits for close", async 
   const dir = await dirs.make("mcp-empty-tools-");
   await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp" } } }));
   const network = vi.fn(() => { throw new Error("unexpected probe"); }); vi.stubGlobal("fetch", network);
-  const extension = createMcpExtension(async () => ({ async listTools() { return []; }, async callTool() {}, async close() { return new Promise<void>(() => {}); } }));
+  const extension = createMcpExtension(async () => ({ async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() {}, async close() { return new Promise<void>(() => {}); } }));
   await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent", workspaceDir: dir }) });
   const app = routeApp(); extension.registerRoutes(app);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -245,7 +245,7 @@ it("does not start tool discovery when connection finishes after the whole statu
     ? Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] })
     : new Promise<Response>((resolve) => { refresh = resolve; })));
   const list = vi.fn(async () => []);
-  const handle = { listTools: list, async callTool() {}, async close() {} };
+  const handle = { listTools: list, async readResource() { return { contents: [] }; }, async callTool() {}, async close() {} };
   let connected!: (client: typeof handle) => void;
   const extension = createMcpExtension(async () => new Promise<typeof handle>((resolve) => { connected = resolve; }));
   await extension.start({ credentials: host, getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent", workspaceDir: dir }) });
