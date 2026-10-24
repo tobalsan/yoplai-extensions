@@ -4,6 +4,29 @@ Connect an Yoplai agent to standard MCP servers declared in its `mcp.json`. Expo
 
 The agent's **My connections** tab lists your personal MCP OAuth connections and team availability. Disconnect deletes your credential immediately; the next request uses the team connection or asks you to connect. Provider revocation runs separately and cannot delay local removal.
 
+## MCP Apps
+
+Tool-serving connections always advertise the stable UI extension, `io.modelcontextprotocol/ui`, with `mimeTypes: ["text/html;profile=mcp-app"]`. The account-label client does not advertise it. No extra server configuration is needed. Older platforms ignore the additive fields and continue receiving raw tool results; a UI-aware server may choose its UI variant and must retain meaningful text.
+
+Discovery preserves tool `_meta`. A view uses `_meta.ui.resourceUri`, falling back to deprecated `_meta["ui/resourceUri"]`; only a valid `ui://` URI identifies a view. Visibility is separate: absent `_meta.ui.visibility` means `["model", "app"]`; malformed visibility permits only `"model"`. App-only helpers remain hidden even without a valid view. The full catalog is adapted before model filtering, preserving existing names and collision suffixes. Model tools carry `mcp: { server, tool, ui? }` with configured server and raw upstream tool names. This filters every model path fed by this extension, including deferred tools, tool search, codemode and container inventories. The platform's separate `capabilities.list` discovery requires ALG-544.
+
+The extension's optional host interface mirrors ALG-544 without importing platform types:
+
+```ts
+mcpApps.readResource({ agentId, userId?, signal? }, server, uri)
+  // Promise<{ contents: { uri, mimeType?, text?, blob?, _meta? }[] }>
+mcpApps.callTool({ agentId, userId?, signal? }, server, tool, args)
+  // Promise<Record<string, unknown>> — raw CallToolResult
+```
+
+Both operations resolve the current agent configuration and use the viewer's personal OAuth grant, or team grant when no personal grant exists. A personal grant requiring reconnect refuses without team fallback. Only enabled servers are reachable; resource requests go to the named server. App calls resolve the raw tool name in that server's current private catalog and require `"app"` visibility, including for tools without a view. There is no public catalog-list operation.
+
+One total deadline covers credentials/refresh, connection, catalog listing, auth recovery and request: 10 seconds for reads, 25 seconds for calls. Abort rejects immediately. No subsequent call or retry starts after abort/deadline; late connections close in the background. Cleanup never delays rejection. Raw resource contents, including CSP metadata, and raw tool results, including `structuredContent`, `_meta` and upstream `isError: true`, pass through unchanged.
+
+Host-side failures reject with `name: "McpAppsError"` and a string `reason`: `unknown_agent`, `unknown_server`, `unknown_tool`, `not_app_visible`, `not_connected`, `needs_reconnect`, `timeout`, `aborted` or `upstream`. Connection refusals include `authorizeUrl` when available. Upstream JSON-RPC failures reject as `upstream`; tool results with `isError: true` resolve normally.
+
+This slice provides MCP facts and operations only. HTML/CSP validation, resource caching, web view hosting, capture/history and relay routes belong to the platform; deploy this extension with or before ALG-544.
+
 ## Install
 
 ```bash

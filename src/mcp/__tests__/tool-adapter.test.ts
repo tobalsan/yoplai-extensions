@@ -12,6 +12,7 @@ describe("MCP tool adapter", () => {
           async listTools() {
             return [];
           },
+          async readResource() { return { contents: [] }; },
           async callTool(name, args) {
             return { content: [{ type: "text", text: name }], structuredContent: { args }, isError: true };
           },
@@ -24,6 +25,7 @@ describe("MCP tool adapter", () => {
       server: "github-main",
       name: "search/issues",
       description: "Search issues",
+      visibility: ["model" as const, "app" as const],
       inputSchema: {
         type: "object",
         properties: { q: { type: "string" } },
@@ -55,12 +57,14 @@ describe("MCP tool adapter", () => {
           server: "github-main",
           name: "search/issues",
           description: "Search issues",
+          visibility: ["model" as const, "app" as const],
           inputSchema: { type: "object" },
         },
         {
           server: "github_main",
           name: "search_issues",
           description: "Search issues again",
+          visibility: ["model" as const, "app" as const],
           inputSchema: { type: "object" },
         },
       ],

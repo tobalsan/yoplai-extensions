@@ -35,7 +35,8 @@ async function setup(servers: Record<string, Record<string, { url: string }>>) {
   const dataDir = await directory();
   const tokens = vi.fn((token: string | undefined) => token);
   const extension = createMcpExtension(async (server, token) => ({
-    async listTools() { return [{ server: server.name, name: "data", description: "Data", inputSchema: { type: "object" } }]; },
+    async listTools() { return [{ server: server.name, name: "data", description: "Data", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+    async readResource() { return { contents: [] }; },
     async callTool() { return tokens(token); }, async close() {},
   }));
   await extension.start({ credentials: host, getDataDir: () => dataDir, getConfig: () => ({}), getAgent: (id: string) => agents[id] });

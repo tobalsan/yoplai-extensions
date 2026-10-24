@@ -4,6 +4,8 @@
 
 ### Added
 
+- MCP Apps capability advertisement, preserved UI metadata and raw tool identity, app-only model filtering, and viewer-scoped `mcpApps` resource reads/tool calls with visibility checks, cancellation and total deadlines (ALG-543).
+
 - MCP server instructions from the initialize handshake reach the agent as `namespace.instructions` (capped at 4000 characters).
 
 - Google Drive native Slides authoring, guarded edits and PNG previews, local image import, PPTX text extraction, Office-to-native conversion and PDF export (ALG-517).

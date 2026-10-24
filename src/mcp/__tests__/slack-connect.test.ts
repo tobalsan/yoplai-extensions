@@ -46,7 +46,8 @@ async function configuredExtension(dir: string, host = credentials(), extra: Rec
   } }));
   const agent = { id: "agent-a", workspaceDir: dir, extensions: { mcp: { enabled: true } } };
   const extension = (await import("../index.js")).createMcpExtension(async (server, token) => ({
-    async listTools() { return [{ server: server.name, name: "search", description: "Search", inputSchema: { type: "object" } }]; },
+    async listTools() { return [{ server: server.name, name: "search", description: "Search", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+    async readResource() { return { contents: [] }; },
     async callTool() { return callTool ? callTool(token) : token ? { result: "ok" } : { connected: false, provider: "mcp", reason: "not_connected" }; },
     async close() {},
   }));

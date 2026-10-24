@@ -67,7 +67,7 @@ describe("McpClientManager", () => {
     const { SdkMcpClientHandle } = await import("../client-manager.js");
     const recover = vi.fn(async () => true);
     const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
-      clientFactory: SdkMcpClientHandle.connect, onAuthFailure: recover,
+      clientFactory: (server, token, options) => SdkMcpClientHandle.connect(server, token, false, options), onAuthFailure: recover,
     });
     await manager.connect();
     const pending = manager.invokeTool("local", "sleep", {}, { signal: controller.signal });
@@ -84,7 +84,7 @@ describe("McpClientManager", () => {
     controller.abort(reason);
     const callTool = vi.fn(async () => undefined);
     const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
-      clientFactory: async () => ({ async listTools() { return []; }, callTool, async close() {} }),
+      clientFactory: async () => ({ async listTools() { return []; }, async readResource() { return { contents: [] }; }, callTool, async close() {} }),
     });
     await manager.connect();
     await expect(manager.invokeTool("local", "sleep", {}, { signal: controller.signal })).rejects.toBe(reason);
@@ -97,7 +97,7 @@ describe("McpClientManager", () => {
   ])("does not recover an AbortError: %s", async (reason) => {
     const recover = vi.fn(async () => true);
     const manager = new McpClientManager([{ type: "stdio", name: "local", command: "node" }], {
-      clientFactory: async () => ({ async listTools() { return []; }, async callTool() { throw reason; }, async close() {} }),
+      clientFactory: async () => ({ async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() { throw reason; }, async close() {} }),
       onAuthFailure: recover,
     });
     await manager.connect();
@@ -110,7 +110,7 @@ describe("McpClientManager", () => {
     const reason = new Error("cancelled during refresh");
     const callTool = vi.fn(async () => { throw new Error("401 Unauthorized"); });
     const manager = new McpClientManager([{ type: "http", name: "local", url: "https://example.test/mcp" }], {
-      clientFactory: async () => ({ async listTools() { return []; }, callTool, async close() {} }),
+      clientFactory: async () => ({ async listTools() { return []; }, async readResource() { return { contents: [] }; }, callTool, async close() {} }),
       onAuthFailure: async () => { controller.abort(reason); return true; },
     });
     await manager.connect();
@@ -131,6 +131,7 @@ describe("McpClientManager", () => {
       {
         clientFactory: async () => ({
           async listTools() { throw error; },
+          async readResource() { return { contents: [] }; },
           async callTool() { throw error; },
           close,
         }),
@@ -163,10 +164,12 @@ describe("McpClientManager", () => {
                 server: server.name,
                 name: "echo",
                 description: "Echo input",
+                visibility: ["model" as const, "app" as const],
                 inputSchema: { type: "object", properties: { text: { type: "string" } } },
               },
             ];
           },
+          async readResource() { return { contents: [] }; },
           async callTool(name, args) {
             calls.push(`${server.name}:${name}`);
             return { args };
@@ -195,6 +198,7 @@ describe("McpClientManager", () => {
         async listTools() {
           throw new Error("discovery failed");
         },
+        async readResource() { return { contents: [] }; },
         async callTool() {
           return undefined;
         },
@@ -217,6 +221,7 @@ describe("McpClientManager", () => {
         async listTools() {
           throw new Error("discovery failed");
         },
+        async readResource() { return { contents: [] }; },
         async callTool() {
           return undefined;
         },
@@ -300,7 +305,7 @@ describe("McpClientManager", () => {
     const manager = new McpClientManager(
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
       {
-        clientFactory: async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
+        clientFactory: async () => ({ async listTools() { return [{ server: "claap", name: "search", description: "", visibility: ["model" as const, "app" as const], inputSchema: {} }]; }, async readResource() { return { contents: [] }; }, async callTool() { throw new Error("401 Unauthorized"); }, async close() {} }),
         onAuthFailure: async () => false,
         notConnectedResponse: (server) => ({ connected: false, server, reason: "needs_reconnect" }),
       }
@@ -327,8 +332,9 @@ describe("McpClientManager", () => {
       return {
         async listTools() {
           if (token === "expired-token" && phase === "listTools") throw error;
-          return [{ server: "claap", name: "search", description: "", inputSchema: {} }];
+          return [{ server: "claap", name: "search", description: "", visibility: ["model" as const, "app" as const], inputSchema: {} }];
         },
+        async readResource() { return { contents: [] }; },
         async callTool(_name, _args, options) {
           signals.push(options?.signal);
           if (token === "expired-token") throw error;
@@ -354,7 +360,7 @@ describe("McpClientManager", () => {
     }
     expect(manager.hasClient("claap")).toBe(true);
     await expect(manager.listTools()).resolves.toEqual([
-      { server: "claap", name: "search", description: "", inputSchema: {} },
+      { server: "claap", name: "search", description: "", visibility: ["model", "app"], inputSchema: {} },
     ]);
 
     await expect(manager.invokeTool("claap", "search", {}, { signal })).resolves.toEqual({ token: "fresh-token" });
@@ -370,7 +376,8 @@ describe("McpClientManager", () => {
   it("shares reconnect work across concurrent 401s", async () => {
     let token = "expired-token";
     const factory = vi.fn(async (_server, currentToken): Promise<McpClientHandle> => ({
-      async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+      async listTools() { return [{ server: "claap", name: "search", description: "", visibility: ["model" as const, "app" as const], inputSchema: {} }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() {
         if (currentToken === "expired-token") throw new Error("401 Unauthorized");
         return { token: currentToken };
@@ -405,7 +412,8 @@ describe("McpClientManager", () => {
       [{ type: "http", name: "claap", url: "https://api.claap.io/mcp" }],
       {
         clientFactory: async (): Promise<McpClientHandle> => ({
-          async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+          async listTools() { return [{ server: "claap", name: "search", description: "", visibility: ["model" as const, "app" as const], inputSchema: {} }]; },
+          async readResource() { return { contents: [] }; },
           callTool,
           close,
         }),
@@ -441,6 +449,7 @@ describe("McpClientManager", () => {
       {
         clientFactory: async (): Promise<McpClientHandle> => ({
           listTools,
+          async readResource() { return { contents: [] }; },
           async callTool() { return undefined; },
           close,
         }),
@@ -474,7 +483,8 @@ describe("McpClientManager", () => {
           connections += 1;
           if (connections === 2) throw error;
           return {
-            async listTools() { return [{ server: "claap", name: "search", description: "", inputSchema: {} }]; },
+            async listTools() { return [{ server: "claap", name: "search", description: "", visibility: ["model" as const, "app" as const], inputSchema: {} }]; },
+            async readResource() { return { contents: [] }; },
             async callTool() { throw error; },
             async close() {},
           };

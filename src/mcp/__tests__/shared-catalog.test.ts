@@ -32,7 +32,8 @@ async function setup(agentFiles: Record<string, unknown> = {}, catalog?: unknown
   const extension = createMcpExtension(async (server: { name: string }) => {
     started.push(server.name);
     return {
-      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerInfo: () => ({ title: "Reported", description: "Reported description" }),

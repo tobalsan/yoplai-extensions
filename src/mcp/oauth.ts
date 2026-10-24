@@ -52,11 +52,16 @@ function providerNameForIssuer(authorizationServerUrl: string): string | undefin
 }
 
 /** RFC 9728 lookup using the same SDK discovery as `begin()`; true when the resource lists authorization servers. */
-export async function hasProtectedResourceAuthServers(url: string): Promise<boolean> {
+export async function hasProtectedResourceAuthServers(url: string, signal?: AbortSignal): Promise<boolean> {
   try {
-    const metadata = await discoverOAuthProtectedResourceMetadata(url, undefined, oauthFetch);
+    const metadata = await discoverOAuthProtectedResourceMetadata(url, undefined, (input, init) => {
+      signal?.throwIfAborted();
+      return (signal ? fetch : oauthFetch)(input, { ...init, signal: signal && init?.signal ? AbortSignal.any([signal, init.signal]) : signal ?? init?.signal });
+    });
+    signal?.throwIfAborted();
     return (metadata.authorization_servers?.length ?? 0) > 0;
   } catch {
+    signal?.throwIfAborted();
     // Missing or malformed metadata gives no OAuth evidence.
     return false;
   }
@@ -135,7 +140,7 @@ const oauthFetch: typeof fetch = async (input, init) => {
 
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
-  private readonly refreshes = new Map<string, Promise<McpTokenResult>>();
+  private readonly refreshes = new Map<string, { promise: Promise<McpTokenResult>; controller: AbortController; waiters: number; totalDeadline: boolean }>();
   private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly hostProviders?: HostOAuthProviders) {}
@@ -352,16 +357,40 @@ export class McpOAuthStore {
 
   private async dedupedRefresh(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope, requesterUserId?: string, logPath: McpLogPath = "tools", statusOnly = false, statusSignal?: AbortSignal): Promise<McpTokenResult> {
     if (statusOnly) return this.refreshConnection(agent, server, connection, scope, requesterUserId, logPath, statusOnly, statusSignal);
+    statusSignal?.throwIfAborted();
     const key = JSON.stringify(this.key(agent, server, scope));
-    const activeRefresh = this.refreshes.get(key);
-    if (activeRefresh) return activeRefresh;
-
-    const refresh = this.refreshConnection(agent, server, connection, scope, requesterUserId, logPath, statusOnly, statusSignal);
-    this.refreshes.set(key, refresh);
+    let refresh = this.refreshes.get(key);
+    if (!refresh) {
+      const controller = new AbortController();
+      const promise = this.refreshConnection(agent, server, connection, scope, requesterUserId, logPath, false, controller.signal, Boolean(statusSignal));
+      const pending = { promise, controller, waiters: 0, totalDeadline: Boolean(statusSignal) };
+      refresh = pending;
+      this.refreshes.set(key, pending);
+      void promise.finally(() => {
+        controller.abort();
+        if (this.refreshes.get(key) === pending) this.refreshes.delete(key);
+      }).catch(() => {});
+    }
+    refresh.waiters++;
+    let onAbort: (() => void) | undefined;
     try {
-      return await refresh;
+      if (!statusSignal) {
+        if (!refresh.totalDeadline) return await refresh.promise;
+        return await withTimeout(refresh.promise, 10_000, "OAuth refresh timed out").catch(() => ({ reason: "refresh_failed" as const, scope: scope.type }));
+      }
+      return await Promise.race([
+        refresh.promise,
+        new Promise<never>((_resolve, reject) => {
+          onAbort = () => reject(statusSignal.reason);
+          statusSignal.addEventListener("abort", onAbort, { once: true });
+        }),
+      ]);
     } finally {
-      this.refreshes.delete(key);
+      if (onAbort) statusSignal?.removeEventListener("abort", onAbort);
+      if (--refresh.waiters === 0 && this.refreshes.get(key) === refresh) {
+        this.refreshes.delete(key);
+        refresh.controller.abort(statusSignal?.reason);
+      }
     }
   }
 
@@ -396,6 +425,7 @@ export class McpOAuthStore {
     logPath: McpLogPath = "tools",
     statusOnly = false,
     statusSignal?: AbortSignal,
+    totalDeadline = false,
   ): Promise<McpTokenResult> {
     const expired = (): McpTokenResult => ({ reason: "refresh_failed", scope: scope.type, error: { category: "timeout", message: "MCP server status timed out" } });
     // An account label written meanwhile is not a competing grant: compare without it and keep it on save.
@@ -411,11 +441,17 @@ export class McpOAuthStore {
       return { reason: "needs_reconnect", scope: scope.type };
     }
     try {
-      const tokens = await withTimeout((async () => {
-        const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl);
+      const fetchFn: typeof fetch = (input, init) => {
         statusSignal?.throwIfAborted();
-        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token! });
-      })(), 10_000, "OAuth refresh timed out");
+        const signal = statusSignal && init?.signal ? AbortSignal.any([statusSignal, init.signal]) : statusSignal ?? init?.signal;
+        return fetch(input, { ...init, signal });
+      };
+      const refreshing = (async () => {
+        const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl, { fetchFn });
+        statusSignal?.throwIfAborted();
+        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token!, fetchFn });
+      })();
+      const tokens = await (totalDeadline ? refreshing : withTimeout(refreshing, 10_000, "OAuth refresh timed out"));
       const latest = await unchanged();
       if (statusSignal?.aborted) return expired();
       if (!latest) return { reason: "not_connected", scope: scope.type };

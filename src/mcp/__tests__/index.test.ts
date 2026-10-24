@@ -64,7 +64,8 @@ describe("mcp extension", () => {
     );
 
     const mockedExtension = createMcpExtension(async () => ({
-      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
     }));
@@ -151,10 +152,12 @@ describe("mcp extension", () => {
               server: server.name,
               name: "echo",
               description: "Echo input",
+              visibility: ["model" as const, "app" as const],
               inputSchema: { type: "object", properties: { text: { type: "string" } } },
             },
           ];
         },
+        async readResource() { return { contents: [] }; },
         callTool,
         async close() {},
       };
@@ -191,7 +194,8 @@ describe("mcp extension", () => {
       local: { ...transport, displayName: "  Config title  ", description: "  Config description  " },
     } }));
     const mockedExtension = createMcpExtension(async () => ({
-      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerInfo: () => ({ title: "Reported title", description: "Reported description" }),
@@ -209,7 +213,8 @@ describe("mcp extension", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
     fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node" } } }));
     const mockedExtension = createMcpExtension(async () => ({
-      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getInstructions: () => "Use X for Y",
@@ -232,7 +237,8 @@ describe("mcp extension", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-labels-"));
     fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { local: { command: "node", ...labels } } }));
     const mockedExtension = createMcpExtension(async () => ({
-      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerInfo: () => info,
@@ -253,7 +259,8 @@ describe("mcp extension", () => {
       local: { command: "node", ...(source === "config" ? { description: ` ${longDescription} ` } : {}) },
     } }));
     const mockedExtension = createMcpExtension(async () => ({
-      async listTools() { return [{ server: "local", name: "ping", description: "Ping", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
       getServerInfo: () => ({ description: longDescription }),
@@ -283,7 +290,8 @@ describe("mcp extension", () => {
     });
     const callTool = vi.fn(async (_name: string, args: unknown) => args);
     const factory = vi.fn(async () => ({
-      async listTools() { return [{ server: "local", name: "echo", description: "Echo", inputSchema: { type: "object" } }]; },
+      async listTools() { return [{ server: "local", name: "echo", description: "Echo", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+      async readResource() { return { contents: [] }; },
       callTool, async close() {},
     }));
     const mockedExtension = createMcpExtension(factory);
@@ -308,6 +316,7 @@ describe("mcp extension", () => {
       async listTools() {
         return [];
       },
+      async readResource() { return { contents: [] }; },
       async callTool(_name, args) {
         return args;
       },
@@ -343,7 +352,8 @@ describe("mcp extension", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-names-"));
     const configPath = path.join(agentDir, "mcp.json");
     const factory = vi.fn(async () => ({
-      async listTools() { return ["ping", "ping!"].map((name) => ({ server: key, name, description: "Ping", inputSchema: { type: "object" } })); },
+      async listTools() { return ["ping", "ping!"].map((name) => ({ server: key, name, description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } })); },
+      async readResource() { return { contents: [] }; },
       async callTool() { return "pong"; },
       async close() {},
     }));
@@ -389,10 +399,12 @@ describe("mcp extension", () => {
               server: server.name,
               name: "echo",
               description: "Echo input",
+              visibility: ["model" as const, "app" as const],
               inputSchema: { type: "object" },
             },
           ];
         },
+        async readResource() { return { contents: [] }; },
         async callTool(_name, args) {
           return args;
         },
@@ -430,7 +442,7 @@ describe("mcp extension", () => {
     const connect = vi.fn();
     const mockedExtension = createMcpExtension(async (server) => {
       connect(server);
-      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+      return { async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() { return undefined; }, async close() {} };
     });
 
     await mockedExtension.getAgentTools(
@@ -458,7 +470,7 @@ describe("mcp extension", () => {
     const { createMcpExtension: createFreshExtension } = await loadFreshModule();
     const mockedExtension = createFreshExtension(async (server) => {
       connect(server);
-      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+      return { async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() { return undefined; }, async close() {} };
     });
     const agent = { id: "casey", workspaceDir: agentDir, extensions: { mcp: { enabled: true } } };
     const context = { config: { extensions: {} } };
@@ -490,7 +502,7 @@ describe("mcp extension", () => {
     const { createMcpExtension: createFreshExtension } = await loadFreshModule();
     const mockedExtension = createFreshExtension(async (server) => {
       connect(server);
-      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+      return { async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() { return undefined; }, async close() {} };
     });
 
     await mockedExtension.getAgentTools(
@@ -517,7 +529,7 @@ describe("mcp extension", () => {
     const connect = vi.fn();
     const mockedExtension = createMcpExtension(async (server) => {
       connect(server);
-      return { async listTools() { return []; }, async callTool() { return undefined; }, async close() {} };
+      return { async listTools() { return []; }, async readResource() { return { contents: [] }; }, async callTool() { return undefined; }, async close() {} };
     });
 
     await mockedExtension.getAgentTools(
@@ -550,10 +562,12 @@ describe("mcp extension", () => {
               server: server.name,
               name: "echo",
               description: "Echo input",
+              visibility: ["model" as const, "app" as const],
               inputSchema: { type: "object" },
             },
           ];
         },
+        async readResource() { return { contents: [] }; },
         async callTool(_name, args) {
           return args;
         },
@@ -595,10 +609,12 @@ describe("mcp extension", () => {
               server: server.name,
               name: "echo",
               description: "Echo input",
+              visibility: ["model" as const, "app" as const],
               inputSchema: { type: "object" },
             },
           ];
         },
+        async readResource() { return { contents: [] }; },
         async callTool(_name, args) {
           return args;
         },
@@ -631,7 +647,8 @@ it("publishes generic MCP result fields and preserves rich success and error dat
     { type: "resource", resource: { uri: "fixture://1", text: "data" } },
   ], structuredContent: { deal: { org_id: 9 } }, _meta: { trace: "fixture" } };
   const extension = createMcpExtension(async () => ({
-    async listTools() { return ["success", "failure"].map((name) => ({ server: "fixture", name, description: name, inputSchema: { type: "object" } })); },
+    async listTools() { return ["success", "failure"].map((name) => ({ server: "fixture", name, description: name, visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } })); },
+    async readResource() { return { contents: [] }; },
     async callTool(name) { return name === "failure" ? { ...fixture, isError: true } : fixture; },
     async close() {},
   }));
@@ -655,7 +672,8 @@ it("marks the manager's reconnect fallback as an error while retaining refusal d
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-reconnect-"));
   fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "node" } } }));
   const extension = createMcpExtension(async () => ({
-    async listTools() { return [{ server: "fixture", name: "read", description: "Read", inputSchema: { type: "object" } }]; },
+    async listTools() { return [{ server: "fixture", name: "read", description: "Read", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
+    async readResource() { return { contents: [] }; },
     async callTool() { throw new Error("401 Unauthorized"); },
     async close() {},
   }));
@@ -677,7 +695,8 @@ it("marks a connected OAuth tool's unavailable response as an error", async () =
   });
   let available = true;
   const extension = createMcpExtension(async () => ({
-    async listTools() { return available ? [{ server: "local", name: "read", description: "Read", inputSchema: { type: "object" } }] : []; },
+    async listTools() { return available ? [{ server: "local", name: "read", description: "Read", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }] : []; },
+    async readResource() { return { contents: [] }; },
     async callTool() { return { content: [{ type: "text", text: "OK" }] }; },
     async close() {},
   }));
