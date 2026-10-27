@@ -222,6 +222,57 @@ describe("ZendeskClient", () => {
 describe("Zendesk Help Center", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("reports upload 422 validation details without claiming missing Help Center rights", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ error: "Invalid image content" }, { status: 422 }));
+    const result = new ZendeskClient(baseOptions).uploadArticleAttachment({ articleId: 7, fileName: "bad.png", mimeType: "image/png", bytes: new Uint8Array([0]) });
+    await expect(result).rejects.toBeInstanceOf(ZendeskValidationError);
+    await expect(result).rejects.toThrow(/Invalid image content/);
+    await expect(result).rejects.not.toThrow(/Help Center rights/);
+  });
+
+  it.each([403, 404])("preserves upload error mapping for status %i", async (status) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ error: status === 403 ? "Forbidden" : "Missing article" }, { status }));
+    const result = new ZendeskClient(baseOptions).uploadArticleAttachment({ articleId: 7, fileName: "diagram.png", mimeType: "image/png", bytes: new Uint8Array([1]) });
+    if (status === 403) await expect(result).rejects.toThrow(/connected user lacks Help Center rights.*Guide admin.*Forbidden/);
+    else await expect(result).rejects.toBeInstanceOf(ZendeskNotFoundError);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an upload during Retry-After and permits a subsequent upload", async () => {
+    const controller = new AbortController();
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Rate limited", { status: 429, headers: { "retry-after": "30" } }))
+      .mockResolvedValueOnce(Response.json({ article_attachment: { id: 20, content_url: "https://example.test/20", file_name: "diagram.png", size: 1 } }));
+    const client = new ZendeskClient(baseOptions);
+    const input = { articleId: 7, fileName: "diagram.png", mimeType: "image/png", bytes: new Uint8Array([1]) };
+    const pending = client.uploadArticleAttachment(input, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await expect(client.uploadArticleAttachment(input)).resolves.toEqual({ attachment: { id: 20, contentUrl: "https://example.test/20", fileName: "diagram.png", size: 1 } });
+  });
+
+  it("uploads an inline image as multipart with its filename, MIME type and bytes", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ article_attachment: {
+      id: 19, content_url: "https://acme.zendesk.com/hc/article_attachments/19", file_name: "diagram.png", size: 4, inline: true, content_type: "image/png",
+    } }, { status: 201 }));
+    const result = await new ZendeskClient(baseOptions).uploadArticleAttachment({ articleId: 7, fileName: "diagram.png", mimeType: "image/png", bytes: new Uint8Array([137, 80, 0, 255]) });
+    expect(result).toEqual({ attachment: { id: 19, contentUrl: "https://acme.zendesk.com/hc/article_attachments/19", fileName: "diagram.png", size: 4 } });
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://acme.zendesk.com/api/v2/help_center/articles/7/attachments.json");
+    const request = fetchSpy.mock.calls[0]?.[1];
+    expect(request?.method).toBe("POST");
+    expect(request?.headers).toMatchObject({ Authorization: expectedAuth });
+    expect(new Headers(request?.headers).has("content-type")).toBe(false);
+    const form = request?.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get("inline")).toBe("true");
+    const file = form.get("file") as File;
+    expect(file.name).toBe("diagram.png");
+    expect(file.type).toBe("image/png");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([137, 80, 0, 255]));
+  });
+
   it("lists compact sections with sideloaded category names and cursor pagination", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       sections: [{ id: 10, name: "Getting started", source_locale: "en-us", category_id: 5, description: "Large" }],
