@@ -314,6 +314,23 @@ describe("Zendesk Help Center", () => {
     await expect(new ZendeskClient(baseOptions).createArticle({ sectionId: 10, title: "Start", body: "<p>Start</p>", locale: "en-us", draft: false, permissionGroupId: 42 })).rejects.toThrow(/connected user lacks Help Center rights.*create, edit, or publish.*permission group.*draft: true.*Publishing denied/);
   });
 
+  it.each([403, 422])("explains Help Center rights when an article update returns %i", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Publishing denied" }), { status }));
+    await expect(new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "en-us", draft: false })).rejects.toThrow(/connected user lacks Help Center rights.*Publishing denied/);
+  });
+
+  it("keeps the authentication error for a 403 on a ticket update", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 }));
+    const result = new ZendeskClient(baseOptions).updateTicket({ ticketId: 7, status: "pending" });
+    await expect(result).rejects.toBeInstanceOf(ZendeskAuthError);
+    await expect(result).rejects.not.toThrow(/Help Center rights/);
+  });
+
+  it("does not use the Help Center rights error for a 422 on a ticket update", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Invalid status" }), { status: 422 }));
+    await expect(new ZendeskClient(baseOptions).updateTicket({ ticketId: 7, status: "pending" })).rejects.not.toThrow(/Help Center rights/);
+  });
+
   it("archives a draft article with GET then an empty 204 DELETE", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({ article: { id: 7, title: "Old draft", draft: true } })))
@@ -328,6 +345,15 @@ describe("Zendesk Help Center", () => {
     await expect(new ZendeskClient(baseOptions).archiveArticle({ articleId: 7 })).rejects.toThrow(/published.*Only draft articles can be archived.*Guide admin/);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+
+  it.each([
+    ["null", { id: 7, title: "Unknown", draft: null }],
+    ["absent", { id: 7, title: "Unknown" }],
+  ])("refuses to archive an article with a %s draft state and sends no DELETE", async (_label, article) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ article })));
+    await expect(new ZendeskClient(baseOptions).archiveArticle({ articleId: 7 })).rejects.toThrow(/Only draft articles can be archived/);
+    expect(fetchSpy.mock.calls.map((call) => call[1]?.method)).toEqual(["GET"]);
   });
 
   it("maps a 403 on the GET to the Help Center rights error", async () => {

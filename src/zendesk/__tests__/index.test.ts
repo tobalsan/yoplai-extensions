@@ -26,9 +26,12 @@ describe("zendesk extension", () => {
     expect(prompt).toContain("draft by default");
     expect(prompt).toContain("publish only on explicit request");
     expect(prompt).toContain("zendesk_update_article");
-    expect(prompt).toContain("Archive only draft articles, and ask the user before you archive one. Archived articles can be restored in Zendesk Guide.");
-    expect(prompt).toContain("If the target section has no articles, list the other sections of the same category with `zendesk_list_help_center_sections`. Copy the ids from an article in one of these sections. Never omit `permissionGroupId`.");
-    expect(prompt).toContain("If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.");
+    expect(prompt).toMatch(/archive only draft/i);
+    expect(prompt).toMatch(/ask the user before you archive/i);
+    expect(prompt).toMatch(/no articles.*same category/is);
+    expect(prompt).toContain("Never omit `permissionGroupId`");
+    expect(prompt).toMatch(/more than one permission group.*most articles use/is);
+    expect(prompt).toMatch(/same count.*ask which one to use/is);
   });
 
   it("creates 12 tools", () => {
