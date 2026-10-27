@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZendeskClient } from "../client.js";
+import { CreateArticleParamsSchema } from "../models.js";
 import {
   ZendeskAuthError,
   ZendeskNotFoundError,
@@ -216,4 +217,107 @@ describe("ZendeskClient", () => {
     expect(String(fetchSpy.mock.calls[0]?.[0])).toMatch(/^https:\/\/acme\.zendesk\.com\/api\/v2\/tickets\.json/);
     expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer tok" });
   });
+});
+
+describe("Zendesk Help Center", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("lists compact sections with sideloaded category names and cursor pagination", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      sections: [{ id: 10, name: "Getting started", source_locale: "en-us", category_id: 5, description: "Large" }],
+      categories: [{ id: 5, name: "Documentation" }],
+      meta: { after_cursor: "next", has_more: true },
+    })));
+    const result = await new ZendeskClient(baseOptions).listHelpCenterSections({ pageSize: 20, pageCursor: "before" });
+    expect(result).toEqual({ sections: [{ id: 10, name: "Getting started", sourceLocale: "en-us", categoryId: 5, categoryName: "Documentation" }], nextPageCursor: "next", hasMore: true });
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/sections.json?page%5Bsize%5D=20&include=categories&page%5Bafter%5D=before");
+  });
+  it("narrows section discovery to one category", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ sections: [], categories: [], meta: { has_more: false } })));
+    expect(await new ZendeskClient(baseOptions).listHelpCenterSections({ categoryId: 5 })).toEqual({ sections: [], nextPageCursor: undefined, hasMore: false });
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/categories/5/sections.json?page%5Bsize%5D=100&include=categories");
+  });
+
+  it("lists compact articles in one section including permissions and visibility", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      articles: [{ id: 7, title: "Start", locale: "en-us", draft: true, html_url: "https://acme.zendesk.com/hc/en-us/articles/7", permission_group_id: 42, user_segment_id: null, label_names: ["setup"], body: "<p>Large</p>", section_id: 10 }],
+      meta: { after_cursor: "next", has_more: true },
+    })));
+    const result = await new ZendeskClient(baseOptions).listArticles({ sectionId: 10, pageSize: 30, pageCursor: "before" });
+    expect(result).toEqual({ articles: [{ id: 7, title: "Start", locale: "en-us", draft: true, htmlUrl: "https://acme.zendesk.com/hc/en-us/articles/7", permissionGroupId: 42, userSegmentId: null, labelNames: ["setup"], sectionId: 10 }], nextPageCursor: "next", hasMore: true });
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("GET");
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/sections/10/articles.json?page%5Bsize%5D=30&page%5Bafter%5D=before");
+  });
+
+  it("requires the article destination and content and defaults new articles to draft", () => {
+    const input = { sectionId: 10, title: "Start", body: "<p>Start</p>", locale: "en-us" };
+    expect(CreateArticleParamsSchema.parse(input)).toEqual({ ...input, draft: true });
+    for (const field of ["sectionId", "title", "body", "locale"]) {
+      const missing: Record<string, unknown> = { ...input };
+      delete missing[field];
+      expect(CreateArticleParamsSchema.safeParse(missing).success, field).toBe(false);
+    }
+  });
+
+  it("creates a draft with root notification control and omits an unset user segment", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ article: { id: 7, title: "Start", locale: "en-us", draft: true, section_id: 10, permission_group_id: 42, user_segment_id: null, label_names: ["setup"], html_url: "https://acme.zendesk.com/hc/en-us/articles/7", body: "<p>Start</p>" } }), { status: 201 }));
+    const result = await new ZendeskClient(baseOptions).createArticle({ sectionId: 10, title: "Start", body: "<p>Start</p>", locale: "en-us", labelNames: ["setup"], permissionGroupId: 42, notifySubscribers: false });
+    expect(result).toEqual({ article: { id: 7, title: "Start", locale: "en-us", draft: true, sectionId: 10, permissionGroupId: 42, userSegmentId: null, labelNames: ["setup"], htmlUrl: "https://acme.zendesk.com/hc/en-us/articles/7" } });
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/sections/10/articles.json");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({ article: { title: "Start", body: "<p>Start</p>", locale: "en-us", label_names: ["setup"], permission_group_id: 42, draft: true }, notify_subscribers: false });
+  });
+
+  it("revises title, HTML and publication through the locale translation only", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ translation: { id: 999, source_id: 7, title: "Revised", locale: "fr", draft: false, html_url: "https://acme.zendesk.com/hc/fr/articles/7", body: "<p>Revised</p>" } })));
+    const result = await new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "fr", title: "Revised", body: "<p>Revised</p>", draft: false });
+    expect(result).toEqual({ article: { id: 7, title: "Revised", locale: "fr", draft: false, htmlUrl: "https://acme.zendesk.com/hc/fr/articles/7" } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/articles/7/translations/fr.json");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({ translation: { title: "Revised", body: "<p>Revised</p>", draft: false } });
+  });
+
+  it("changes labels through article metadata only", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ article: { id: 7, title: "Start", locale: "en-us", draft: true, label_names: [], html_url: "https://acme.zendesk.com/hc/en-us/articles/7", section_id: 10, permission_group_id: 42, user_segment_id: 6, body: "large" } })));
+    expect(await new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "en-us", labelNames: [] })).toEqual({ article: { id: 7, title: "Start", locale: "en-us", draft: true, labelNames: [], htmlUrl: "https://acme.zendesk.com/hc/en-us/articles/7", sectionId: 10, permissionGroupId: 42, userSegmentId: 6 } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/articles/7.json");
+    expect(fetchSpy.mock.calls[0]?.[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({ article: { label_names: [] } });
+  });
+
+  it("combines translation changes with labels while returning translation presentation", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ translation: { id: 999, source_id: 88, title: "Revised", locale: "fr", draft: false, html_url: "https://acme.zendesk.com/hc/fr/articles/7" } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ article: { id: 7, title: "Stale English title", locale: "en-us", draft: true, html_url: "https://acme.zendesk.com/hc/en-us/articles/7", section_id: 10, permission_group_id: 42, user_segment_id: null, label_names: ["edited"] } })));
+    expect(await new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "fr", title: "Revised", draft: false, labelNames: ["edited"] })).toEqual({ article: { id: 7, title: "Revised", locale: "fr", draft: false, htmlUrl: "https://acme.zendesk.com/hc/fr/articles/7", sectionId: 10, permissionGroupId: 42, userSegmentId: null, labelNames: ["edited"] } });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/articles/7/translations/fr.json");
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toBe("https://acme.zendesk.com/api/v2/help_center/articles/7.json");
+    expect(fetchSpy.mock.calls[1]?.[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body))).toEqual({ translation: { title: "Revised", draft: false } });
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toEqual({ article: { label_names: ["edited"] } });
+  });
+
+  it("reports a saved translation when the subsequent label update fails", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ translation: { title: "Saved", locale: "en-us", draft: true } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Labels unavailable on this plan" }), { status: 400 }));
+    await expect(new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "en-us", title: "Saved", labelNames: ["edited"] })).rejects.toThrow(/Article 7 translation.*saved.*labels.*failed.*Labels unavailable/);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([403, 422])("explains Help Center write rights for status %i", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Publishing denied" }), { status }));
+    await expect(new ZendeskClient(baseOptions).createArticle({ sectionId: 10, title: "Start", body: "<p>Start</p>", locale: "en-us", draft: false, permissionGroupId: 42 })).rejects.toThrow(/connected user lacks Help Center rights.*create, edit, or publish.*permission group.*draft: true.*Publishing denied/);
+  });
+
+  it("rejects an article update without fields before sending a request", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected HTTP request"));
+    await expect(new ZendeskClient(baseOptions).updateArticle({ articleId: 7, locale: "en-us" })).rejects.toThrow("update_article needs at least one field to change");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
 });

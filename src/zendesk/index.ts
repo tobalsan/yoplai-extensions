@@ -1,6 +1,13 @@
 import { ZendeskClient } from "./client.js";
 import {
   AddInternalNoteParamsSchema,
+  ArticleResultSchema,
+  CreateArticleParamsSchema,
+  ListHelpCenterSectionsParamsSchema,
+  ListHelpCenterSectionsResultSchema,
+  ListArticlesParamsSchema,
+  ListArticlesResultSchema,
+  UpdateArticleParamsSchema,
   GetTicketParamsSchema,
   GetTicketResultSchema,
   SearchTicketsResultSchema,
@@ -38,7 +45,7 @@ const zendeskOAuthProvider: OAuthProviderDescriptor = {
 export default defineToolExtension({
   id: "zendesk",
   displayName: "Zendesk",
-  description: "Zendesk extension for reading, searching, and triaging tickets, and adding internal notes.",
+  description: "Zendesk extension for reading, searching, and triaging tickets, adding internal notes, and creating and revising Help Center articles.",
   systemPrompt: `Use this extension to read, search, and triage Zendesk support tickets and add internal notes.
 
 For ticket lists, use pageSize up to 100 and pageCursor from the prior response. Results are newest first by default; pass sort to override (id, -id, updated_at, -updated_at, status, -status). Ticket searches use offset pagination and optional sort. Group listings use cursor pagination; pass groupId when listing one team's agents.
@@ -51,8 +58,15 @@ Common workflows:
 - To inspect a specific ticket including its conversation, use zendesk_get_ticket — comments are merged into the response.
 - To triage, read the ticket first with zendesk_get_ticket, then apply changes with zendesk_update_ticket and record your reasoning with zendesk_add_internal_note.
 
+Help Center workflow:
+- Use zendesk_list_help_center_sections to choose a section id and its source locale, then zendesk_list_articles for that section to copy permissionGroupId and userSegmentId. Never guess these ids; omit userSegmentId for public visibility.
+- Create an article with zendesk_create_article as a draft by default, using the section's source locale and an HTML body. Set notifySubscribers: false to avoid notifying subscribers. Review the draft, then revise with zendesk_update_article; publish only on explicit request by setting draft: false. Publishing requires the connected user's rights in the permission group.
+- If the target section has no articles, list the other sections of the same category with \`zendesk_list_help_center_sections\`. Copy the ids from an article in one of these sections. Never omit \`permissionGroupId\`.
+- If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.
+- Existing OAuth connections must reconnect to grant the Help Center scopes. If a tool requests reconnection, share its connect link.
+
 Notes:
-- This extension cannot create or delete tickets, and cannot post public replies to requesters.
+- Tickets cannot be created or deleted, and public replies to requesters are not supported. Help Center articles can be created and revised.
 - Assignee and group ids are numeric Zendesk ids. Look them up with zendesk_list_groups / zendesk_list_agents; never guess them.
 - Ticket ids are numeric.
 - In oauth mode the requester's connected Zendesk account is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
@@ -62,7 +76,7 @@ Notes:
   oauthHiddenFields: ["mode", "subdomain", "email", "apiKey", "timeoutMs"],
   oauthProviders: [zendeskOAuthProvider],
   oauth: (config) =>
-    config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read", "tickets:write"] } : undefined,
+    config.merged.mode !== "api_key" ? { provider: "zendesk", scopes: ["read", "tickets:write", "hc:read", "hc:write"] } : undefined,
   createTools(config) {
     const resolved = ZendeskConfigSchema.parse(config.merged);
     const oauth = config.oauth;
@@ -126,6 +140,34 @@ Notes:
         description: "List agents and admins (assignable users) with their ids; pass groupId to list one team's members.",
         parameters: ListAgentsParamsSchema,
         execute: async (params) => (client ? client.listAgents(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "list_help_center_sections",
+        description: "List Help Center sections with category names and source locales. Optionally filter by categoryId; follow nextPageCursor across pages.",
+        parameters: ListHelpCenterSectionsParamsSchema,
+        outputSchema: ListHelpCenterSectionsResultSchema,
+        execute: async (params) => (client ? client.listHelpCenterSections(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "list_articles",
+        description: "List articles in a Help Center section without bodies. Copy permissionGroupId and userSegmentId from these articles when creating an article; never guess them.",
+        parameters: ListArticlesParamsSchema,
+        outputSchema: ListArticlesResultSchema,
+        execute: async (params) => (client ? client.listArticles(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "create_article",
+        description: "Create a Help Center article from a title and HTML body, as a draft by default. Use the section's source locale from zendesk_list_help_center_sections. Always copy permissionGroupId and visibility from existing articles. Publish only on explicit request and with publishing rights.",
+        parameters: CreateArticleParamsSchema,
+        outputSchema: ArticleResultSchema,
+        execute: async (params) => (client ? client.createArticle(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "update_article",
+        description: "Revise a Help Center article after review: change title, HTML body, draft state, or labels. Only passed fields change. Publish only on explicit request; publishing requires rights in the permission group. Reports partial success if labels fail after the translation changes.",
+        parameters: UpdateArticleParamsSchema,
+        outputSchema: ArticleResultSchema,
+        execute: async (params) => (client ? client.updateArticle(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
     ];
   },

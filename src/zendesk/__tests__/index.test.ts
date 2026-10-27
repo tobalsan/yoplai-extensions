@@ -19,16 +19,25 @@ describe("zendesk extension", () => {
     expect(prompt).toContain("read the ticket first");
     expect(prompt).toContain("never guess them");
     expect(prompt).toContain("share the connect link it returns");
+    expect(extension.description).toContain("Help Center articles");
+    expect(prompt).toContain("zendesk_list_help_center_sections");
+    expect(prompt).toContain("zendesk_list_articles");
+    expect(prompt).toContain("source locale");
+    expect(prompt).toContain("draft by default");
+    expect(prompt).toContain("publish only on explicit request");
+    expect(prompt).toContain("zendesk_update_article");
+    expect(prompt).toContain("If the target section has no articles, list the other sections of the same category with `zendesk_list_help_center_sections`. Copy the ids from an article in one of these sections. Never omit `permissionGroupId`.");
+    expect(prompt).toContain("If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.");
   });
 
-  it("creates 7 tools", () => {
+  it("creates 11 tools", () => {
     const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { subdomain: "acme", email: "agent@acme.com", apiKey: "secret" },
     });
 
-    expect(tools).toHaveLength(7);
+    expect(tools).toHaveLength(11);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_tickets",
       "search_tickets",
@@ -37,6 +46,10 @@ describe("zendesk extension", () => {
       "add_internal_note",
       "list_groups",
       "list_agents",
+      "list_help_center_sections",
+      "list_articles",
+      "create_article",
+      "update_article",
     ]);
   });
 
@@ -84,7 +97,7 @@ describe("zendesk extension modes", () => {
 
   it("declares an oauth requirement unless mode is api_key (oauth is the default)", () => {
     const oauth = extension.oauth as (config: { global: object; agent: object; merged: object }) => unknown;
-    const requirement = { provider: "zendesk", scopes: ["read", "tickets:write"] };
+    const requirement = { provider: "zendesk", scopes: ["read", "tickets:write", "hc:read", "hc:write"] };
     expect(oauth({ global: {}, agent: {}, merged: { mode: "oauth" } })).toEqual(requirement);
     expect(oauth({ global: {}, agent: {}, merged: {} })).toEqual(requirement);
     expect(oauth({ global: {}, agent: {}, merged: { mode: "api_key" } })).toBeUndefined();
@@ -113,6 +126,23 @@ describe("zendesk extension modes", () => {
     expect((fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
   });
 
+  it("creates a Help Center draft with existing API-key credentials", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ article: { id: 21, title: "Setup", locale: "en-us", draft: true, html_url: "https://acme.zendesk.com/hc/en-us/articles/21", body: "<p>Steps</p>" } }), { status: 201 }),
+    );
+    const { tools, resolveOAuth } = await mount({ mode: "api_key", subdomain: "acme", email: "a@b.co", apiKey: "k" });
+    const tool = tools.find((tool) => tool.name === "zendesk_create_article")!;
+    expect(await tool.execute({ sectionId: 10, title: "Setup", body: "<p>Steps</p>", locale: "en-us", permissionGroupId: 30, notifySubscribers: false }, {})).toEqual({
+      article: { id: 21, title: "Setup", locale: "en-us", draft: true, htmlUrl: "https://acme.zendesk.com/hc/en-us/articles/21" },
+    });
+    expect(resolveOAuth).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Basic YUBiLmNvL3Rva2VuOms=" });
+    expect(JSON.parse(fetchSpy.mock.calls[0]?.[1]?.body as string)).toEqual({
+      article: { title: "Setup", body: "<p>Steps</p>", locale: "en-us", permission_group_id: 30, draft: true },
+      notify_subscribers: false,
+    });
+  });
+
   it("oauth mode returns the structured not-connected result for every tool", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { tools } = await mount({ mode: "oauth" }, {
@@ -130,6 +160,10 @@ describe("zendesk extension modes", () => {
       [tools[4], { ticketId: 1, body: "note" }],
       [tools[5], {}],
       [tools[6], { groupId: 1 }],
+      [tools[7], {}],
+      [tools[8], { sectionId: 10 }],
+      [tools[9], { sectionId: 10, title: "Setup", body: "<p>Steps</p>", locale: "en-us" }],
+      [tools[10], { articleId: 20, locale: "en-us", draft: false }],
     ] as const) {
       expect(await tool.execute(params, {})).toEqual({
         isError: true,
@@ -143,6 +177,25 @@ describe("zendesk extension modes", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["insufficient_scope", "needs_reconnect"])("Help Center tools preserve %s and the reconnect link", async (reason) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const refusal = {
+      connected: false,
+      provider: "zendesk",
+      reason,
+      message: "Reconnect Zendesk to grant Help Center scopes",
+      authorizeUrl: "https://gw/api/oauth/zendesk/authorize?agent=a1",
+    };
+    const { tools } = await mount({}, refusal);
+    for (const tool of tools.filter((tool) => [
+      "zendesk_list_help_center_sections", "zendesk_list_articles", "zendesk_create_article", "zendesk_update_article",
+    ].includes(tool.name))) {
+      expect(await tool.execute({}, {})).toEqual({ isError: true, ...refusal });
+      expect(tool.outputSchema).toHaveProperty("type", "object");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("oauth mode calls the API with the bearer token and apiBaseUrl when connected", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ tickets: [] }), { status: 200 }),
@@ -151,13 +204,13 @@ describe("zendesk extension modes", () => {
       connected: true,
       provider: "zendesk",
       accessToken: "tok",
-      scopes: ["read", "tickets:write"],
+      scopes: ["read", "tickets:write", "hc:read", "hc:write"],
       apiBaseUrl: "https://acme.zendesk.com",
     });
     await tools[0].execute({}, { userId: "alice" });
     expect(resolveOAuth).toHaveBeenLastCalledWith(
       agent,
-      { provider: "zendesk", scopes: ["read", "tickets:write"] },
+      { provider: "zendesk", scopes: ["read", "tickets:write", "hc:read", "hc:write"] },
       "alice",
     );
     expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("https://acme.zendesk.com/api/v2/tickets.json");
