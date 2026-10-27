@@ -4,7 +4,7 @@
 
 ### Added
 
-- Zendesk Help Center section/article discovery, draft creation, revisions, labels, and explicit publishing (ALG-554). Existing OAuth connections must reconnect to grant the Help Center scopes; API-key connections are unchanged.
+- Zendesk Help Center section/article discovery, draft creation, revisions, labels, explicit publishing, and draft-only archiving (ALG-554). Existing OAuth connections must reconnect to grant the Help Center scopes; API-key connections are unchanged.
 
 - MCP Apps capability advertisement, preserved UI metadata and raw tool identity, app-only model filtering, and viewer-scoped `mcpApps` resource reads/tool calls with visibility checks, cancellation and total deadlines (ALG-543).
 

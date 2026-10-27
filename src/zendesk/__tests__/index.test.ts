@@ -26,18 +26,19 @@ describe("zendesk extension", () => {
     expect(prompt).toContain("draft by default");
     expect(prompt).toContain("publish only on explicit request");
     expect(prompt).toContain("zendesk_update_article");
+    expect(prompt).toContain("Archive only draft articles, and ask the user before you archive one. Archived articles can be restored in Zendesk Guide.");
     expect(prompt).toContain("If the target section has no articles, list the other sections of the same category with `zendesk_list_help_center_sections`. Copy the ids from an article in one of these sections. Never omit `permissionGroupId`.");
     expect(prompt).toContain("If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.");
   });
 
-  it("creates 11 tools", () => {
+  it("creates 12 tools", () => {
     const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { subdomain: "acme", email: "agent@acme.com", apiKey: "secret" },
     });
 
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(12);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_tickets",
       "search_tickets",
@@ -50,6 +51,7 @@ describe("zendesk extension", () => {
       "list_articles",
       "create_article",
       "update_article",
+      "archive_article",
     ]);
   });
 
@@ -164,6 +166,7 @@ describe("zendesk extension modes", () => {
       [tools[8], { sectionId: 10 }],
       [tools[9], { sectionId: 10, title: "Setup", body: "<p>Steps</p>", locale: "en-us" }],
       [tools[10], { articleId: 20, locale: "en-us", draft: false }],
+      [tools[11], { articleId: 20 }],
     ] as const) {
       expect(await tool.execute(params, {})).toEqual({
         isError: true,
@@ -188,7 +191,7 @@ describe("zendesk extension modes", () => {
     };
     const { tools } = await mount({}, refusal);
     for (const tool of tools.filter((tool) => [
-      "zendesk_list_help_center_sections", "zendesk_list_articles", "zendesk_create_article", "zendesk_update_article",
+      "zendesk_list_help_center_sections", "zendesk_list_articles", "zendesk_create_article", "zendesk_update_article", "zendesk_archive_article",
     ].includes(tool.name))) {
       expect(await tool.execute({}, {})).toEqual({ isError: true, ...refusal });
       expect(tool.outputSchema).toHaveProperty("type", "object");

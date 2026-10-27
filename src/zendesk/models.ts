@@ -264,3 +264,12 @@ export const UpdateArticleParamsSchema = z.object({
   draft: z.boolean().optional(),
   labelNames: z.array(z.string()).optional(),
 });
+
+export const ArchiveArticleParamsSchema = z.object({
+  articleId: z.number().int(),
+});
+export const ArchiveArticleResultSchema = z.object({
+  archived: z.literal(true),
+  articleId: z.number().int(),
+  title: NullableString,
+});

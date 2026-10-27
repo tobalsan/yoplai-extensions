@@ -8,6 +8,8 @@ import {
   ListArticlesParamsSchema,
   ListArticlesResultSchema,
   UpdateArticleParamsSchema,
+  ArchiveArticleParamsSchema,
+  ArchiveArticleResultSchema,
   GetTicketParamsSchema,
   GetTicketResultSchema,
   SearchTicketsResultSchema,
@@ -63,10 +65,11 @@ Help Center workflow:
 - Create an article with zendesk_create_article as a draft by default, using the section's source locale and an HTML body. Set notifySubscribers: false to avoid notifying subscribers. Review the draft, then revise with zendesk_update_article; publish only on explicit request by setting draft: false. Publishing requires the connected user's rights in the permission group.
 - If the target section has no articles, list the other sections of the same category with \`zendesk_list_help_center_sections\`. Copy the ids from an article in one of these sections. Never omit \`permissionGroupId\`.
 - If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.
+- Archive only draft articles, and ask the user before you archive one. Archived articles can be restored in Zendesk Guide.
 - Existing OAuth connections must reconnect to grant the Help Center scopes. If a tool requests reconnection, share its connect link.
 
 Notes:
-- Tickets cannot be created or deleted, and public replies to requesters are not supported. Help Center articles can be created and revised.
+- Tickets cannot be created or deleted, and public replies to requesters are not supported. Help Center articles can be created, revised, and archived (drafts only), but not permanently deleted.
 - Assignee and group ids are numeric Zendesk ids. Look them up with zendesk_list_groups / zendesk_list_agents; never guess them.
 - Ticket ids are numeric.
 - In oauth mode the requester's connected Zendesk account is used. If a tool reports not connected, share the connect link it returns; do not guess or supply credentials.`,
@@ -168,6 +171,13 @@ Notes:
         parameters: UpdateArticleParamsSchema,
         outputSchema: ArticleResultSchema,
         execute: async (params) => (client ? client.updateArticle(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "archive_article",
+        description: "Archive a draft Help Center article by id. Only drafts can be archived; published articles are refused. Ask the user before you archive. Archived articles can be restored in Zendesk Guide.",
+        parameters: ArchiveArticleParamsSchema,
+        outputSchema: ArchiveArticleResultSchema,
+        execute: async (params) => (client ? client.archiveArticle(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
       },
     ];
   },

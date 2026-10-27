@@ -4,6 +4,7 @@ import {
   ArticleSchema,
   CreateArticleParamsSchema,
   UpdateArticleParamsSchema,
+  ArchiveArticleParamsSchema,
   ListArticlesParamsSchema,
   ListHelpCenterSectionsParamsSchema,
   CommentSchema,
@@ -122,12 +123,8 @@ export class ZendeskClient {
         }
 
         if ((response.status === 403 || response.status === 422) &&
-            (method === "POST" || method === "PUT") && path.startsWith("/api/v2/help_center/")) {
-          const responseBody = await this.readErrorBody(response);
-          throw new ZendeskError(
-            `The connected user lacks Help Center rights to create, edit, or publish in this permission group. Try creating a draft (draft: true) or ask a Guide admin: ${responseBody}`,
-            { endpoint: path, status: response.status, correlationId, responseBody },
-          );
+            (method === "POST" || method === "PUT" || method === "DELETE") && path.startsWith("/api/v2/help_center/")) {
+          throw this.helpCenterRightsError(path, response.status, await this.readErrorBody(response), correlationId);
         }
 
         if (response.status === 401 || response.status === 403) {
@@ -198,6 +195,13 @@ export class ZendeskClient {
     }
 
     throw new ZendeskRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private helpCenterRightsError(path: string, status: number, responseBody: string, correlationId?: string): ZendeskError {
+    return new ZendeskError(
+      `The connected user lacks Help Center rights to create, edit, or publish in this permission group. Try creating a draft (draft: true) or ask a Guide admin: ${responseBody}`,
+      { endpoint: path, status, correlationId, responseBody },
+    );
   }
 
   private async readErrorBody(response: Response): Promise<string> {
@@ -368,6 +372,28 @@ export class ZendeskClient {
       }
     }
     return { article: ArticleSchema.parse({ ...metadata, id: articleId, title, locale: data.translation.locale, draft, htmlUrl }) };
+  }
+
+  async archiveArticle(input: unknown) {
+    const { articleId } = ArchiveArticleParamsSchema.parse(input);
+    const path = `/api/v2/help_center/articles/${articleId}.json`;
+    let data: { article: unknown };
+    try {
+      data = (await this.request("GET", path)) as { article: unknown };
+    } catch (error) {
+      if (error instanceof ZendeskAuthError && error.status === 403) {
+        throw this.helpCenterRightsError(path, 403, error.responseBody ?? "", error.correlationId);
+      }
+      throw error;
+    }
+    const article = ArticleSchema.parse(data.article);
+    if (article.draft !== true) {
+      throw new ZendeskValidationError(
+        `Article ${articleId} is published. Only draft articles can be archived. Ask a Guide admin to archive a published article.`,
+      );
+    }
+    await this.request("DELETE", path);
+    return { archived: true as const, articleId, title: article.title };
   }
 
   private async listPage(
