@@ -51,6 +51,8 @@
 
 ### Fixed
 
+- Pipedrive deal filters accept `all` and legacy `all_not_deleted`, validate endpoint-specific statuses and sort fields, and support page-local `won_time` sorting; Drive saves accept nested Linux conversation paths safely, report missing paths as 400, and resume interrupted large uploads with actionable 502 errors (ALG-551).
+
 - MCP unavailable logs include requester context and cause-based severity, suppress repeated known states for one hour, and report shared OAuth refresh failures once (ALG-521).
 
 - MCP OAuth recovery detects empty-body HTTP 401 errors, preserving tools after token expiry (ALG-513).

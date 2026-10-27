@@ -40,21 +40,24 @@ export const PipedriveConfigSchema = z.object({
 });
 export type PipedriveConfig = z.infer<typeof PipedriveConfigSchema>;
 
-export const DealStatusSchema = z.enum([
+export const ListDealStatusSchema = z.enum([
   "open",
   "won",
   "lost",
   "deleted",
-  "all_not_deleted",
+  "all",
 ]);
-export type DealStatus = z.infer<typeof DealStatusSchema>;
+export const SearchDealStatusSchema = z.enum(["open", "won", "lost", "all"]);
 
 export const SortDirectionSchema = z.enum(["asc", "desc"]);
 
 export const ListDealsParamsSchema = z
   .object({
-    status: DealStatusSchema.optional().describe(
-      'Deal lifecycle filter (server-side). Defaults to "open".',
+    status: z.preprocess(
+      (value) => value === "all_not_deleted" ? "all" : value,
+      ListDealStatusSchema.optional(),
+    ).describe(
+      'Deal lifecycle filter (server-side): open, won, lost, deleted, or all. Defaults to "open"; "all" omits the filter and returns all non-deleted deals. Deleted deals are available for the last 30 days.',
     ),
     pipeline_id: PositiveIntFromInput.optional().describe("Filter by pipeline ID (server-side)."),
     stage_id: PositiveIntFromInput.optional().describe("Filter by stage ID (server-side)."),
@@ -77,7 +80,9 @@ export const ListDealsParamsSchema = z
     limit: PositiveIntFromInput.optional().describe(
       "Max deals per page, 1-500 (default 100). Pagination assembles full pages internally when a close-date range is set.",
     ),
-    sort_by: z.string().min(1).optional().describe('Field to sort by (default "update_time").'),
+    sort_by: z.enum(["id", "update_time", "add_time", "won_time"]).optional().describe(
+      'Field to sort by (default "update_time"). won_time sorts inside each returned page only, with nulls last; it is not a global sort across cursor calls.',
+    ),
     sort_direction: SortDirectionSchema.optional().describe('Sort direction (default "desc").'),
     custom_fields: z
       .array(z.string().min(1))
@@ -197,7 +202,10 @@ export const SearchDealsParamsSchema = z
       .string()
       .min(2, "Search term must be at least 2 characters")
       .describe("Free-text term matched against the deal title (min 2 chars)."),
-    status: DealStatusSchema.optional().describe("Filter matches by deal status (server-side)."),
+    status: z.preprocess(
+      (value) => value === "all_not_deleted" ? "all" : value,
+      SearchDealStatusSchema.optional(),
+    ).describe('Filter matches by open, won, or lost (server-side). Omitted or "all" means no filter and returns all non-deleted deals; deleted is not supported.'),
     person_id: PositiveIntFromInput.optional().describe("Filter by linked person ID (server-side)."),
     org_id: PositiveIntFromInput.optional().describe(
       "Filter by linked organization ID (server-side).",
