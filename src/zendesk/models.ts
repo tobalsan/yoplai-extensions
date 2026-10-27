@@ -200,3 +200,76 @@ export const AddInternalNoteParamsSchema = z.object({
   body: z.string().min(1).describe("Note text. Visible to agents only, never to the requester."),
 });
 export type AddInternalNoteParams = z.infer<typeof AddInternalNoteParamsSchema>;
+
+export const HelpCenterSectionSchema = z.object({
+  id: z.number(),
+  name: NullableString,
+  sourceLocale: NullableString,
+  categoryId: NullableNumber,
+  categoryName: NullableString,
+});
+
+export const ListHelpCenterSectionsParamsSchema = z.object({
+  categoryId: z.number().int().optional().describe("Only list sections in this category."),
+  pageSize: z.number().int().positive().max(100).optional().default(100),
+  pageCursor: z.string().optional(),
+});
+export const ListHelpCenterSectionsResultSchema = z.object({
+  sections: z.array(HelpCenterSectionSchema),
+  nextPageCursor: z.string().optional(),
+  hasMore: z.boolean().optional(),
+});
+
+export const ArticleSchema = z.object({
+  id: z.number(),
+  title: NullableString,
+  locale: NullableString,
+  draft: NullableBoolean,
+  sectionId: NullableNumber,
+  htmlUrl: NullableString,
+  permissionGroupId: NullableNumber,
+  userSegmentId: NullableNumber,
+  labelNames: NullableStringArray,
+});
+export type Article = z.infer<typeof ArticleSchema>;
+export const ArticleResultSchema = z.object({ article: ArticleSchema });
+export const ListArticlesParamsSchema = z.object({
+  sectionId: z.number().int(),
+  pageSize: z.number().int().positive().max(100).optional().default(100),
+  pageCursor: z.string().optional(),
+});
+export const ListArticlesResultSchema = z.object({
+  articles: z.array(ArticleSchema),
+  nextPageCursor: z.string().optional(),
+  hasMore: z.boolean().optional(),
+});
+
+export const CreateArticleParamsSchema = z.object({
+  sectionId: z.number().int(),
+  title: z.string().min(1),
+  body: z.string().min(1).describe("Article body as HTML."),
+  locale: z.string().min(1).describe("Use the section's source locale from zendesk_list_help_center_sections."),
+  labelNames: z.array(z.string()).optional(),
+  draft: z.boolean().optional().default(true),
+  userSegmentId: z.number().int().optional().describe("Copy this id from an article in the same section (`zendesk_list_articles`). Do not guess it. Omit for public visibility."),
+  permissionGroupId: z.number().int().optional().describe("Copy this id from an article in the same section (`zendesk_list_articles`). Do not guess it. Always pass it: otherwise Zendesk uses the Admins group and the call can fail for non-admins."),
+  notifySubscribers: z.boolean().optional().describe("Set false to avoid notifying subscribers."),
+});
+
+export const UpdateArticleParamsSchema = z.object({
+  articleId: z.number().int(),
+  locale: z.string().min(1),
+  title: z.string().min(1).optional(),
+  body: z.string().optional().describe("Replacement article body as HTML."),
+  draft: z.boolean().optional(),
+  labelNames: z.array(z.string()).optional(),
+});
+
+export const ArchiveArticleParamsSchema = z.object({
+  articleId: z.number().int(),
+});
+export const ArchiveArticleResultSchema = z.object({
+  archived: z.literal(true),
+  articleId: z.number().int(),
+  title: NullableString,
+});

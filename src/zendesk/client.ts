@@ -1,5 +1,12 @@
 import {
   AddInternalNoteParamsSchema,
+  HelpCenterSectionSchema,
+  ArticleSchema,
+  CreateArticleParamsSchema,
+  UpdateArticleParamsSchema,
+  ArchiveArticleParamsSchema,
+  ListArticlesParamsSchema,
+  ListHelpCenterSectionsParamsSchema,
   CommentSchema,
   GetTicketParamsSchema,
   GroupSchema,
@@ -115,6 +122,11 @@ export class ZendeskClient {
           });
         }
 
+        if ((response.status === 403 || response.status === 422) &&
+            (method === "POST" || method === "PUT" || method === "DELETE") && path.startsWith("/api/v2/help_center/")) {
+          throw this.helpCenterRightsError(path, response.status, await this.readErrorBody(response), correlationId);
+        }
+
         if (response.status === 401 || response.status === 403) {
           const responseBody = await this.readErrorBody(response);
           throw new ZendeskAuthError(`Authentication failed for ${path}: ${responseBody}`, {
@@ -183,6 +195,13 @@ export class ZendeskClient {
     }
 
     throw new ZendeskRateLimitError("Rate limit exceeded", { endpoint: path, status: 429 });
+  }
+
+  private helpCenterRightsError(path: string, status: number, responseBody: string, correlationId?: string): ZendeskError {
+    return new ZendeskError(
+      `The connected user lacks Help Center rights to create, edit, or publish in this permission group. Try creating a draft (draft: true) or ask a Guide admin: ${responseBody}`,
+      { endpoint: path, status, correlationId, responseBody },
+    );
   }
 
   private async readErrorBody(response: Response): Promise<string> {
@@ -295,6 +314,86 @@ export class ZendeskClient {
       ["role[]", "admin"],
     ]);
     return { agents: page.items.map((user) => UserSchema.parse(user)), ...page.meta };
+  }
+
+  async listHelpCenterSections(input: unknown = {}) {
+    const { categoryId, pageSize, pageCursor } = ListHelpCenterSectionsParamsSchema.parse(input);
+    const path = categoryId === undefined ? "/api/v2/help_center/sections.json" : `/api/v2/help_center/categories/${categoryId}/sections.json`;
+    const query: Array<[string, string]> = [["page[size]", String(pageSize)], ["include", "categories"]];
+    if (pageCursor) query.push(["page[after]", pageCursor]);
+    const data = (await this.request("GET", path, query)) as {
+      sections?: Array<{ categoryId?: number }>;
+      categories?: Array<{ id: number; name?: string }>;
+      meta?: { afterCursor?: string; hasMore?: boolean };
+    };
+    return {
+      sections: (data.sections ?? []).map((section) => HelpCenterSectionSchema.parse({
+        ...section,
+        categoryName: data.categories?.find((category) => category.id === section.categoryId)?.name,
+      })),
+      nextPageCursor: data.meta?.afterCursor ?? undefined,
+      hasMore: data.meta?.hasMore ?? undefined,
+    };
+  }
+
+  async listArticles(input: unknown) {
+    const { sectionId, pageSize, pageCursor } = ListArticlesParamsSchema.parse(input);
+    const page = await this.listPage(`/api/v2/help_center/sections/${sectionId}/articles.json`, "articles", pageSize, pageCursor);
+    return { articles: page.items.map((article) => ArticleSchema.parse(article)), ...page.meta };
+  }
+
+  async createArticle(input: unknown) {
+    const { sectionId, notifySubscribers, ...article } = CreateArticleParamsSchema.parse(input);
+    const data = (await this.request("POST", `/api/v2/help_center/sections/${sectionId}/articles.json`, undefined, { article, notifySubscribers })) as { article: unknown };
+    return { article: ArticleSchema.parse(data.article) };
+  }
+
+  async updateArticle(input: unknown) {
+    const { articleId, locale, labelNames, ...translation } = UpdateArticleParamsSchema.parse(input);
+    if (Object.keys(translation).length === 0 && labelNames === undefined) {
+      throw new ZendeskValidationError("update_article needs at least one field to change");
+    }
+    if (Object.keys(translation).length === 0) {
+      const data = (await this.request("PUT", `/api/v2/help_center/articles/${articleId}.json`, undefined, { article: { labelNames } })) as { article: unknown };
+      return { article: ArticleSchema.parse(data.article) };
+    }
+    const data = (await this.request("PUT", `/api/v2/help_center/articles/${articleId}/translations/${encodeURIComponent(locale)}.json`, undefined, { translation })) as { translation: { title?: string; locale?: string; draft?: boolean; htmlUrl?: string } };
+    const { title, draft, htmlUrl } = data.translation;
+    let metadata = {};
+    if (labelNames !== undefined) {
+      try {
+        const result = (await this.request("PUT", `/api/v2/help_center/articles/${articleId}.json`, undefined, { article: { labelNames } })) as { article: unknown };
+        metadata = ArticleSchema.parse(result.article);
+      } catch (error) {
+        throw new ZendeskError(
+          `Article ${articleId} translation (${locale}) was saved, but updating labels failed: ${error instanceof Error ? error.message : String(error)}`,
+          error instanceof ZendeskError ? error : {},
+        );
+      }
+    }
+    return { article: ArticleSchema.parse({ ...metadata, id: articleId, title, locale: data.translation.locale, draft, htmlUrl }) };
+  }
+
+  async archiveArticle(input: unknown) {
+    const { articleId } = ArchiveArticleParamsSchema.parse(input);
+    const path = `/api/v2/help_center/articles/${articleId}.json`;
+    let data: { article: unknown };
+    try {
+      data = (await this.request("GET", path)) as { article: unknown };
+    } catch (error) {
+      if (error instanceof ZendeskAuthError && error.status === 403) {
+        throw this.helpCenterRightsError(path, 403, error.responseBody ?? "", error.correlationId);
+      }
+      throw error;
+    }
+    const article = ArticleSchema.parse(data.article);
+    if (article.draft !== true) {
+      throw new ZendeskValidationError(
+        `Article ${articleId} is published. Only draft articles can be archived. Ask a Guide admin to archive a published article.`,
+      );
+    }
+    await this.request("DELETE", path);
+    return { archived: true as const, articleId, title: article.title };
   }
 
   private async listPage(
