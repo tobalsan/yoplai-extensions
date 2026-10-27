@@ -1,7 +1,12 @@
 import { ZendeskClient } from "./client.js";
+import path from "node:path";
+import { readConversationFile } from "../conversation-files.js";
+import { ZendeskValidationError } from "./errors.js";
 import {
   AddInternalNoteParamsSchema,
   ArticleResultSchema,
+  UploadArticleAttachmentParamsSchema,
+  UploadArticleAttachmentResultSchema,
   CreateArticleParamsSchema,
   ListHelpCenterSectionsParamsSchema,
   ListHelpCenterSectionsResultSchema,
@@ -29,6 +34,13 @@ export { ZendeskConfigSchema };
 const NOT_CONNECTED_MESSAGE =
   "Zendesk is not connected. Connect a Zendesk account in the agent's Zendesk settings.";
 
+const IMAGE_MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/'/g, "&#39;");
+}
+
 /** Zendesk descriptor. URLs are per-tenant: `{subdomain}` comes from oauth.providers.zendesk.subdomain. */
 const zendeskOAuthProvider: OAuthProviderDescriptor = {
   id: "zendesk",
@@ -47,7 +59,7 @@ const zendeskOAuthProvider: OAuthProviderDescriptor = {
 export default defineToolExtension({
   id: "zendesk",
   displayName: "Zendesk",
-  description: "Zendesk extension for reading, searching, and triaging tickets, adding internal notes, and creating and revising Help Center articles.",
+  description: "Zendesk extension for reading, searching, and triaging tickets, adding internal notes, and creating and revising Help Center articles with image attachments.",
   systemPrompt: `Use this extension to read, search, and triage Zendesk support tickets and add internal notes.
 
 For ticket lists, use pageSize up to 100 and pageCursor from the prior response. Results are newest first by default; pass sort to override (id, -id, updated_at, -updated_at, status, -status). Ticket searches use offset pagination and optional sort. Group listings use cursor pagination; pass groupId when listing one team's agents.
@@ -63,6 +75,7 @@ Common workflows:
 Help Center workflow:
 - Use zendesk_list_help_center_sections to choose a section id and its source locale, then zendesk_list_articles for that section to copy permissionGroupId and userSegmentId. Never guess these ids; omit userSegmentId for public visibility.
 - Create an article with zendesk_create_article as a draft by default, using the section's source locale and an HTML body. Set notifySubscribers: false to avoid notifying subscribers. Review the draft, then revise with zendesk_update_article; publish only on explicit request by setting draft: false. Publishing requires the connected user's rights in the permission group.
+- For images, create the draft first with zendesk_create_article, then upload each image with zendesk_upload_article_attachment from the current conversation folder (PNG, JPEG, WebP or GIF, up to 5 MB each), then put each returned imgSnippet in the body with zendesk_update_article. Inline images are the default; set inline: false for a plain attachment.
 - If the target section has no articles, list the other sections of the same category with \`zendesk_list_help_center_sections\`. Copy the ids from an article in one of these sections. Never omit \`permissionGroupId\`.
 - If the articles in the section use more than one permission group, use the group that most articles use. If two groups have the same count, show the user one article title for each group and ask which one to use.
 - Archive only draft articles, and ask the user before you archive one. Archived articles can be restored in Zendesk Guide.
@@ -171,6 +184,25 @@ Notes:
         parameters: UpdateArticleParamsSchema,
         outputSchema: ArticleResultSchema,
         execute: async (params) => (client ? client.updateArticle(params) : notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth)),
+      },
+      {
+        name: "upload_article_attachment",
+        description: "Create a draft with zendesk_create_article, upload PNG, JPEG, WebP or GIF images from the conversation folder with this tool, then insert the returned imgSnippet into the body with zendesk_update_article.",
+        parameters: UploadArticleAttachmentParamsSchema,
+        outputSchema: UploadArticleAttachmentResultSchema,
+        execute: async (input, context) => {
+          if (!client) return notConnected("zendesk", NOT_CONNECTED_MESSAGE, oauth);
+          const params = UploadArticleAttachmentParamsSchema.parse(input);
+          const mimeType = IMAGE_MIME[path.extname(params.path).toLowerCase()];
+          if (!mimeType) throw new ZendeskValidationError("Only PNG, JPEG, WebP and GIF images are supported.");
+          const signal = context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(resolved.timeoutMs)]) : AbortSignal.timeout(resolved.timeoutMs);
+          const bytes = await readConversationFile(params.path, context, signal, MAX_ATTACHMENT_BYTES).catch((error: unknown) => {
+            if (error instanceof Error && "status" in error && error.status === 413) throw new ZendeskValidationError("Image exceeds the 5 MB (5242880 bytes) attachment limit.", { status: 413 });
+            throw error;
+          });
+          const result = await client.uploadArticleAttachment({ articleId: params.articleId, inline: params.inline, fileName: path.basename(params.path), mimeType, bytes }, signal);
+          return { ...result, imgSnippet: `<img src="${escapeHtml(result.attachment.contentUrl)}" alt="${escapeHtml(result.attachment.fileName)}">` };
+        },
       },
       {
         name: "archive_article",

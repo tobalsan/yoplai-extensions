@@ -2,6 +2,7 @@ import {
   AddInternalNoteParamsSchema,
   HelpCenterSectionSchema,
   ArticleSchema,
+  ArticleAttachmentSchema,
   CreateArticleParamsSchema,
   UpdateArticleParamsSchema,
   ArchiveArticleParamsSchema,
@@ -30,6 +31,7 @@ import {
   ZendeskRateLimitError,
   ZendeskValidationError,
 } from "./errors.js";
+import { setTimeout as sleep } from "node:timers/promises";
 
 type JsonPrimitive = null | boolean | number | string;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -60,10 +62,6 @@ function mapDeep(value: JsonValue, mapper: (key: string) => string): JsonValue {
   return value;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export class ZendeskClient {
   readonly timeoutMs: number;
   readonly baseUrl: string;
@@ -84,26 +82,28 @@ export class ZendeskClient {
     method: string,
     path: string,
     query?: Array<[string, string]>,
-    body?: Record<string, unknown>,
+    body?: Record<string, unknown> | FormData,
+    signal?: AbortSignal,
   ): Promise<JsonValue> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of query ?? []) {
       url.searchParams.append(key, value);
     }
 
-    const payload = body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
+    const payload = body instanceof FormData ? body : body ? JSON.stringify(mapDeep(body as JsonValue, toSnakeCase)) : undefined;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
+        signal?.throwIfAborted();
         const response = await fetch(url.toString(), {
           method,
           headers: {
             Accept: "application/json",
             Authorization: this.authorization,
-            ...(payload ? { "Content-Type": "application/json" } : {}),
+            ...(typeof payload === "string" ? { "Content-Type": "application/json" } : {}),
           },
           body: payload,
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs),
         });
 
         const correlationId =
@@ -112,7 +112,7 @@ export class ZendeskClient {
         if (response.status === 429) {
           if (attempt < 3) {
             const retryAfter = Number(response.headers.get("retry-after") ?? "1");
-            await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000);
+            await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000, undefined, { signal });
             continue;
           }
           throw new ZendeskRateLimitError("Rate limit exceeded", {
@@ -122,7 +122,7 @@ export class ZendeskClient {
           });
         }
 
-        if ((response.status === 403 || response.status === 422) &&
+        if ((response.status === 403 || (response.status === 422 && !(body instanceof FormData))) &&
             (method === "POST" || method === "PUT" || method === "DELETE") && path.startsWith("/api/v2/help_center/")) {
           throw this.helpCenterRightsError(path, response.status, await this.readErrorBody(response), correlationId);
         }
@@ -159,7 +159,7 @@ export class ZendeskClient {
 
         if (response.status >= 500) {
           if (attempt < 3) {
-            await sleep((attempt + 1) * 250);
+            await sleep((attempt + 1) * 250, undefined, { signal });
             continue;
           }
           const responseBody = await this.readErrorBody(response);
@@ -346,6 +346,14 @@ export class ZendeskClient {
     const { sectionId, notifySubscribers, ...article } = CreateArticleParamsSchema.parse(input);
     const data = (await this.request("POST", `/api/v2/help_center/sections/${sectionId}/articles.json`, undefined, { article, notifySubscribers })) as { article: unknown };
     return { article: ArticleSchema.parse(data.article) };
+  }
+
+  async uploadArticleAttachment(params: { articleId: number; fileName: string; mimeType: string; bytes: Uint8Array; inline?: boolean }, signal?: AbortSignal) {
+    const form = new FormData();
+    form.set("file", new Blob([new Uint8Array(params.bytes)], { type: params.mimeType }), params.fileName);
+    form.set("inline", String(params.inline ?? true));
+    const data = (await this.request("POST", `/api/v2/help_center/articles/${params.articleId}/attachments.json`, undefined, form, signal)) as { articleAttachment: unknown };
+    return { attachment: ArticleAttachmentSchema.parse(data.articleAttachment) };
   }
 
   async updateArticle(input: unknown) {

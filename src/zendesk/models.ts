@@ -233,6 +233,21 @@ export const ArticleSchema = z.object({
 });
 export type Article = z.infer<typeof ArticleSchema>;
 export const ArticleResultSchema = z.object({ article: ArticleSchema });
+export const ArticleAttachmentSchema = z.object({
+  id: z.number(),
+  contentUrl: z.string(),
+  fileName: z.string(),
+  size: z.number(),
+});
+export const UploadArticleAttachmentParamsSchema = z.object({
+  articleId: z.number().int(),
+  path: z.string().min(1).describe("Image filename or path inside the current conversation folder."),
+  inline: z.boolean().default(true),
+});
+export const UploadArticleAttachmentResultSchema = z.object({
+  attachment: ArticleAttachmentSchema,
+  imgSnippet: z.string(),
+});
 export const ListArticlesParamsSchema = z.object({
   sectionId: z.number().int(),
   pageSize: z.number().int().positive().max(100).optional().default(100),

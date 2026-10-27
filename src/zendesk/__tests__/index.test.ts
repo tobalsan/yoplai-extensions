@@ -32,16 +32,17 @@ describe("zendesk extension", () => {
     expect(prompt).toContain("Never omit `permissionGroupId`");
     expect(prompt).toMatch(/more than one permission group.*most articles use/is);
     expect(prompt).toMatch(/same count.*ask which one to use/is);
+    expect(prompt).toMatch(/zendesk_create_article.*zendesk_upload_article_attachment.*conversation folder.*imgSnippet.*zendesk_update_article/s);
   });
 
-  it("creates 12 tools", () => {
+  it("creates 13 tools", () => {
     const tools = extension.createTools({
       global: {},
       agent: {},
       merged: { subdomain: "acme", email: "agent@acme.com", apiKey: "secret" },
     });
 
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(13);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_tickets",
       "search_tickets",
@@ -54,6 +55,7 @@ describe("zendesk extension", () => {
       "list_articles",
       "create_article",
       "update_article",
+      "upload_article_attachment",
       "archive_article",
     ]);
   });
@@ -169,7 +171,8 @@ describe("zendesk extension modes", () => {
       [tools[8], { sectionId: 10 }],
       [tools[9], { sectionId: 10, title: "Setup", body: "<p>Steps</p>", locale: "en-us" }],
       [tools[10], { articleId: 20, locale: "en-us", draft: false }],
-      [tools[11], { articleId: 20 }],
+      [tools[11], { articleId: 20, path: "diagram.png" }],
+      [tools[12], { articleId: 20 }],
     ] as const) {
       expect(await tool.execute(params, {})).toEqual({
         isError: true,
@@ -194,7 +197,7 @@ describe("zendesk extension modes", () => {
     };
     const { tools } = await mount({}, refusal);
     for (const tool of tools.filter((tool) => [
-      "zendesk_list_help_center_sections", "zendesk_list_articles", "zendesk_create_article", "zendesk_update_article", "zendesk_archive_article",
+      "zendesk_list_help_center_sections", "zendesk_list_articles", "zendesk_create_article", "zendesk_update_article", "zendesk_archive_article", "zendesk_upload_article_attachment",
     ].includes(tool.name))) {
       expect(await tool.execute({}, {})).toEqual({ isError: true, ...refusal });
       expect(tool.outputSchema).toHaveProperty("type", "object");

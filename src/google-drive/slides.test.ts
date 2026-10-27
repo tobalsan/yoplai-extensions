@@ -131,7 +131,7 @@ it("imports a local logo as a 16:9 native deck, with an aspect-preserving center
 });
 it.each([
   { title: "SVG", source: "logo.svg", bytes: Buffer.from('<svg width="2" height="2" xmlns="http://www.w3.org/2000/svg"/>'), status: 400, message: /PNG|JPEG|GIF/ },
-  { title: "Large", source: "logo.png", bytes: Buffer.alloc(10_000_001), status: 413, message: /10 MB/ },
+  { title: "Large", source: "logo.png", bytes: Buffer.alloc(10_000_001), status: 413, message: /10000000 byte limit/ },
 ])("rejects $title local images before creating any deck", async ({ source, bytes, status, message }) => {
   const run = await tools(); await writeFile(path.join(run.hostPath, source), bytes); const fetch = google();
   await expect(run.execute("slides_create", { title: "Brand", slides: [{ images: [{ path: `/workspace/files/${source}`, x: 0, y: 0, width: 100, height: 100 }] }] })).rejects.toMatchObject({ status, message: expect.stringMatching(message) });

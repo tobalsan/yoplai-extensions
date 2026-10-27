@@ -28,7 +28,7 @@ The source directory is the build/install directory name. The extension ID is th
 | [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads and guarded draft/quote writes | API token |
 | `people-enrich` | `people_enrich` | Find people and companies, then enrich with profiles, work emails, and mobile numbers (paid; mobile needs cost approval) | API key |
 | [`pipedrive`](src/pipedrive/README.md) | `pipedrive` | Pipedrive CRM reads and custom-field normalization; confirmed record writes are opt-in (`allowWrite`) | Company domain and API token |
-| `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, internal notes, and Help Center article discovery, drafts, revisions, publishing, and draft archiving | OAuth (`oauth.providers.zendesk`, default; reconnect for Help Center scopes) or subdomain, email, and API key |
+| `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, internal notes, and Help Center article discovery, drafts, revisions, image attachments, publishing, and draft archiving | OAuth (`oauth.providers.zendesk`, default; reconnect for Help Center scopes) or subdomain, email, and API key |
 
 In multi-user Yoplai, credentials can be personal or shared: each user can add their own API token or Google connection (**Just me**, used only for their requests), and admins set the shared fallback (**Whole team**). Requests use the requester's own credentials first, then the team's.
 
