@@ -68,4 +68,3 @@ export async function readConversationFile(sourcePath: string, context: ToolExec
     throw error;
   }
 }
-
