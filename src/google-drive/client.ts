@@ -155,7 +155,7 @@ export class GoogleDriveClient {
   }
 
   async saveFile(params: SaveFileParams, context?: ToolExecutionContext): Promise<unknown> {
-    return saveFile(params, context, (url, init) => this.#request(url, init));
+    return saveFile(params, context, (url, init, expectedStatuses) => this.#request(url, init, expectedStatuses));
   }
 
   async listFiles(params: ListFilesParams): Promise<{
@@ -456,7 +456,7 @@ export class GoogleDriveClient {
     return normalizeText(buffer.toString("utf8"));
   }
 
-  async #request(url: string, init: RequestInit = {}): Promise<Response> {
+  async #request(url: string, init: RequestInit = {}, expectedStatuses: readonly number[] = []): Promise<Response> {
     for (let attempt = 0; ; attempt += 1) {
       const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
       signal.throwIfAborted();
@@ -477,7 +477,7 @@ export class GoogleDriveClient {
         await delayRetry(delay, undefined, { signal });
         continue;
       }
-      if (!response.ok) {
+      if (!response.ok && !expectedStatuses.includes(response.status)) {
         const body = await response.text().catch(() => "");
         let message = body;
         try {

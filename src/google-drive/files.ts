@@ -1,13 +1,13 @@
-import { open, realpath, rm } from "node:fs/promises";
+import { open, readlink, realpath, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import type { ToolExecutionContext } from "../tool-extension.js";
 
-export type DriveRequest = (url: string, init?: RequestInit) => Promise<Response>;
+export type DriveRequest = (url: string, init?: RequestInit, expectedStatuses?: readonly number[]) => Promise<Response>;
 
 /** Tool error with an HTTP status, so the gateway does not report it as a 500. */
 class DriveFileError extends Error {
-  constructor(message: string, readonly status: 400 | 403 | 413) { super(message); }
+  constructor(message: string, readonly status: 400 | 403 | 413 | 502) { super(message); }
 }
 const OFFICE: Record<string, { extension: string; mimeType: string }> = {
   "application/vnd.google-apps.document": { extension: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
@@ -90,43 +90,62 @@ function inside(folder: string, file: string): boolean {
   return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
+export async function openConversationFile(local: string, folder: string) {
+  if (process.platform !== "linux" && path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported on this platform.", 400);
+  const file = await open(local, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (process.platform === "linux") {
+      // readlink reports the opened file's kernel path without walking mutable parents again.
+      const openedPath = await readlink(`/proc/self/fd/${file.fd}`);
+      if (openedPath.endsWith(" (deleted)") || !inside(folder, openedPath)) throw new DriveFileError("File path is outside the current conversation folder or was deleted during opening.", 400);
+    }
+    return file;
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+}
+
 export async function readConversationFile(sourcePath: string, context: ToolExecutionContext | undefined, signal: AbortSignal, maxBytes?: number) {
   if (!context?.conversationFiles) throw new Error("A conversation files folder is required to read local files.");
   signal.throwIfAborted();
-  const folder = await realpath(context.conversationFiles.hostPath);
-  const { hostPath, runtimePath } = context.conversationFiles;
-  if (!path.isAbsolute(sourcePath)) {
-    if (path.basename(sourcePath) !== sourcePath || sourcePath === "." || sourcePath === "..") throw new DriveFileError(`Use a file in the conversation folder root, such as ${path.posix.join(runtimePath, "name.png")}.`, 400);
-    sourcePath = path.join(runtimePath, sourcePath);
-  }
-  let local: string;
-  if (inside(runtimePath, sourcePath)) local = path.resolve(folder, path.relative(runtimePath, sourcePath));
-  else if (inside(hostPath, sourcePath)) local = path.resolve(folder, path.relative(hostPath, sourcePath));
-  else if (inside(folder, sourcePath)) local = path.resolve(sourcePath);
-  else throw new DriveFileError("File path is outside the current conversation folder.", 400);
-  if (path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported.", 400);
-  local = await realpath(local);
-  if (!inside(folder, local)) throw new DriveFileError("File path is outside the current conversation folder.", 400);
-  if (path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported.", 400);
-  const file = await open(local, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  let bytes: Buffer;
+  const originalPath = sourcePath;
   try {
-    if (!(await file.stat()).isFile()) throw new DriveFileError("Only regular files inside the current conversation folder may be saved.", 400);
-    if (maxBytes !== undefined && (await file.stat()).size > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
-    if (maxBytes === undefined) bytes = await file.readFile({ signal });
-    else {
-      const chunks: Buffer[] = [];
-      let length = 0;
-      for await (const chunk of file.createReadStream({ autoClose: false, signal })) {
-        length += chunk.length;
-        if (length > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
-        chunks.push(chunk);
+    const folder = await realpath(context.conversationFiles.hostPath);
+    const { hostPath, runtimePath } = context.conversationFiles;
+    if (!path.isAbsolute(sourcePath)) sourcePath = path.resolve(runtimePath, sourcePath);
+    let local: string;
+    if (inside(runtimePath, sourcePath)) local = path.resolve(folder, path.relative(runtimePath, sourcePath));
+    else if (inside(hostPath, sourcePath)) local = path.resolve(folder, path.relative(hostPath, sourcePath));
+    else if (inside(folder, sourcePath)) local = path.resolve(sourcePath);
+    else throw new DriveFileError("File path is outside the current conversation folder.", 400);
+    if (process.platform !== "linux" && path.dirname(local) !== folder) throw new DriveFileError("Save files directly in the conversation folder root; nested paths are not supported on this platform.", 400);
+    local = await realpath(local);
+    if (!inside(folder, local)) throw new DriveFileError("File path is outside the current conversation folder.", 400);
+    const file = await openConversationFile(local, folder);
+    let bytes: Buffer;
+    try {
+      if (!(await file.stat()).isFile()) throw new DriveFileError("Only regular files inside the current conversation folder may be saved.", 400);
+      if (maxBytes !== undefined && (await file.stat()).size > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
+      if (maxBytes === undefined) bytes = await file.readFile({ signal });
+      else {
+        const chunks: Buffer[] = [];
+        let length = 0;
+        for await (const chunk of file.createReadStream({ autoClose: false, signal })) {
+          length += chunk.length;
+          if (length > maxBytes) throw new DriveFileError("Image exceeds the 10 MB per-image limit.", 413);
+          chunks.push(chunk);
+        }
+        bytes = Buffer.concat(chunks);
       }
-      bytes = Buffer.concat(chunks);
-    }
-  } finally { await file.close(); }
-  const mimeType = BINARY_MIME[path.extname(sourcePath).slice(1).toLowerCase()] ?? "application/octet-stream";
-  return { bytes, mimeType };
+    } finally { await file.close(); }
+    const mimeType = BINARY_MIME[path.extname(sourcePath).slice(1).toLowerCase()] ?? "application/octet-stream";
+    return { bytes, mimeType };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") throw new DriveFileError(`File or conversation folder does not exist for path: ${originalPath}.`, 400);
+    if (error instanceof Error && "code" in error && error.code === "ELOOP") throw new DriveFileError(`File path cannot be opened without following a symlink: ${originalPath}.`, 400);
+    throw error;
+  }
 }
 
 export async function saveFile(params: SaveFileParams, context: ToolExecutionContext | undefined, request: DriveRequest) {
@@ -159,12 +178,38 @@ export async function uploadDriveFile(metadata: { name?: string; mimeType: strin
       method: fileId ? "PATCH" : "POST", signal,
       headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mimeType, "X-Upload-Content-Length": String(bytes.length) },
       body: JSON.stringify(metadata),
+    }).catch(error => {
+      signal.throwIfAborted();
+      if (error instanceof TypeError && error.cause) throw uploadNetworkError(error, bytes.length, "session start");
+      throw error;
     });
     const location = session.headers.get("location");
     if (!location) throw new Error("Google did not return a resumable upload location.");
     const endpoint = new URL(location);
     if (endpoint.protocol !== "https:" || endpoint.hostname !== "www.googleapis.com") throw new Error("Google returned an invalid resumable upload location.");
-    const response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length) }, body: new Uint8Array(bytes) });
+    let response: Response;
+    try {
+      response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length) }, body: new Uint8Array(bytes) });
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!(error instanceof TypeError && error.cause)) throw error;
+      const status = await request(location, { method: "PUT", signal, headers: { "Content-Range": `bytes */${bytes.length}`, "Content-Length": "0" }, body: new Uint8Array(0) }, [308]).catch(error => {
+        signal.throwIfAborted();
+        throw uploadFailure(error, bytes.length, "status query");
+      });
+      if (status.status === 200 || status.status === 201) response = status;
+      else {
+        if (status.status !== 308) throw uploadFailure(new Error(`Unexpected HTTP ${status.status}`), bytes.length, "status query");
+        const range = status.headers.get("Range");
+        const start = range ? Number(range.match(/^bytes=0-(\d+)$/)?.[1]) + 1 : 0;
+        if (!Number.isSafeInteger(start) || start < 0 || start >= bytes.length) throw uploadFailure(new Error(`Invalid acknowledged range: ${range}`), bytes.length, "status query");
+        response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length - start), "Content-Range": `bytes ${start}-${bytes.length - 1}/${bytes.length}` }, body: new Uint8Array(bytes.subarray(start)) }).catch(error => {
+          signal.throwIfAborted();
+          if (error instanceof TypeError && error.cause) throw uploadNetworkError(error, bytes.length, "resume PUT");
+          throw error;
+        });
+      }
+    }
     return await response.json() as { id: string; name: string; mimeType: string; webViewLink?: string };
   }
   const boundary = `yoplai-${crypto.randomUUID()}`;
@@ -174,7 +219,21 @@ export async function uploadDriveFile(metadata: { name?: string; mimeType: strin
   ]);
   const response = await request(`https://www.googleapis.com/upload/drive/v3/files${fileId ? `/${encodeURIComponent(fileId)}` : ""}?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink`, {
     method: fileId ? "PATCH" : "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body, signal,
+  }).catch(error => {
+    signal.throwIfAborted();
+    if (error instanceof TypeError && error.cause) throw uploadNetworkError(error, bytes.length, "multipart upload");
+    throw error;
   });
   const result = await response.json() as { id: string; name: string; mimeType: string; webViewLink?: string };
   return result;
+}
+
+function uploadNetworkError(error: TypeError, size: number, stage: string): DriveFileError {
+  const cause = error.cause as { code?: string; message?: string };
+  return new DriveFileError(`Google Drive ${stage} failed for ${size} bytes: ${cause.code ?? "unknown code"}: ${cause.message ?? String(error.cause)}`, 502);
+}
+
+function uploadFailure(error: unknown, size: number, stage: string): DriveFileError {
+  if (error instanceof TypeError && error.cause) return uploadNetworkError(error, size, stage);
+  return new DriveFileError(`Google Drive ${stage} failed for ${size} bytes: ${error instanceof Error ? error.message : String(error)}`, 502);
 }

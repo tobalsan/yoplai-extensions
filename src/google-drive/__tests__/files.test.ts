@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import extension from "../index.js";
+import { openConversationFile } from "../files.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -243,10 +244,49 @@ it("times out a hung Google upload without removing the edited local file", asyn
   google(Response.json({ id: "recovered", name: "Copy.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
   await expect(run.execute("save_file", { path: "/workspace/files/edited.docx", name: "Copy.docx" })).resolves.toMatchObject({ fileId: "recovered" });
 });
-it("rejects nested sources so a mutable parent cannot escape the conversation during save", async () => {
+it.each(["file", "conversation folder"])("reports a missing %s as a bad source path", async (missing) => {
+  const run = await tools(true);
+  if (missing === "conversation folder") await rm(run.hostPath, { recursive: true });
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  await expect(run.execute("save_file", { path: "/workspace/files/missing.docx", name: "Copy.docx" })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("/workspace/files/missing.docx") });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("rejects an opened path whose parent was replaced by an outside symlink", async () => {
+  const run = await tools(true);
+  const outside = await tools(true);
+  await writeFile(path.join(outside.hostPath, "private.docx"), "private");
+  await symlink(outside.hostPath, path.join(run.hostPath, "swapped"));
+  await expect(openConversationFile(path.join(run.hostPath, "swapped", "private.docx"), run.hostPath)).rejects.toMatchObject({ status: 400 });
+});
+
+it("rejects a symlink in a subfolder pointing outside without uploading", async () => {
+  const run = await tools(true);
+  const outside = await tools(true);
+  await mkdir(path.join(run.hostPath, "nested"));
+  await writeFile(path.join(outside.hostPath, "private.docx"), "private");
+  await symlink(path.join(outside.hostPath, "private.docx"), path.join(run.hostPath, "nested", "escape.docx"));
+  const fetcher = vi.fn();
+  vi.stubGlobal("fetch", fetcher);
+  await expect(run.execute("save_file", { path: "nested/escape.docx", name: "Copy.docx" })).rejects.toMatchObject({ status: 400 });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it.each(["runtime", "host", "relative"])("saves a nested %s source on Linux and keeps the root rule elsewhere", async (kind) => {
   const run = await tools(true);
   await mkdir(path.join(run.hostPath, "nested"));
   await writeFile(path.join(run.hostPath, "nested", "edited.docx"), "local");
-  google(Response.json({ id: "unsafe", name: "Copy.docx", mimeType: "application/octet-stream" }));
-  await expect(run.execute("save_file", { path: "/workspace/files/nested/edited.docx", name: "Copy.docx" })).rejects.toMatchObject({ message: expect.stringMatching(/directly|root/i), status: 400 });
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+    expect(Buffer.from(await new Response(init.body).arrayBuffer()).includes(Buffer.from("local"))).toBe(true);
+    return Response.json({ id: "nested-copy", name: "Copy.docx", mimeType: "application/octet-stream" });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const source = kind === "runtime" ? "/workspace/files/nested/edited.docx" : kind === "host" ? path.join(run.hostPath, "nested", "edited.docx") : "nested/edited.docx";
+  const save = run.execute("save_file", { path: source, name: "Copy.docx" });
+  if (process.platform === "linux") await expect(save).resolves.toMatchObject({ fileId: "nested-copy" });
+  else {
+    await expect(save).rejects.toMatchObject({ message: expect.stringMatching(/directly|root/i), status: 400 });
+    expect(fetcher).not.toHaveBeenCalled();
+  }
 });

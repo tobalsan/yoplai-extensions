@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
@@ -170,5 +170,18 @@ it("slides_create ignores short element ids and resolves bare image file names i
   vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("uploadType=multipart") ? Response.json({ id: "deck-1" }) : Response.json({ presentationId: "deck-1", slides: [{ objectId: "s1" }] })));
   const slides = [{ elements: [{ kind: "image", id: "i1", x: 0, y: 0, w: 10, h: 10, path: "logo.png" }, { kind: "text", id: "t1", x: 0, y: 20, w: 100, h: 20, text: "Hi" }] }];
   await expect(run.execute("slides_create", { title: "T", slides })).resolves.toMatchObject({ presentationId: "deck-1" });
-  await expect(run.execute("slides_create", { title: "T", slides: [{ elements: [{ kind: "image", x: 0, y: 0, w: 10, h: 10, path: "sub/logo.png" }] }] })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/conversation folder root/) });
+  await mkdir(path.join(run.hostPath, "sub"));
+  await writeFile(path.join(run.hostPath, "sub", "logo.png"), png);
+  const nested = run.execute("slides_create", { title: "T", slides: [{ elements: [{ kind: "image", x: 0, y: 0, w: 10, h: 10, path: "sub/logo.png" }] }] });
+  if (process.platform === "linux") await expect(nested).resolves.toMatchObject({ presentationId: "deck-1" });
+  else await expect(nested).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/conversation folder root/) });
+});
+
+it.each(["file", "conversation folder"])("Slides reports a missing %s with its requested path", async (missing) => {
+  const run = await setup();
+  if (missing === "conversation folder") await rm(run.hostPath, { recursive: true });
+  const fetcher = vi.fn();
+  vi.stubGlobal("fetch", fetcher);
+  await expect(run.execute("slides_batch_update", { presentationId: "deck-1", requestsPath: "missing.json" })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("missing.json") });
+  expect(fetcher).not.toHaveBeenCalled();
 });

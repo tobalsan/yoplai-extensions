@@ -461,10 +461,10 @@ export class PipedriveClient {
 
     const query: Record<string, string | number> = {
       limit,
-      status: params.status ?? "open",
-      sort_by: params.sort_by ?? "update_time",
+      sort_by: params.sort_by === "won_time" ? "id" : params.sort_by ?? "update_time",
       sort_direction: params.sort_direction ?? "desc",
     };
+    if (params.status !== "all") query.status = params.status ?? "open";
     if (params.pipeline_id !== undefined) query.pipeline_id = params.pipeline_id;
     if (params.stage_id !== undefined) query.stage_id = params.stage_id;
     if (params.person_id !== undefined) query.person_id = params.person_id;
@@ -510,6 +510,15 @@ export class PipedriveClient {
 
     const names = await this.loadOwnerNames();
     for (const deal of matches) deal.owner_name = ownerName(names, deal.user_id);
+
+    if (params.sort_by === "won_time") {
+      const direction = params.sort_direction === "asc" ? 1 : -1;
+      matches.sort((a, b) => {
+        if (a.won_time === null) return b.won_time === null ? 0 : 1;
+        if (b.won_time === null) return -1;
+        return direction * (Date.parse(a.won_time) - Date.parse(b.won_time));
+      });
+    }
 
     return {
       deals: matches,
@@ -1348,7 +1357,7 @@ export class PipedriveClient {
       limit,
     };
     if (params.exact_match) query.exact_match = "true";
-    if (params.status !== undefined) query.status = params.status;
+    if (params.status !== undefined && params.status !== "all") query.status = params.status;
     if (params.person_id !== undefined) query.person_id = params.person_id;
     if (params.org_id !== undefined) query.organization_id = params.org_id;
     if (params.cursor !== undefined) query.cursor = params.cursor;
