@@ -284,7 +284,7 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
-type McpRuntimeConfig = { agents?: Array<{ id: string }>; oauth?: { providers?: Record<string, { clientId?: string; clientSecret?: string }> }; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
+type McpRuntimeConfig = { agents?: Array<{ id: string }>; extensions?: Record<string, unknown>; env?: Record<string, string>; server?: { baseUrl?: string } };
 export interface CredentialConnectHost {
   registerOAuthConnector(extensionId: string, start: (options: { agentId: string; userId: string; actorEmail?: string; impersonatorUserId?: string; targetId: string; onComplete: (targetId: string) => Promise<void> }) => Promise<string>): () => void;
   requestLink(toolContext: unknown, target: { kind: "extension-oauth"; extensionId: string; targetId: string }): Promise<string | undefined>;
@@ -689,7 +689,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       let server: McpServerConfig | undefined;
       try { server = loadedForAgent(agentId)?.servers.find((item) => item.name === name); } catch { return undefined; }
       return server?.type === "http" ? { url: server.url, clientId: server.oauth?.clientId } : undefined;
-    }, () => ctx.getConfig().oauth?.providers);
+    });
     connect = ctx.credentialConnect;
     resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {

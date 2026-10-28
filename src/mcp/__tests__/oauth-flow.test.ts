@@ -95,54 +95,24 @@ describe("MCP OAuth flow", () => {
     refreshAuthorization: vi.fn(),
   });
 
-  it("uses the host OAuth provider matching the issuer and resource scopes when registration is unavailable", async () => {
-    const mocks = googleServer({ resource: "https://calendarmcp.googleapis.com/mcp/v1", authorization_servers: ["https://accounts.google.com/"], scopes_supported: ["cal.read", "cal.write"] });
-    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
-    const { McpOAuthStore } = await import("../oauth.js");
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
-    dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ google: { clientId: "gid", clientSecret: "gsecret" } }));
-    const started = await store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1");
-    expect(mocks.registerClient).not.toHaveBeenCalled();
-    expect(mocks.startAuthorization).toHaveBeenCalledWith("https://accounts.google.com/", expect.objectContaining({ scope: "cal.read cal.write", clientInformation: expect.objectContaining({ client_id: "gid", client_secret: "gsecret" }) }));
-    const url = new URL(started.authorizationUrl);
-    expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("prompt")).toBe("consent");
-  });
-
-  it("prefers per-server scopes over resource scopes with a host provider", async () => {
+  it("prefers per-server scopes over resource scopes", async () => {
     const mocks = googleServer({ resource: "r", authorization_servers: ["https://accounts.google.com/"], scopes_supported: ["cal.read"] });
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ google: { clientId: "gid" } }));
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     await store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1", { clientId: "own", scopes: ["mine"] });
     expect(mocks.startAuthorization).toHaveBeenCalledWith("https://accounts.google.com/", expect.objectContaining({ scope: "mine", clientInformation: expect.objectContaining({ client_id: "own" }) }));
   });
 
-  it("uses the host hubspot provider for the HubSpot MCP issuer", async () => {
-    const mocks = {
-      ...googleServer(),
-      discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://mcp.hubspot.com", authorizationServerMetadata: { issuer: "https://mcp.hubspot.com", authorization_endpoint: "https://mcp.hubspot.com/oauth/authorize/user", token_endpoint: "https://mcp.hubspot.com/oauth/v3/token" }, resourceMetadata: { resource: "https://mcp.hubspot.com", authorization_servers: ["https://mcp.hubspot.com"], scopes_supported: [] } }),
-      startAuthorization: vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://mcp.hubspot.com/oauth/authorize/user"), codeVerifier: "verifier" }),
-    };
-    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => mocks);
-    const { McpOAuthStore } = await import("../oauth.js");
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
-    dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ hubspot: { clientId: "hid", clientSecret: "hsecret" } }));
-    await store.begin("connie", "hubspot", "https://mcp.hubspot.com");
-    expect(mocks.startAuthorization).toHaveBeenCalledWith("https://mcp.hubspot.com", expect.objectContaining({ clientInformation: expect.objectContaining({ client_id: "hid", client_secret: "hsecret" }) }));
-  });
-
-  it("keeps a clear error when no client can be resolved", async () => {
+  it("fails with a clear error when a non-DCR server has no static client", async () => {
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => googleServer());
     const { McpOAuthStore } = await import("../oauth.js");
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-flow-"));
     dirs.push(dataDir);
-    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials, undefined, () => ({ github: { clientId: "x" } }));
-    await expect(store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1")).rejects.toThrow("dynamic client registration; set oauth.clientId in mcp.json or configure oauth.providers.google in yoplai.json");
+    const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
+    await expect(store.begin("connie", "calendar", "https://calendarmcp.googleapis.com/mcp/v1")).rejects.toThrow("OAuth server does not support dynamic client registration; set oauth.clientId (and oauth.clientSecret if the provider requires one) on this server in mcp.json");
   });
 
   it("coalesces concurrent refreshes for the same connection", async () => {

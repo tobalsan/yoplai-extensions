@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- MCP servers no longer read the host `oauth.providers` config. Set `oauth.clientId` (and `oauth.clientSecret` if the provider requires one) on the server in `mcp.json`, or use dynamic client registration. Installs that used `oauth.providers.google` or `hubspot` for an MCP server must add an `oauth` block to it, and users connect again once.
+
 ### Added
 
 - Zendesk `upload_article_attachment` uploads conversation-folder PNG, JPEG, WebP and GIF images up to 5 MB and returns an HTML snippet for article bodies (ALG-556).

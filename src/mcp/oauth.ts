@@ -42,15 +42,6 @@ function identityOf({ url, clientId }: McpServerIdentity): string {
   return clientId ? `${normalized}#${clientId}` : normalized;
 }
 
-export type HostOAuthProviders = () => Record<string, { clientId?: string; clientSecret?: string } | undefined> | undefined;
-
-/** Authorization server host -> host `oauth.providers` key. */
-const KNOWN_ISSUER_PROVIDERS: Record<string, string> = { "accounts.google.com": "google", "mcp.hubspot.com": "hubspot" };
-
-function providerNameForIssuer(authorizationServerUrl: string): string | undefined {
-  try { return KNOWN_ISSUER_PROVIDERS[new URL(authorizationServerUrl).host.toLowerCase()]; } catch { return undefined; }
-}
-
 /** RFC 9728 lookup using the same SDK discovery as `begin()`; true when the resource lists authorization servers. */
 export async function hasProtectedResourceAuthServers(url: string, signal?: AbortSignal): Promise<boolean> {
   try {
@@ -143,7 +134,7 @@ export class McpOAuthStore {
   private readonly refreshes = new Map<string, { promise: Promise<McpTokenResult>; controller: AbortController; waiters: number; totalDeadline: boolean }>();
   private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
-  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly hostProviders?: HostOAuthProviders) {}
+  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver) {}
 
   private legacyKey(agent: string, server: string, scope: CredentialScope): CredentialKey {
     return { agentId: agent, integration: `mcp:${server}`, scope };
@@ -269,13 +260,10 @@ export class McpOAuthStore {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
     const dynamic = Boolean(info.authorizationServerMetadata?.registration_endpoint);
-    const providerName = providerNameForIssuer(info.authorizationServerUrl);
-    const provider = !staticClient && !dynamic && providerName ? this.hostProviders?.()?.[providerName] : undefined;
-    const hostClient = provider?.clientId ? { clientId: provider.clientId, clientSecret: provider.clientSecret } : undefined;
-    if (!staticClient && !dynamic && !hostClient) {
-      throw new Error(`OAuth server does not support dynamic client registration; set oauth.clientId in mcp.json or configure oauth.providers.${providerName ?? "<provider>"} in yoplai.json`);
+    if (!staticClient && !dynamic) {
+      throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId (and oauth.clientSecret if the provider requires one) on this server in mcp.json");
     }
-    const preRegistered = staticClient ?? hostClient;
+    const preRegistered = staticClient;
     const identity = { url, clientId: staticClient?.clientId };
     const existing = await this.read(agent, server, scope, identity);
     const client: OAuthClientInformationFull = preRegistered
