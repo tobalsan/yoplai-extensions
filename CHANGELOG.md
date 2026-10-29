@@ -8,6 +8,8 @@
 
 ### Added
 
+- Pipedrive `list_deals` returns `add_time` and `update_time` and supports inclusive `added_from` / `added_to` creation-date filters (ALG-565).
+
 - Read-only Google Search Console tools for property discovery, exact period comparisons, search analytics, URL inspection and sitemap health via personal or team Google OAuth (ALG-564).
 
 - Zendesk `upload_article_attachment` uploads conversation-folder PNG, JPEG, WebP and GIF images up to 5 MB and returns an HTML snippet for article bodies (ALG-556).

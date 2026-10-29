@@ -104,6 +104,28 @@ describe("pipedrive allowWrite gating", () => {
   });
 });
 
+it("describes creation-date filtering and returns timestamps in the list output contract", () => {
+  const tool = extension.createTools({ global: {}, agent: {}, merged: credentials })
+    .find((entry) => entry.name === "list_deals")!;
+
+  expect(tool.description).toContain("added_from");
+  expect(tool.description).toContain("added_to");
+  expect(tool.description).toContain("add_time");
+  expect(tool.description).toContain("update_time");
+  const parsed = tool.outputSchema!.parse({
+    deals: [{
+      id: 17, title: "Renewal", value: 250, currency: "EUR", status: "open", stage_id: 2, pipeline_id: 1,
+      person_id: 4, org_id: 9, user_id: 5, owner_name: "Jo", expected_close_date: null,
+      add_time: "2026-06-01T10:00:00Z", update_time: "2026-06-30 23:59:00", won_time: null,
+      local_won_date: null, local_close_date: null, deal_url: "https://acme.pipedrive.com/deal/17",
+    }],
+    next_cursor: null, count: 1,
+  });
+  expect(parsed.deals[0]).toMatchObject({
+    add_time: "2026-06-01T10:00:00Z", update_time: "2026-06-30 23:59:00",
+  });
+});
+
 it("declares result fields for all seven codemode reads and accepts lean and full fixtures", async () => {
   const tools = extension.createTools({ global: {}, agent: {}, merged: credentials });
   const deal = {
