@@ -142,6 +142,16 @@ Superadmins manage a host-wide catalog in `<YOPLAI_HOME>/mcp.json` (same `{ "mcp
 
 Every agent lists catalog servers on its extensions page, even without its own `mcp.json`, as cards with `shared: true` and `enabled`. They are **off by default**: no connection is started and no tools are exposed until a member enables one (`POST /mcp/servers/shared?agent=&server=` with `{ "enabled": true|false }`), which records the key in the yoplai-only `"sharedServers": ["linear"]` field of the agent's `mcp.json` (created if missing; other fields are preserved; audit `mcp.server.enable|disable`). Enabled servers behave like local ones, including Just me / Whole team OAuth; team grants stay per agent and server key. A local entry with the same key or the same URL wins and hides the catalog entry for that agent, so existing grants are untouched. Agent cards offer Enable/Disable (not Remove) for shared servers.
 
+## Server icons
+
+Cards and catalog rows use this order: known server icon, saved or live server-reported icon, website favicon, then the client placeholder. A successful live check saves the reported icon as `serverIcon` in managed agent entries or the shared catalog; a missing or invalid replacement keeps the saved icon. Capture and refresh never rewrite hand-edited agent entries. Fast `live=0` responses read saved icons without network access, including after restart.
+
+`serverIcon` is internal metadata, hidden from the JSON editor and preserved on save. HTTP(S) icons are limited to 2048 characters. Embedded PNG, JPEG, GIF and WebP must be base64; SVG may be base64 or percent-encoded, with script, foreign-object, event-handler and JavaScript-URL content rejected. The full data URI is limited to 32 KiB of UTF-8. Consumers must render icons through `<img>` only, never inline SVG or open the URI as a document.
+
+`POST /mcp/servers/icon/refresh?agent=&server=` refreshes an existing local HTTP server with the requester's effective credentials. `POST /mcp/catalog/icon/refresh?server=` is superadmin-only and tries an unauthenticated connection because catalog entries hold no credentials. Both bypass favicon hits and memoized misses, preserve an old favicon on failure, audit `mcp.server.update` on field `icon`, and return `{ status: "updated" | "unchanged" | "not_connected", server }`. User OAuth servers without a usable connection return `not_connected` without refreshing; a sign-in-only catalog server still refreshes its website favicon and captures its own icon when an agent later connects.
+
+The web details page offers **Refresh icon** for local HTTP servers; the admin catalog offers it per row. Deploy the extension endpoints before the web controls.
+
 ## Label overrides
 
 `displayName` and `description` set manually always win over server-reported `serverInfo` and the built-in host table, and automatic label saving never overwrites them. Superadmins can set or clear them for any local server (including OAuth and stdio; labels only) from a collapsed "Edit MCP details" section on the server page, backed by `POST /mcp/servers/label?agent=&server=` and `{ displayName?, description? }` (trimmed, capped at 100/500 characters; empty removes the field so the server-reported label is used again; audit `mcp.server.update`). Catalog servers are labeled on the admin page and shared cards use those labels.

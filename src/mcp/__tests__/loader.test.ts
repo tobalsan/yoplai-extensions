@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { parseMcpConfig } from "../loader.js";
 
 describe("mcp config loader", () => {
+  it("does not interpolate saved icon metadata into connection configuration", () => {
+    const loaded = parseMcpConfig(JSON.stringify({ mcpServers: {
+      remote: { url: "https://example.test/mcp", serverIcon: "data:image/svg+xml,%3Csvg%3E${NAME}%3C/svg%3E" },
+    } }), {});
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.servers).toEqual([{ type: "http", name: "remote", url: "https://example.test/mcp" }]);
+  });
+
   it("parses stdio and HTTP servers with env interpolation", () => {
     const loaded = parseMcpConfig(
       JSON.stringify({

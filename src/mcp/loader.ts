@@ -88,7 +88,10 @@ function parseServer(
   raw: unknown,
   env: Record<string, string>
 ): McpServerConfig {
-  const interpolated = interpolateValue(raw, env);
+  // Saved presentation metadata is literal, never connection-time environment input.
+  const connectionConfig = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "serverIcon")) : raw;
+  const interpolated = interpolateValue(connectionConfig, env);
   const http = HttpServerSchema.safeParse(interpolated);
   if (http.success) {
     return {

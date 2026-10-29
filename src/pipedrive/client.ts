@@ -444,7 +444,7 @@ export class PipedriveClient {
 
   /**
    * List deals with server-side filters (pipeline/stage/status/person/org/user)
-   * plus the net-new expected-close-date and won-date range filters, both
+   * plus expected-close-date, won-date and creation-date range filters,
    * applied client-side during cursor pagination assembly. Returns a lean
    * per-deal projection and a next_cursor that resumes exactly where this
    * page stopped (no gaps or dupes).
@@ -457,7 +457,10 @@ export class PipedriveClient {
     const wonFrom = params.won_from ?? null;
     const wonTo = params.won_to ?? null;
     const hasWonRange = wonFrom !== null || wonTo !== null;
-    const hasFilter = hasRange || hasWonRange;
+    const addedFrom = params.added_from ?? null;
+    const addedTo = params.added_to ?? null;
+    const hasAddedRange = addedFrom !== null || addedTo !== null;
+    const hasFilter = hasRange || hasWonRange || hasAddedRange;
 
     const query: Record<string, string | number> = {
       limit,
@@ -477,7 +480,7 @@ export class PipedriveClient {
     let cursor = params.cursor ?? null;
     let pagesFetched = 0;
 
-    // Without a close-date range this loop runs once and returns Pipedrive's
+    // Without a date range this loop runs once and returns Pipedrive's
     // native page + cursor unchanged. With a range it keeps fetching pages
     // until `limit` matches are collected (or the pipeline is exhausted),
     // returning the cursor at the stopping point so the next call resumes cleanly.
@@ -491,6 +494,7 @@ export class PipedriveClient {
       for (const raw of page.data) {
         if (hasRange && !inCloseDateRange(raw.expected_close_date, from, to)) continue;
         if (hasWonRange && !inWonDateRange(raw.won_time, wonFrom, wonTo)) continue;
+        if (hasAddedRange && !inWonDateRange(raw.add_time, addedFrom, addedTo)) continue;
         const summary = this.toDealSummary(raw);
         if (fieldKeys) summary.custom_fields = await this.pickCustomFields(raw, fieldKeys);
         matches.push(summary);
@@ -922,6 +926,8 @@ export class PipedriveClient {
       user_id: toNumberOrNull(raw.owner_id ?? raw.user_id),
       owner_name: null,
       expected_close_date: toStringOrNull(raw.expected_close_date),
+      add_time: toStringOrNull(raw.add_time),
+      update_time: toStringOrNull(raw.update_time),
       won_time: toStringOrNull(raw.won_time),
       local_won_date: toStringOrNull(raw.local_won_date),
       local_close_date: toStringOrNull(raw.local_close_date),
