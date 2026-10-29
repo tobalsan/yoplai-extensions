@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import gmail from "./gmail/index.js";
 import googleCalendar from "./google-calendar/index.js";
+import googleSearchConsole from "./google-search-console/index.js";
 import googleDrive from "./google-drive/index.js";
 import notion from "./notion/index.js";
 import { defineToolExtension } from "./tool-extension.js";
@@ -28,6 +29,7 @@ describe("oauthProviders", () => {
     expect(drive?.id).toBe("google");
     expect(gmail.oauthProviders?.[0]).toBe(drive);
     expect(googleCalendar.oauthProviders?.[0]).toBe(drive);
+    expect(googleSearchConsole.oauthProviders?.[0]).toBe(drive);
     expect(drive?.extractAccount?.({ email: "a@b.c" })).toBe("a@b.c");
   });
 
