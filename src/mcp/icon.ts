@@ -2,6 +2,46 @@ import fs from "node:fs";
 import path from "node:path";
 import { raceTimeout } from "./timeout.js";
 
+export interface ServerIcon {
+  src: string;
+  mimeType?: string;
+  sizes?: string[];
+  theme?: "light" | "dark";
+}
+
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"]);
+
+/** Normalize server metadata both before saving and after reading it. Render only through <img>, never inline or as a document. */
+export function normalizeServerIcon(input: unknown, serverUrl: string): string | undefined {
+  const icons: ServerIcon[] = typeof input === "string" ? [{ src: input }] : Array.isArray(input)
+    ? input.filter((icon): icon is ServerIcon => !!icon && typeof icon === "object" && typeof icon.src === "string") : [];
+  const ranked = [...icons].sort((a, b) => Number(a.theme === "dark") - Number(b.theme === "dark")
+    || Number(IMAGE_TYPES.has(b.mimeType ?? "")) - Number(IMAGE_TYPES.has(a.mimeType ?? "")));
+  for (const icon of ranked) {
+    try {
+      if (icon.src.startsWith("data:")) {
+        const data = icon.src.match(/^data:([^;,]+)(;base64)?,([\s\S]+)$/i);
+        if (!data || Buffer.byteLength(icon.src, "utf8") > 32 * 1024 || !IMAGE_TYPES.has(data[1].toLowerCase())) continue;
+        const svg = data[1].toLowerCase() === "image/svg+xml";
+        if (!data[2] && !svg) continue;
+        if (data[2] && (!/^[A-Za-z0-9+/]+={0,2}$/.test(data[3]) || data[3].length % 4 === 1)) continue;
+        if (svg) {
+          const text = (data[2] ? Buffer.from(data[3], "base64").toString("utf8") : decodeURIComponent(data[3]))
+            .replace(/&#(x[0-9a-f]+|\d+);?/gi, (_, code: string) => String.fromCodePoint(code[0].toLowerCase() === "x" ? parseInt(code.slice(1), 16) : Number(code)))
+            .replace(/&(?:Tab|NewLine);/gi, " ")
+            .replace(/&colon;/gi, ":");
+          if (/<(?:[\w.-]+:)?(?:script|foreignobject)\b|[\s/]on[\w:.-]+\s*=|<!DOCTYPE|<!ENTITY/i.test(text)
+            || /javascript:/i.test(text.replace(/[\s\u0000-\u001f]/g, ""))) continue;
+        }
+        return icon.src;
+      }
+      const url = new URL(icon.src, serverUrl);
+      if ((url.protocol === "http:" || url.protocol === "https:") && url.href.length <= 2048) return url.href;
+    } catch { /* ignore invalid icons */ }
+  }
+  return undefined;
+}
+
 /** Site label for a host, used as a readable server key: `mcp.linear.app` → `linear`, `claap.io` → `claap`. */
 export function siteLabel(hostname: string): string {
   const site = rootDomain(hostname) ?? hostname;
@@ -88,6 +128,14 @@ export function createIconResolver(dataDir: string) {
   const cached = (serverUrl: string): string | undefined => {
     try { return cache[new URL(serverUrl).hostname]; } catch { return undefined; }
   };
+  const refresh = (serverUrl: string): Promise<string | undefined> => {
+    let hostname: string;
+    try { hostname = new URL(serverUrl).hostname; } catch { return Promise.resolve(undefined); }
+    pending.delete(hostname);
+    const result = lookup(serverUrl).catch(() => undefined);
+    pending.set(hostname, result);
+    return result;
+  };
   return Object.assign((serverUrl: string): Promise<string | undefined> => {
     let hostname: string;
     try { hostname = new URL(serverUrl).hostname; } catch { return Promise.resolve(undefined); }
@@ -95,5 +143,5 @@ export function createIconResolver(dataDir: string) {
     // Misses stay memoized for the process lifetime to avoid re-probing on every refresh.
     if (!pending.has(hostname)) pending.set(hostname, lookup(serverUrl).catch(() => undefined));
     return pending.get(hostname)!;
-  }, { cached });
+  }, { cached, refresh });
 }

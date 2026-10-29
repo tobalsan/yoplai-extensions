@@ -11,7 +11,7 @@ import { logMcpUnavailable, type McpLogPath } from "./logging.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
-import { createIconResolver, knownServer, siteLabel } from "./icon.js";
+import { createIconResolver, knownServer, normalizeServerIcon, siteLabel } from "./icon.js";
 import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
 import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
@@ -154,6 +154,7 @@ function maskValues(values: unknown): unknown {
 /** Copy of a raw server entry that is safe to show: header/env values and OAuth client secret are masked. */
 function maskServerConfig(server: Record<string, unknown>): Record<string, unknown> {
   const masked: Record<string, unknown> = { ...server };
+  delete masked.serverIcon;
   if ("headers" in masked) masked.headers = maskValues(masked.headers);
   if ("env" in masked) masked.env = maskValues(masked.env);
   if (isRecord(masked.oauth) && "clientSecret" in masked.oauth) masked.oauth = { ...masked.oauth, clientSecret: MASK };
@@ -176,6 +177,8 @@ function validateEditedHttpServer(submitted: unknown, original: Record<string, u
     if (field in submitted) throw new Error(`"${field}" is not allowed; only HTTP servers are editable`);
   }
   const next: Record<string, unknown> = { ...submitted };
+  delete next.serverIcon;
+  if (typeof original.serverIcon === "string") next.serverIcon = original.serverIcon;
   if ("headers" in next) next.headers = restoreMasked(next.headers, original.headers, "Header");
   if (isRecord(next.oauth) && next.oauth.clientSecret === MASK) {
     const secret = isRecord(original.oauth) ? original.oauth.clientSecret : undefined;
@@ -215,6 +218,21 @@ function saveServerTitle(filePath: string, name: string, title: string): void {
     entry.serverTitle = title;
     writeRawConfig(filePath, root);
   } catch { /* label is best-effort */ }
+}
+
+/** Captured icons are metadata for <img> only; never inline them or open them as documents. */
+/** Returns the write error message when saving failed; undefined when saved or nothing to save. */
+function saveServerIcon(filePath: string, name: string, icon: string, shared = false): string | undefined {
+  try {
+    const root = readRawConfig(filePath);
+    const entry = isRecord(root.mcpServers) ? root.mcpServers[name] : undefined;
+    if (!isRecord(entry) || (!shared && entry.yoplaiManaged !== true) || entry.serverIcon === icon) return undefined;
+    entry.serverIcon = icon;
+    writeRawConfig(filePath, root);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function extensionHub(agentId: string): string {
@@ -369,7 +387,12 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     return { agent, path: resolveConfigPath(agent, resolveExtensionConfig(agent, runtime.getConfig())) };
   }
 
-  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }, mode: "default" | "fast" | "status" = "default") {
+  async function cardIcon(serverUrl: string, reported: unknown, favicon: string | Promise<string | undefined> | undefined): Promise<string | undefined> {
+    return knownServer(serverUrl)?.iconUrl ?? normalizeServerIcon(reported, serverUrl)
+      ?? await favicon;
+  }
+
+  async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }, mode: "default" | "fast" | "status" = "default", refreshIcon = false) {
     const active = !shared || shared.enabled;
     let oauthServer = (active || mode !== "default") && server.type === "http" && !server.headers && await isOAuthServer(agentId, server, requesterUserId, mode === "default");
     let auth = server.type === "stdio" ? "stdio" : server.headers ? "static" : oauthServer ? "oauth" : "none";
@@ -386,7 +409,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     let connected = false;
     let failure: McpServerError | undefined;
     const statusController = mode === "status" ? new AbortController() : undefined;
-    let iconUrl: string | undefined;
+    let iconUrl = server.type === "http" && isRecord(rawServer) ? normalizeServerIcon(rawServer.serverIcon, server.url) : undefined;
+    let iconSaveError: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
     const known = server.type === "http" ? knownServer(server.url) : undefined;
@@ -414,12 +438,16 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
           if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
         }
         if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
-        const icon = manager.getServerIcon(server.name);
+        const icon = server.type === "http" && manager.hasClient(server.name) ? normalizeServerIcon(manager.getServerIcons(server.name), server.url) : undefined;
         if (icon) {
+          // Keep the saved icon when the write fails, so the card matches what is on disk.
+          iconSaveError = rawPath ? saveServerIcon(rawPath, server.name, icon, !!shared) : undefined;
+          if (!iconSaveError) iconUrl = icon;
+        } else if (server.type === "stdio") {
           try {
-            const candidate = new URL(icon, server.type === "http" ? server.url : undefined);
-            if (candidate.protocol === "http:" || candidate.protocol === "https:") iconUrl = candidate.toString();
-          } catch { /* Ignore invalid server-provided icons. */ }
+            const legacy = new URL(manager.getServerIcon(server.name) ?? "");
+            if (legacy.protocol === "http:" || legacy.protocol === "https:") iconUrl = legacy.toString();
+          } catch { /* Keep existing stdio icon handling separate from HTTP icon capture. */ }
         }
       };
       if (mode === "status") await withTimeout(check(), 10_000, "MCP server status timed out");
@@ -447,15 +475,18 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (failure.category === "network" || failure.category === "timeout") state = "unreachable";
       else if (failure.category === "protocol" || failure.category === "configuration") state = "disconnected";
     }
+    if (refreshIcon && server.type === "http" && !(oauthServer && (state === "needs_reconnect" || (!personal && !team)))) await resolveIcon?.refresh(server.url);
     return {
       name: server.name,
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
       type: server.type,
-      ...(server.type === "http" ? { url: server.url, iconUrl: iconUrl ?? await siteIcon } : iconUrl ? { iconUrl } : {}),
+      ...(server.type === "http" ? { url: server.url } : {}),
+      iconUrl: server.type === "http" ? await cardIcon(server.url, iconUrl, refreshIcon ? resolveIcon?.cached(server.url) : siteIcon) : iconUrl,
       auth,
       ...(mode === "fast" ? { status: "pending" } : {}),
       ...(mode === "status" && failure ? { error: failure.message } : {}),
+      ...(refreshIcon && iconSaveError ? { iconSaveError } : {}),
       state,
       ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team), ...(personalAccount ? { personalAccount } : {}), ...(teamAccount ? { teamAccount } : {}) } : {}),
       readOnly: !managed,
@@ -749,8 +780,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         if (value) entry[field] = value; else delete entry[field];
       }
     }
-    function catalogCard(name: string, entry: Record<string, unknown>) {
-      return { name, url: entry.url as string, ...(typeof entry.displayName === "string" ? { displayName: entry.displayName } : {}), ...(typeof entry.description === "string" ? { description: entry.description } : {}) };
+    async function catalogCard(name: string, entry: Record<string, unknown>, cached = false) {
+      const url = entry.url as string;
+      return { name, url, iconUrl: await cardIcon(url, entry.serverIcon, cached ? resolveIcon?.cached(url) : resolveIcon?.(url)), ...(typeof entry.displayName === "string" ? { displayName: entry.displayName } : {}), ...(typeof entry.description === "string" ? { description: entry.description } : {}) };
     }
     /** Catalog routes are superadmin-only; returns an error response or undefined when allowed. */
     function catalogDenied(c: RouteContext) {
@@ -849,7 +881,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     app.get("/mcp/catalog", async (c) => {
       const denied = catalogDenied(c);
       if (denied) return denied;
-      const servers = await Promise.all(Object.entries(catalogServers()).map(async ([name, entry]) => ({ ...catalogCard(name, entry), iconUrl: await resolveIcon?.(entry.url as string) })));
+      const servers = await Promise.all(Object.entries(catalogServers()).map(([name, entry]) => catalogCard(name, entry)));
       return c.json({ servers });
     });
     app.post("/mcp/catalog", async (c) => {
@@ -878,10 +910,43 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         writeRawConfig(catalogPath(), root);
         await resetManagers();
         audit({ ...actor(c), action: "mcp.server.add", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "catalog", secret: "set" }] });
-        return c.json({ server: { ...catalogCard(name, entry), iconUrl: await resolveIcon?.(entry.url as string) } });
+        return c.json({ server: await catalogCard(name, entry) });
       } catch (error) {
         return c.text(error instanceof Error ? error.message : "Unable to add catalog server", 400);
       }
+    });
+    app.post("/mcp/catalog/icon/refresh", async (c) => {
+      const denied = catalogDenied(c);
+      if (denied) return denied;
+      const name = c.req.query("server");
+      const entry = name ? catalogServers()[name] : undefined;
+      if (!name || !entry) return c.text("Unknown catalog server", 404);
+      const server = parseMcpConfig(JSON.stringify({ mcpServers: { [name]: entry } }), processEnvRecord()).servers[0];
+      if (!server || server.type !== "http") return c.text("Invalid HTTP catalog server", 400);
+      const before = await catalogCard(name, entry, true);
+      const controller = new AbortController();
+      const manager = new McpClientManager([server], { clientFactory, statusOnly: true, throwOnError: true, signal: controller.signal });
+      let notConnected = false;
+      let error: string | undefined;
+      let saveError: string | undefined;
+      try {
+        await withTimeout(manager.connect(), 10_000, "MCP server status timed out");
+        const icon = normalizeServerIcon(manager.getServerIcons(name), server.url);
+        if (manager.hasClient(name) && icon) saveError = saveServerIcon(catalogPath(), name, icon, true);
+        notConnected = manager.getErrors().some((error) => error.category === "authentication");
+      } catch (failure) {
+        controller.abort(failure);
+        notConnected = classifyMcpError(failure) === "authentication";
+        if (!notConnected) error = failure instanceof Error ? failure.message : String(failure);
+      } finally {
+        void manager.close().catch(() => {});
+      }
+      await resolveIcon?.refresh(server.url);
+      const card = await catalogCard(name, catalogServers()[name] ?? entry, true);
+      if (saveError) error = saveError;
+      const status = notConnected ? "not_connected" : saveError ? "save_failed" : error ? "unreachable" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
+      audit({ ...actor(c), action: "mcp.server.update", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
+      return c.json({ status, server: card, ...(error ? { error } : {}) });
     });
     app.post("/mcp/catalog/update", async (c) => {
       const denied = catalogDenied(c);
@@ -898,7 +963,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         applyLabel(entry, input);
         writeRawConfig(catalogPath(), root);
         audit({ ...actor(c), action: "mcp.server.update", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "catalog", secret: "set" }] });
-        return c.json({ server: catalogCard(name, entry) });
+        return c.json({ server: await catalogCard(name, entry) });
       } catch (error) {
         return c.text(error instanceof Error ? error.message : "Unable to update catalog server", 400);
       }
@@ -956,6 +1021,32 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       } catch (error) {
         return c.text(error instanceof Error ? error.message : "Unable to update shared MCP server", 400);
       }
+    });
+    app.post("/mcp/servers/icon/refresh", async (c) => {
+      const agentId = c.req.query("agent");
+      const name = c.req.query("server");
+      const agent = agentId ? runtime?.getAgent(agentId) : undefined;
+      if (!agentId || !agent || !runtime) return c.text("Unknown agent", 404);
+      const unauthenticated = authRequired(c);
+      if (unauthenticated) return unauthenticated;
+      const merged = mergedForAgent(agent, runtime.getConfig());
+      const server = merged?.all.servers.find((item) => item.name === name);
+      if (!server || merged?.shared.has(server.name)) return c.text("Unknown user MCP server", 404);
+      if (server.type !== "http") return c.text("Only HTTP server icons can be refreshed", 400);
+      const before = await serverCard(agentId, server, userId(c), undefined, "fast");
+      if (!server.headers && await isOAuthServer(agentId, server, userId(c), false)) {
+        const grant = await oauth?.resolve(agentId, server.name, userId(c));
+        if (!grant || grant.connection.state === "needs_reconnect" || !grant.connection.tokens.access_token
+          || (grant.connection.expiresAt && Date.parse(grant.connection.expiresAt) <= Date.now() && !grant.connection.tokens.refresh_token)) return c.json({ status: "not_connected", server: before });
+      }
+      const card = await serverCard(agentId, server, userId(c), undefined, "status", true);
+      const notConnected = card.auth === "oauth" && (card.state === "needs_reconnect" || (card.personalState !== "connected" && card.teamState !== "connected"));
+      // Hand-edited entries are never written, so a changed live icon is "not_saved", never "updated".
+      // A failed write keeps the old icon on the card and reports "save_failed", never "updated".
+      const { iconSaveError, ...saved } = card;
+      const status = notConnected ? "not_connected" : card.state === "unreachable" ? "unreachable" : iconSaveError ? "save_failed" : before.iconUrl === card.iconUrl ? "unchanged" : card.readOnly ? "not_saved" : "updated";
+      audit({ ...actor(c), action: "mcp.server.update", agentId, targetType: "mcp", targetId: server.name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
+      return c.json({ status, server: saved, ...(iconSaveError ? { error: iconSaveError } : {}) });
     });
     app.post("/mcp/servers/label", async (c) => {
       const agentId = c.req.query("agent");
