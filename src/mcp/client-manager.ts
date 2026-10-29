@@ -6,6 +6,8 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType, JsonSchemaValidator, jsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 
 import type { McpResourceContent, McpToolUi, McpToolVisibility } from "../tool-extension.js";
 
@@ -16,6 +18,34 @@ import { logMcpUnavailable, type McpLogContext, type McpLogEvent, type McpLogLev
 import { withTimeout as withDeadline } from "./timeout.js";
 
 const withTimeout = <T>(task: Promise<T>, message: string): Promise<T> => withDeadline(task, 10_000, message);
+
+const ajvValidator = new AjvJsonSchemaValidator();
+const outputValidators = new Map<string, JsonSchemaValidator<unknown>>();
+const sharedJsonSchemaValidator: jsonSchemaValidator = {
+  getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+    const key = JSON.stringify(schema);
+    let validator = outputValidators.get(key);
+    if (!validator) {
+      // Ajv reuses $id without comparing content, so servers must not share its ID registry.
+      const provider = typeof schema.$id === "string" ? new AjvJsonSchemaValidator() : ajvValidator;
+      validator = provider.getValidator(schema);
+      outputValidators.set(key, validator);
+    }
+    return validator as JsonSchemaValidator<T>;
+  },
+};
+
+async function withRequestSignal<T>(signal: AbortSignal | undefined, request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  try {
+    return await request(controller.signal);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
 
 export interface McpToolDefinition {
   server: string;
@@ -107,11 +137,11 @@ export class SdkMcpClientHandle implements McpClientHandle {
   ) {}
 
   static async connect(server: McpServerConfig, accessToken?: string, statusOnly = false, options?: { signal?: AbortSignal; transportFactory?: (server: McpServerConfig, accessToken?: string) => Transport }): Promise<SdkMcpClientHandle> {
-    const client = new Client({ name: "yoplai-mcp", version: "0.1.0" }, { capabilities: { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } } });
+    const client = new Client({ name: "yoplai-mcp", version: "0.1.0" }, { capabilities: { extensions: { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } } }, jsonSchemaValidator: sharedJsonSchemaValidator });
     const transport = (options?.transportFactory ?? createTransport)(server, accessToken);
     try {
       options?.signal?.throwIfAborted();
-      const pending = client.connect(transport, { signal: options?.signal });
+      const pending = withRequestSignal(options?.signal, (signal) => client.connect(transport, { signal }));
       await abortable(options?.signal ? pending : withTimeout(pending, `MCP server "${server.name}" connection timed out`), options?.signal);
     } catch (error) {
       if (statusOnly || options?.signal?.aborted) {
@@ -126,7 +156,7 @@ export class SdkMcpClientHandle implements McpClientHandle {
   }
 
   async listTools(options?: { signal?: AbortSignal }): Promise<McpToolDefinition[]> {
-    const result = await this.client.listTools(undefined, options);
+    const result = await withRequestSignal(options?.signal, (signal) => this.client.listTools(undefined, { signal }));
     return result.tools.map((tool) => ({
       server: this.serverName,
       name: tool.name,
@@ -137,14 +167,14 @@ export class SdkMcpClientHandle implements McpClientHandle {
   }
 
   async callTool(name: string, args: unknown, options?: { signal?: AbortSignal }): Promise<unknown> {
-    return await this.client.callTool({
+    return await withRequestSignal(options?.signal, (signal) => this.client.callTool({
       name,
       arguments: args && typeof args === "object" ? (args as Record<string, unknown>) : {},
-    }, undefined, { signal: options?.signal });
+    }, undefined, { signal }));
   }
 
   async readResource(uri: string, options?: { signal?: AbortSignal }): Promise<{ contents: McpResourceContent[] }> {
-    return await this.client.readResource({ uri }, options);
+    return await withRequestSignal(options?.signal, (signal) => this.client.readResource({ uri }, { signal }));
   }
 
   getServerIcon(): string | undefined {

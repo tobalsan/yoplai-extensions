@@ -111,9 +111,10 @@ describe("McpClientManager", () => {
     await manager.connect();
     const pending = manager.invokeTool("local", "sleep", {}, { signal: controller.signal });
     const rejected = expect(pending).rejects.toBe(reason);
-    expect(sdkCall).toHaveBeenCalledWith({ name: "sleep", arguments: {} }, undefined, { signal: controller.signal });
+    expect(sdkCall).toHaveBeenCalledOnce();
     controller.abort(reason);
     await rejected;
+    expect(sdkCall.mock.calls[0][2].signal?.reason).toBe(reason);
     expect(recover).not.toHaveBeenCalled();
   });
 
