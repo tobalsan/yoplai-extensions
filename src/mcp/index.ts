@@ -221,14 +221,18 @@ function saveServerTitle(filePath: string, name: string, title: string): void {
 }
 
 /** Captured icons are metadata for <img> only; never inline them or open them as documents. */
-function saveServerIcon(filePath: string, name: string, icon: string, shared = false): void {
+/** Returns the write error message when saving failed; undefined when saved or nothing to save. */
+function saveServerIcon(filePath: string, name: string, icon: string, shared = false): string | undefined {
   try {
     const root = readRawConfig(filePath);
     const entry = isRecord(root.mcpServers) ? root.mcpServers[name] : undefined;
-    if (!isRecord(entry) || (!shared && entry.yoplaiManaged !== true) || entry.serverIcon === icon) return;
+    if (!isRecord(entry) || (!shared && entry.yoplaiManaged !== true) || entry.serverIcon === icon) return undefined;
     entry.serverIcon = icon;
     writeRawConfig(filePath, root);
-  } catch { /* icon capture is best-effort */ }
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function extensionHub(agentId: string): string {
@@ -406,6 +410,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     let failure: McpServerError | undefined;
     const statusController = mode === "status" ? new AbortController() : undefined;
     let iconUrl = server.type === "http" && isRecord(rawServer) ? normalizeServerIcon(rawServer.serverIcon, server.url) : undefined;
+    let iconSaveError: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
     const known = server.type === "http" ? knownServer(server.url) : undefined;
@@ -435,8 +440,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
         if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
         const icon = server.type === "http" && manager.hasClient(server.name) ? normalizeServerIcon(manager.getServerIcons(server.name), server.url) : undefined;
         if (icon) {
-          iconUrl = icon;
-          if (rawPath) saveServerIcon(rawPath, server.name, icon, !!shared);
+          // Keep the saved icon when the write fails, so the card matches what is on disk.
+          iconSaveError = rawPath ? saveServerIcon(rawPath, server.name, icon, !!shared) : undefined;
+          if (!iconSaveError) iconUrl = icon;
         } else if (server.type === "stdio") {
           try {
             const legacy = new URL(manager.getServerIcon(server.name) ?? "");
@@ -480,6 +486,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       auth,
       ...(mode === "fast" ? { status: "pending" } : {}),
       ...(mode === "status" && failure ? { error: failure.message } : {}),
+      ...(refreshIcon && iconSaveError ? { iconSaveError } : {}),
       state,
       ...(oauthServer ? { personalState: scopeState(personal), teamState: scopeState(team), ...(personalAccount ? { personalAccount } : {}), ...(teamAccount ? { teamAccount } : {}) } : {}),
       readOnly: !managed,
@@ -921,10 +928,11 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const manager = new McpClientManager([server], { clientFactory, statusOnly: true, throwOnError: true, signal: controller.signal });
       let notConnected = false;
       let error: string | undefined;
+      let saveError: string | undefined;
       try {
         await withTimeout(manager.connect(), 10_000, "MCP server status timed out");
         const icon = normalizeServerIcon(manager.getServerIcons(name), server.url);
-        if (manager.hasClient(name) && icon) saveServerIcon(catalogPath(), name, icon, true);
+        if (manager.hasClient(name) && icon) saveError = saveServerIcon(catalogPath(), name, icon, true);
         notConnected = manager.getErrors().some((error) => error.category === "authentication");
       } catch (failure) {
         controller.abort(failure);
@@ -935,7 +943,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       }
       await resolveIcon?.refresh(server.url);
       const card = await catalogCard(name, catalogServers()[name] ?? entry, true);
-      const status = notConnected ? "not_connected" : error ? "unreachable" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
+      if (saveError) error = saveError;
+      const status = notConnected ? "not_connected" : saveError ? "save_failed" : error ? "unreachable" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
       audit({ ...actor(c), action: "mcp.server.update", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
       return c.json({ status, server: card, ...(error ? { error } : {}) });
     });
@@ -1033,9 +1042,11 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const card = await serverCard(agentId, server, userId(c), undefined, "status", true);
       const notConnected = card.auth === "oauth" && (card.state === "needs_reconnect" || (card.personalState !== "connected" && card.teamState !== "connected"));
       // Hand-edited entries are never written, so a changed live icon is "not_saved", never "updated".
-      const status = notConnected ? "not_connected" : card.state === "unreachable" ? "unreachable" : before.iconUrl === card.iconUrl ? "unchanged" : card.readOnly ? "not_saved" : "updated";
+      // A failed write keeps the old icon on the card and reports "save_failed", never "updated".
+      const { iconSaveError, ...saved } = card;
+      const status = notConnected ? "not_connected" : card.state === "unreachable" ? "unreachable" : iconSaveError ? "save_failed" : before.iconUrl === card.iconUrl ? "unchanged" : card.readOnly ? "not_saved" : "updated";
       audit({ ...actor(c), action: "mcp.server.update", agentId, targetType: "mcp", targetId: server.name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
-      return c.json({ status, server: card });
+      return c.json({ status, server: saved, ...(iconSaveError ? { error: iconSaveError } : {}) });
     });
     app.post("/mcp/servers/label", async (c) => {
       const agentId = c.req.query("agent");

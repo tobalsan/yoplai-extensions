@@ -8,7 +8,7 @@
 
 ### Added
 
-- MCP server icons persist across restarts and fast lists, support bounded image data URIs, and can be refreshed for user servers or the shared catalog (ALG-570).
+- MCP server icons persist across restarts and fast lists, support bounded image data URIs, and can be refreshed for user servers or the shared catalog; refresh reports `updated` only once the icon is saved, and `save_failed` (keeping the old icon) when the write fails (ALG-570).
 
 - Read-only Google Search Console tools for property discovery, exact period comparisons, search analytics, URL inspection and sitemap health via personal or team Google OAuth (ALG-564).
 

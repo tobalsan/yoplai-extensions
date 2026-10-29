@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -68,6 +69,25 @@ it("refreshes a user icon, persists it, and keeps it when initialize later omits
   expect((await t.read()).mcpServers.remote.serverIcon).toBe("https://icons.test/new.png");
   reported = undefined;
   await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "unchanged", server: { iconUrl: "https://icons.test/new.png" } });
+  await live.extension.stop();
+});
+
+it("never reports updated when saving a managed icon fails, and keeps the old icon on disk", async () => {
+  const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true, serverIcon: "https://icons.test/old.png" }, () => "https://icons.test/new.png");
+  const before = await fs.readFile(t.file, "utf8");
+  const live = await t.start();
+  const rename = syncFs.renameSync;
+  const spy = vi.spyOn(syncFs, "renameSync").mockImplementation((from, to) => {
+    if (to === t.file) throw new Error("disk full");
+    return rename(from, to);
+  });
+  const result = await live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" }) as { status: string; error?: string; server: { iconUrl?: string } };
+  spy.mockRestore();
+  expect(result.status).toBe("save_failed");
+  expect(result.error).toContain("disk full");
+  expect(result.server.iconUrl).toBe("https://icons.test/old.png");
+  expect(await fs.readFile(t.file, "utf8")).toBe(before);
+  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/old.png" }] });
   await live.extension.stop();
 });
 
