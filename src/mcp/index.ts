@@ -920,22 +920,24 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       const controller = new AbortController();
       const manager = new McpClientManager([server], { clientFactory, statusOnly: true, throwOnError: true, signal: controller.signal });
       let notConnected = false;
+      let error: string | undefined;
       try {
         await withTimeout(manager.connect(), 10_000, "MCP server status timed out");
         const icon = normalizeServerIcon(manager.getServerIcons(name), server.url);
         if (manager.hasClient(name) && icon) saveServerIcon(catalogPath(), name, icon, true);
         notConnected = manager.getErrors().some((error) => error.category === "authentication");
-      } catch (error) {
-        controller.abort(error);
-        notConnected = classifyMcpError(error) === "authentication";
+      } catch (failure) {
+        controller.abort(failure);
+        notConnected = classifyMcpError(failure) === "authentication";
+        if (!notConnected) error = failure instanceof Error ? failure.message : String(failure);
       } finally {
         void manager.close().catch(() => {});
       }
       await resolveIcon?.refresh(server.url);
       const card = await catalogCard(name, catalogServers()[name] ?? entry, true);
-      const status = notConnected ? "not_connected" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
+      const status = notConnected ? "not_connected" : error ? "unreachable" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
       audit({ ...actor(c), action: "mcp.server.update", agentId: "*", targetType: "mcp", targetId: name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
-      return c.json({ status, server: card });
+      return c.json({ status, server: card, ...(error ? { error } : {}) });
     });
     app.post("/mcp/catalog/update", async (c) => {
       const denied = catalogDenied(c);
@@ -1030,7 +1032,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       }
       const card = await serverCard(agentId, server, userId(c), undefined, "status", true);
       const notConnected = card.auth === "oauth" && (card.state === "needs_reconnect" || (card.personalState !== "connected" && card.teamState !== "connected"));
-      const status = notConnected ? "not_connected" : before.iconUrl !== card.iconUrl ? "updated" : "unchanged";
+      // Hand-edited entries are never written, so a changed live icon is "not_saved", never "updated".
+      const status = notConnected ? "not_connected" : card.state === "unreachable" ? "unreachable" : before.iconUrl === card.iconUrl ? "unchanged" : card.readOnly ? "not_saved" : "updated";
       audit({ ...actor(c), action: "mcp.server.update", agentId, targetType: "mcp", targetId: server.name, scope: "team", changes: [{ field: "icon", secret: "set" }] });
       return c.json({ status, server: card });
     });

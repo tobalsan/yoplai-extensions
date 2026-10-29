@@ -111,7 +111,7 @@ it("allows connected personal OAuth refresh and leaves hand-edited entries byte-
   await store.write("agent", "remote", { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "dummy", token_type: "Bearer" }, connectedAt: "2026-01-01T00:00:00Z", authorizationServerUrl: "https://auth.example.test" }, { type: "personal", userId: "user-a" });
   const original = await fs.readFile(t.file, "utf8");
   const live = await t.start();
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: "https://icons.test/server.png" } });
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "not_saved", server: { iconUrl: "https://icons.test/server.png" } });
   expect(await fs.readFile(t.file, "utf8")).toBe(original);
   await live.extension.stop();
 });
@@ -159,7 +159,7 @@ it("times out a catalog initialize, closes a late client, and keeps serving othe
   const pending = live.call("POST /mcp/catalog/icon/refresh", { server: "slow" });
   while (!finish) await new Promise((resolve) => setImmediate(resolve));
   await vi.advanceTimersByTimeAsync(10_001);
-  await expect(pending).resolves.toMatchObject({ status: "unchanged" });
+  await expect(pending).resolves.toMatchObject({ status: "unreachable", error: "MCP server status timed out" });
   expect(signal?.aborted).toBe(true);
   let closed = false;
   finish({ async listTools() { return []; }, async callTool() {}, async readResource() { return { contents: [] }; }, async close() { closed = true; }, getServerIcon: () => "https://icons.test/too-late.png" });
@@ -223,9 +223,13 @@ it("bounds user refresh connection to ten seconds without a separate OAuth probe
   const pending = live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" }).then((result) => { complete = true; return result; });
   while (!started && !network.mock.calls.length) await new Promise((resolve) => setImmediate(resolve));
   // The connection and favicon each have a bounded deadline, without a second initialize probe.
-  await vi.advanceTimersByTimeAsync(15_001);
+  // Step fake time and let real file I/O between timers settle, so the bound holds under suite load.
+  for (let elapsed = 0; elapsed < 15_001 && !complete; elapsed += 1_000) {
+    await vi.advanceTimersByTimeAsync(1_000);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   expect(complete).toBe(true);
-  await expect(pending).resolves.toMatchObject({ status: "unchanged", server: { state: "unreachable" } });
+  await expect(pending).resolves.toMatchObject({ status: "unreachable", server: { state: "unreachable", error: "MCP server status timed out" } });
   await live.extension.stop();
 });
 
