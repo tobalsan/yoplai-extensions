@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { McpClientManager, type McpClientHandle } from "../client-manager.js";
 
@@ -10,6 +12,43 @@ afterEach(() => {
 });
 
 describe("McpClientManager", () => {
+  it("provides full icon metadata while supporting handles with only getServerIcon", async () => {
+    const manager = new McpClientManager([
+      { name: "modern", type: "http", url: "https://modern.test/mcp" },
+      { name: "legacy", type: "http", url: "https://legacy.test/mcp" },
+    ], { clientFactory: async (server) => ({
+      async listTools() { return []; }, async readResource() { return { contents: [] }; },
+      async callTool() { return {}; }, async close() {},
+      getServerIcon: () => "/first.png",
+      ...(server.name === "modern" ? { getServerIcons: () => [{ src: "/light.png", theme: "light" as const, mimeType: "image/png" }] } : {}),
+    }) });
+    await manager.connect();
+    try {
+      expect(manager.getServerIcons("modern")).toEqual([{ src: "/light.png", theme: "light", mimeType: "image/png" }]);
+      expect(manager.getServerIcons("legacy")).toEqual([{ src: "/first.png" }]);
+      expect(manager.getServerIcon("legacy")).toBe("/first.png");
+    } finally { await manager.close(); }
+  });
+
+  it("exposes the full icons list from the actual SDK initialize response", async () => {
+    const upstream = new McpServer({ name: "icons", version: "1", icons: [
+      { src: "/dark.png", mimeType: "image/png", sizes: ["48x48"], theme: "dark" },
+      { src: "/light.svg", mimeType: "image/svg+xml", theme: "light" },
+    ] });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await upstream.connect(serverTransport);
+    const { SdkMcpClientHandle } = await import("../client-manager.js");
+    const client = await SdkMcpClientHandle.connect({ name: "icons", type: "http", url: "https://example.test/mcp" }, undefined, true,
+      { transportFactory: () => clientTransport });
+    try {
+      expect(client.getServerIcons()).toEqual([
+        { src: "/dark.png", mimeType: "image/png", sizes: ["48x48"], theme: "dark" },
+        { src: "/light.svg", mimeType: "image/svg+xml", theme: "light" },
+      ]);
+      expect(client.getServerIcon()).toBe("/dark.png");
+    } finally { await client.close(); await upstream.close(); }
+  });
+
   it.each([
     "Authorization: Bearer private-access\nCookie: session=private-cookie\naccess_token=private-token",
     'HTTP 401 {"headers":{"Authorization":"Bearer private-access","Cookie":"session=private-cookie"}}',

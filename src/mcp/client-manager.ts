@@ -10,6 +10,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpResourceContent, McpToolUi, McpToolVisibility } from "../tool-extension.js";
 
 import { classifyMcpError, isUnauthorized, type McpErrorCategory } from "./errors.js";
+import type { ServerIcon } from "./icon.js";
 import type { McpServerConfig } from "./loader.js";
 import { logMcpUnavailable, type McpLogContext, type McpLogEvent, type McpLogLevel } from "./logging.js";
 import { withTimeout as withDeadline } from "./timeout.js";
@@ -61,6 +62,7 @@ export interface McpClientHandle {
   callTool(name: string, args: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   close(): Promise<void>;
   getServerIcon?(): string | undefined;
+  getServerIcons?(): ServerIcon[] | undefined;
   getServerInfo?(): McpServerLabel;
   getInstructions?(): string | undefined;
 }
@@ -147,6 +149,10 @@ export class SdkMcpClientHandle implements McpClientHandle {
 
   getServerIcon(): string | undefined {
     return this.client.getServerVersion()?.icons?.[0]?.src;
+  }
+
+  getServerIcons(): ServerIcon[] | undefined {
+    return this.client.getServerVersion()?.icons;
   }
 
   getServerInfo(): McpServerLabel {
@@ -429,6 +435,14 @@ export class McpClientManager {
 
   getServerIcon(server: string): string | undefined {
     return this.clients.get(server)?.getServerIcon?.();
+  }
+
+  getServerIcons(server: string): ServerIcon[] | undefined {
+    const client = this.clients.get(server);
+    const icons = client?.getServerIcons?.();
+    if (icons !== undefined) return icons;
+    const src = client?.getServerIcon?.();
+    return src ? [{ src }] : undefined;
   }
 
   getInstructions(server: string): string | undefined {

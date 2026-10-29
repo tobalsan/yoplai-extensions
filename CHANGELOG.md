@@ -8,6 +8,8 @@
 
 ### Added
 
+- MCP server icons persist across restarts and fast lists, support bounded image data URIs, and can be refreshed for user servers or the shared catalog (ALG-570).
+
 - Read-only Google Search Console tools for property discovery, exact period comparisons, search analytics, URL inspection and sitemap health via personal or team Google OAuth (ALG-564).
 
 - Zendesk `upload_article_attachment` uploads conversation-folder PNG, JPEG, WebP and GIF images up to 5 MB and returns an HTML snippet for article bodies (ALG-556).
