@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP clients reuse output-schema validators across connections and release caller abort listeners after requests, preventing per-call memory growth while preserving validation and cancellation (ALG-573).
+
 ### Changed
 
 - MCP servers no longer read the host `oauth.providers` config. Set `oauth.clientId` (and `oauth.clientSecret` if the provider requires one) on the server in `mcp.json`, or use dynamic client registration. Installs that used `oauth.providers.google` or `hubspot` for an MCP server must add an `oauth` block to it, and users connect again once.
