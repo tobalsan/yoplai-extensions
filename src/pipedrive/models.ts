@@ -76,6 +76,12 @@ export const ListDealsParamsSchema = z
     won_to: DateOnly.optional().describe(
       "Only include deals won on or before this date (YYYY-MM-DD), compared against won_time. Pair with status: \"won\".",
     ),
+    added_from: DateOnly.optional().describe(
+      "Only include deals created on or after this date (YYYY-MM-DD), compared against add_time.",
+    ),
+    added_to: DateOnly.optional().describe(
+      "Only include deals created on or before this date (YYYY-MM-DD), compared against add_time.",
+    ),
     cursor: z.string().min(1).optional().describe("Opaque cursor from a prior page's next_cursor."),
     limit: PositiveIntFromInput.optional().describe(
       "Max deals per page, 1-500 (default 100). Pagination assembles full pages internally when a close-date range is set.",
@@ -110,6 +116,8 @@ export const DealSummarySchema = z.object({
   user_id: z.number().nullable(),
   owner_name: z.string().nullable(),
   expected_close_date: z.string().nullable(),
+  add_time: z.string().nullable(),
+  update_time: z.string().nullable(),
   won_time: z.string().nullable(),
   local_won_date: z.string().nullable(),
   local_close_date: z.string().nullable(),

@@ -81,6 +81,18 @@ describe("ListDealsParamsSchema", () => {
     expect(ListDealsParamsSchema.safeParse({ won_from: "06/01/2026" }).success).toBe(false);
   });
 
+  it("validates the added-date range format", () => {
+    expect(ListDealsParamsSchema.safeParse({ added_from: "2026-06-01" }).success).toBe(true);
+    expect(ListDealsParamsSchema.safeParse({ added_to: "2026-06-30" }).success).toBe(true);
+    for (const key of ["added_from", "added_to"]) {
+      const result = ListDealsParamsSchema.safeParse({ [key]: "06/01/2026" });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe("Expected a date in YYYY-MM-DD format");
+      }
+    }
+  });
+
   it("rejects an unknown status value", () => {
     expect(ListDealsParamsSchema.safeParse({ status: "archived" }).success).toBe(false);
   });

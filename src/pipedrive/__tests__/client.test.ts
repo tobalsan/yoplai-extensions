@@ -35,6 +35,8 @@ function rawDeal(overrides: Record<string, unknown> = {}): Record<string, unknow
     org_id: 20,
     owner_id: 30,
     expected_close_date: "2025-07-15",
+    add_time: "2026-01-01T10:00:00Z",
+    update_time: "2026-06-10 09:00:00",
     won_time: null,
     ...overrides,
   };
@@ -131,13 +133,25 @@ describe("PipedriveClient.listDeals", () => {
       user_id: 30,
       owner_name: "Jane Owner",
       expected_close_date: "2025-07-15",
+      add_time: "2026-01-01T10:00:00Z",
+      update_time: "2026-06-10 09:00:00",
       won_time: null,
       local_won_date: null,
       local_close_date: null,
       deal_url: "https://acme.pipedrive.com/deal/42",
     });
     // Lean: no raw/custom fields leak through.
-    expect(Object.keys(result.deals[0])).toHaveLength(16);
+    expect(Object.keys(result.deals[0])).toHaveLength(18);
+  });
+
+  it.each([undefined, null])("returns null for missing timestamps (%s)", async (timestamp) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({ data: [rawDeal({ add_time: timestamp, update_time: timestamp })] }),
+    ).mockResolvedValueOnce(jsonResponse({ data: [] }));
+
+    const result = await createClient().listDeals({});
+
+    expect(result.deals[0]).toMatchObject({ add_time: null, update_time: null });
   });
 
   it("passes an explicit cursor through and returns the native next_cursor without a range", async () => {
@@ -223,6 +237,84 @@ describe("PipedriveClient.listDeals", () => {
     ]);
     expect(result.next_cursor).toBeNull();
     expect(result.count).toBe(2);
+  });
+
+  it("filters creation dates inclusively across pages and resumes without gaps or duplicates", async () => {
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        data: [
+          rawDeal({ id: 1, add_time: "2026-05-31 23:59:00" }),
+          rawDeal({ id: 2, add_time: "2026-06-01T00:00:00Z" }),
+        ],
+        additional_data: { next_cursor: "page-2" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: [
+          rawDeal({ id: 3, add_time: null }),
+          rawDeal({ id: 4, add_time: "2026-06-30 23:59:00" }),
+        ],
+        additional_data: { next_cursor: "page-3" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] })) // owner-name lookup
+      .mockResolvedValueOnce(jsonResponse({
+        data: [
+          rawDeal({ id: 5, add_time: "2026-07-01T00:00:00Z" }),
+          rawDeal({ id: 6, add_time: "2026-06-15 12:00:00" }),
+        ],
+        additional_data: { next_cursor: null },
+      }));
+    const client = createClient();
+    const params = { added_from: "2026-06-01", added_to: "2026-06-30", limit: 2 };
+
+    const first = await client.listDeals(params);
+
+    expect(first.deals.map((deal) => deal.id)).toEqual([2, 4]);
+    expect(first.count).toBe(2);
+    expect(first.next_cursor).toBe("page-3");
+    expect(url(spy, 1).searchParams.get("cursor")).toBe("page-2");
+    expect(first.deals.map((deal) => deal.add_time)).toEqual([
+      "2026-06-01T00:00:00Z", "2026-06-30 23:59:00",
+    ]);
+
+    const second = await client.listDeals({ ...params, cursor: first.next_cursor! });
+
+    expect(second.deals.map((deal) => deal.id)).toEqual([6]);
+    expect(second.count).toBe(1);
+    expect(second.next_cursor).toBeNull();
+    expect(url(spy, 3).searchParams.get("cursor")).toBe("page-3");
+    expect([...first.deals, ...second.deals].map((deal) => deal.id)).toEqual([2, 4, 6]);
+    for (const call of [0, 1, 3]) {
+      expect(url(spy, call).pathname).toBe("/api/v2/deals");
+      expect(url(spy, call).searchParams.has("added_from")).toBe(false);
+      expect(url(spy, call).searchParams.has("added_to")).toBe(false);
+    }
+    expect(spy).toHaveBeenCalledTimes(4);
+  });
+
+  it("combines creation, won and close-date ranges with server-side filters", async () => {
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        data: [
+          rawDeal({ id: 1, status: "won", add_time: "2026-06-10", won_time: "2026-07-10", expected_close_date: "2026-07-15" }),
+          rawDeal({ id: 2, status: "won", add_time: "2026-05-10", won_time: "2026-07-10", expected_close_date: "2026-07-15" }),
+          rawDeal({ id: 3, status: "won", add_time: "2026-06-10", won_time: "2026-08-10", expected_close_date: "2026-07-15" }),
+          rawDeal({ id: 4, status: "won", add_time: "2026-06-10", won_time: "2026-07-10", expected_close_date: "2026-08-15" }),
+        ],
+        additional_data: { next_cursor: null },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
+
+    const result = await createClient().listDeals({
+      status: "won", pipeline_id: 2,
+      added_from: "2026-06-01", added_to: "2026-06-30",
+      won_from: "2026-07-01", won_to: "2026-07-31",
+      expected_close_from: "2026-07-01", expected_close_to: "2026-07-31",
+    });
+
+    expect(result.deals.map((deal) => deal.id)).toEqual([1]);
+    expect(result.count).toBe(1);
+    expect(url(spy).searchParams.get("status")).toBe("won");
+    expect(url(spy).searchParams.get("pipeline_id")).toBe("2");
   });
 
   it("stops paging once the requested limit of in-range matches is reached and returns a resume cursor", async () => {
