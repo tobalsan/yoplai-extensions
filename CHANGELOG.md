@@ -8,6 +8,8 @@
 
 ### Added
 
+- Read-only Google Analytics 4 property discovery, reports and page comparisons with channel and identifiable AI referrals via personal or team Google OAuth (ALG-571).
+
 - MCP server icons persist across restarts and fast lists, support bounded image data URIs, and can be refreshed for user servers or the shared catalog; refresh reports `updated` only once the icon is saved, and `save_failed` (keeping the old icon) when the write fails (ALG-570).
 
 - Pipedrive `list_deals` returns `add_time` and `update_time` and supports inclusive `added_from` / `added_to` creation-date filters (ALG-565).

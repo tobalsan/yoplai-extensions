@@ -21,6 +21,7 @@ The source directory is the build/install directory name. The extension ID is th
 | [`gmail`](src/gmail/README.md) | `gmail` | Gmail drafts, threads, and labels | Host-managed Google OAuth |
 | [`google-drive`](src/google-drive/README.md) | `googleDrive` | Drive search, file round-trips, and native Slides creation/editing/rendering; writes opt in with `allowWrite` | Host-managed Google OAuth |
 | [`google-search-console`](src/google-search-console/README.md) | `googleSearchConsole` | Read-only search analytics, period comparisons, URL inspection and sitemap health | Host-managed Google OAuth and Search Console property access |
+| [`google-analytics`](src/google-analytics/README.md) | `googleAnalytics` | Read-only GA4 discovery, reports and page period comparisons | Host-managed Google OAuth and GA4 property access |
 | `gsheets` | `gsheets` | Spreadsheet discovery, reads, row appends, and range updates | Google service-account JSON |
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
