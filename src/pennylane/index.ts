@@ -19,7 +19,7 @@ import {
   UpdateInvoiceDraftParamsSchema,
   UpdateQuoteParamsSchema,
 } from "./models.js";
-import { defineToolExtension } from "../tool-extension.js";
+import { defineToolExtension, type ToolExtensionTool } from "../tool-extension.js";
 
 export const PennylaneConfigSchema = z.object({
   apiToken: z
@@ -30,6 +30,10 @@ export const PennylaneConfigSchema = z.object({
     .optional()
     .default(30_000)
     .describe("Request timeout in milliseconds for Pennylane API calls. Defaults to 30000."),
+  allowWrite: z
+    .boolean()
+    .default(false)
+    .describe("Allow creating customers and creating/editing invoice drafts and pending quotes."),
 });
 
 const ValidateParamsSchema = z.object({}).strict();
@@ -41,7 +45,9 @@ const CreateCustomerToolJsonSchema = {
 export default defineToolExtension({
   id: "pennylane",
   displayName: "Pennylane",
-  description: "Read, search, and draft-write Pennylane customer invoices and quotes, plus read customers and products (draft-safe: never finalizes, accepts, or sends).",
+  description:
+    "Read and search Pennylane customer invoices, quotes, customers, and products, read-only by default. Optional draft-safe writes (customers, invoice drafts, pending quotes; never finalizes, accepts, or sends) when allowWrite is enabled.",
+  configFieldTitles: { allowWrite: "Enable creating customers, invoice drafts and quotes" },
   systemPrompt: `Use this extension for Pennylane (Company API v2) accounting operations.
 
 Key concepts:
@@ -50,7 +56,8 @@ Key concepts:
 - cursor pagination is walked transparently: omit "cursor" to get everything, or pass a "cursor" to fetch a single page
 - prefer search_invoices when you know the customer, external_reference (Pipedrive deal id), status, or date range; filters are AND-combined server-side
 - external_reference is the Pipedrive deal/org id hook (invoices support only eq on it)
-- writes are draft-only and safety-gated: create_invoice_draft always sets draft: true, and update_invoice_draft routes the target through DraftGuard, refusing to touch a finalized invoice. There is deliberately NO finalize or send tool
+- Pennylane is READ-ONLY by default. The write tools (create_customer, create_invoice_draft, update_invoice_draft, create_quote, update_quote) exist only when allowWrite is enabled for this agent. If they are not in your tool list, propose the changes but never claim a write was applied
+- when writes are available, they are draft-only and safety-gated: create_invoice_draft always sets draft: true, and update_invoice_draft routes the target through DraftGuard, refusing to touch a finalized invoice. There is deliberately NO finalize or send tool
 - quotes have no draft state: create_quote always yields a 'pending' quote (the draft-equivalent), and update_quote routes the target through DraftGuard, refusing to touch any non-'pending' quote (accepted/denied/invoiced/expired/sent). There is deliberately NO quote accept/status/send tool
 - Pennylane has no idempotency keys: before creating, look up by external_reference (search_invoices / search_quotes) to avoid duplicate drafts
 - quotes are NOT server-side filterable on external_reference: search_quotes filters by customer_id (and status) server-side, then matches external_reference client-side
@@ -66,7 +73,7 @@ Key concepts:
     const resolved = PennylaneConfigSchema.parse(config.merged);
     const client = new PennylaneClient(resolved);
 
-    return [
+    const readTools: ToolExtensionTool[] = [
       {
         name: "validate",
         description: "Validate Pennylane auth and API reachability via GET /me.",
@@ -135,14 +142,6 @@ Key concepts:
         execute: (params) => client.getCustomer(params),
       },
       {
-        name: "create_customer",
-        description:
-          "Create a Pennylane customer. First use search_customers by name and/or external_reference to avoid duplicates. Prefer customerType 'company' unless the customer is clearly a private person. Returns the created id, usable as customerId for create_quote or create_invoice_draft.",
-        parameters: CreateCustomerParamsSchema,
-        jsonSchemaParameters: CreateCustomerToolJsonSchema,
-        execute: (params) => client.createCustomer(params),
-      },
-      {
         name: "list_products",
         description: "List products with pagination (cursor walked transparently).",
         parameters: ListParamsSchema,
@@ -167,6 +166,19 @@ Key concepts:
           "List the discoverable Pennylane vat_rate codes (e.g. FR_200 = 20%). Static reference; no network call.",
         parameters: ListVatRatesParamsSchema,
         execute: (params) => client.listVatRates(params),
+      },
+    ];
+    if (resolved.allowWrite !== true) return readTools;
+
+    return [
+      ...readTools,
+      {
+        name: "create_customer",
+        description:
+          "Create a Pennylane customer. First use search_customers by name and/or external_reference to avoid duplicates. Prefer customerType 'company' unless the customer is clearly a private person. Returns the created id, usable as customerId for create_quote or create_invoice_draft.",
+        parameters: CreateCustomerParamsSchema,
+        jsonSchemaParameters: CreateCustomerToolJsonSchema,
+        execute: (params) => client.createCustomer(params),
       },
       {
         name: "create_invoice_draft",

@@ -27,7 +27,7 @@ The source directory is the build/install directory name. The extension ID is th
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
 | [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Agent `mcp.json` or non-empty shared catalog |
 | [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | OAuth (`oauth.providers.notion`, default) or integration API key |
-| [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads and guarded draft/quote writes | API token |
+| [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads; guarded draft/quote writes are opt-in (`allowWrite`) | API token |
 | `people-enrich` | `people_enrich` | Find people and companies, then enrich with profiles, work emails, and mobile numbers (paid; mobile needs cost approval) | API key |
 | [`pipedrive`](src/pipedrive/README.md) | `pipedrive` | Pipedrive CRM reads and custom-field normalization; confirmed record writes are opt-in (`allowWrite`) | Company domain and API token |
 | `zendesk` | `zendesk` | Zendesk ticket listing, search, comments, triage, internal notes, and Help Center article discovery, drafts, revisions, image attachments, publishing, and draft archiving | OAuth (`oauth.providers.zendesk`, default; reconnect for Help Center scopes) or subdomain, email, and API key |

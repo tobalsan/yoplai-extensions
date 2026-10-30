@@ -25,7 +25,7 @@ describe("PennylaneClient", () => {
 
   it("exposes create_customer with an object-root JSON schema", async () => {
     const tools = await pennylaneExtension.getAgentTools?.(
-      { id: "sally", extensions: { pennylane: { enabled: true } } },
+      { id: "sally", extensions: { pennylane: { enabled: true, allowWrite: true } } },
       { config: { extensions: { pennylane: { apiToken: "t" } } } },
     );
     const tool = tools?.find((candidate) => candidate.name === "pennylane_create_customer");

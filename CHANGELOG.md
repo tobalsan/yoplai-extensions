@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Pennylane is now read-only by default: `create_customer`, `create_invoice_draft`, `update_invoice_draft`, `create_quote`, and `update_quote` are exposed only with `allowWrite: true`. Agents that write to Pennylane must set it.
 - MCP servers no longer read the host `oauth.providers` config. Set `oauth.clientId` (and `oauth.clientSecret` if the provider requires one) on the server in `mcp.json`, or use dynamic client registration. Installs that used `oauth.providers.google` or `hubspot` for an MCP server must add an `oauth` block to it, and users connect again once.
 
 ### Added
