@@ -571,8 +571,12 @@ export class PeopleEnrichClient {
           }
           if (!(error instanceof PeopleEnrichError)) throw error;
           const charged = error instanceof PeopleEnrichProviderError ? error.creditsUsed : 0;
+          // Retry only when the provider explicitly reported 0 credits; unknown billing never retries.
           const freeTimeout =
-            error instanceof PeopleEnrichProviderError && charged === 0 && PROVIDER_TIMEOUT_CODES.has(error.code ?? "");
+            error instanceof PeopleEnrichProviderError &&
+            error.creditsKnown &&
+            charged === 0 &&
+            PROVIDER_TIMEOUT_CODES.has(error.code ?? "");
           if (freeTimeout && retries < MAX_TIMEOUT_RETRIES) {
             await sleep(this.retryDelayMs);
             continue;
@@ -646,7 +650,9 @@ export class PeopleEnrichClient {
     const response = await this.requestJson("/scrape", { alexandria: { provider, capability, options } });
     const body = rec(response.data);
     const entry = arr(body.alexandria)[0] ?? {};
-    const creditsUsed = Number(entry.creditsCost ?? body.creditsCost ?? 0) || 0;
+    const rawCredits = entry.creditsCost ?? body.creditsCost;
+    const creditsKnown = typeof rawCredits === "number" && Number.isFinite(rawCredits) && rawCredits >= 0;
+    const creditsUsed = Number(rawCredits ?? 0) || 0;
     const error = rec(entry.error);
     if (Object.keys(error).length > 0) {
       if (error.code === "not_found" || error.status === 404) {
@@ -654,7 +660,7 @@ export class PeopleEnrichClient {
       }
       throw new PeopleEnrichProviderError(
         `${provider}/${capability} failed: ${str(error.code) ?? "error"}: ${str(error.message) ?? "unknown"} (no credits charged: ${creditsUsed === 0})`,
-        { endpoint: "/v2/scrape", status: Number(error.status) || undefined, code: str(error.code), creditsUsed },
+        { endpoint: "/v2/scrape", status: Number(error.status) || undefined, code: str(error.code), creditsUsed, creditsKnown },
       );
     }
     return { found: true, creditsUsed, data: rec(entry.data) };

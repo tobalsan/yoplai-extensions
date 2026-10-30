@@ -37,10 +37,16 @@ export class PeopleEnrichValidationError extends PeopleEnrichError {}
 export class PeopleEnrichProviderError extends PeopleEnrichError {
   code?: string;
   creditsUsed: number;
+  /** True only when the provider supplied a valid numeric credit count. */
+  creditsKnown: boolean;
 
-  constructor(message: string, options: PeopleEnrichErrorOptions & { code?: string; creditsUsed?: number } = {}) {
+  constructor(
+    message: string,
+    options: PeopleEnrichErrorOptions & { code?: string; creditsUsed?: number; creditsKnown?: boolean } = {},
+  ) {
     super(message, options);
     this.code = options.code;
     this.creditsUsed = options.creditsUsed ?? 0;
+    this.creditsKnown = options.creditsKnown ?? false;
   }
 }

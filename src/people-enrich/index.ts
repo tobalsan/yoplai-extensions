@@ -84,7 +84,7 @@ people_enrich_credit_usage (free) shows remaining credits and the billing period
       {
         name: "credit_usage",
         description:
-          "Free. Remaining Firecrawl credits for this API key and the current billing period. Check before expensive lookups (mobile) or when the user asks about credits.",
+          "Free. Remaining credits for this API key and the current billing period. Check before expensive lookups (mobile) or when the user asks about credits.",
         parameters: CreditUsageParamsSchema,
         outputSchema: CreditUsageResultSchema,
         execute: async (params) => {

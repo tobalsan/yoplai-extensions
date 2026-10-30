@@ -360,6 +360,48 @@ describe("PeopleEnrichClient", () => {
       expect((result.attempts as Array<Record<string, unknown>>)[0]).not.toHaveProperty("retries");
     });
 
+    const rawTimeout = (alexandriaEntry: Record<string, unknown>, body: Record<string, unknown> = {}) =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            alexandria: [
+              { provider: "fullenrich", capability: "contacts/work-email", error: { code: "deadline_exceeded", status: 504 }, ...alexandriaEntry },
+            ],
+            ...body,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const fallthrough = () => [
+      miss("datalegion", "people/enrich-base-with-contact"),
+      entry("apollo", "people/bulk-match", 0, { data: { matches: [null] } }),
+    ];
+
+    it.each([
+      ["omitted (neither entry nor body)", {}, {}],
+      ["string 'unknown'", { creditsCost: "unknown" }, {}],
+      ["false", { creditsCost: false }, {}],
+      ["malformed body count", {}, { creditsCost: "n/a" }],
+    ])("does not retry a timeout with unknown credit count: %s", async (_label, entryFields, body) => {
+      const spy = mockFetch(rawTimeout(entryFields, body), ...fallthrough());
+      const result = await client.findWorkEmail(params);
+      expect(spy).toHaveBeenCalledTimes(3);
+      const first = (result.attempts as Array<Record<string, unknown>>)[0];
+      expect(first).toMatchObject({ provider: "fullenrich", creditsUsed: 0, found: false });
+      expect(first).not.toHaveProperty("retries");
+    });
+
+    it("retries on explicit 0 from the body count but not on explicit 5", async () => {
+      const zero = mockFetch(rawTimeout({}, { creditsCost: 0 }), emailHit());
+      expect(await client.findWorkEmail(params)).toMatchObject({ found: true });
+      expect(zero).toHaveBeenCalledTimes(2);
+      vi.restoreAllMocks();
+      const five = mockFetch(rawTimeout({ creditsCost: 5 }), ...fallthrough());
+      expect(await client.findWorkEmail(params)).toMatchObject({ found: false, creditsUsed: 5 });
+      expect(five).toHaveBeenCalledTimes(3);
+    });
+
     it("does not retry our own HTTP timeout and still aborts", async () => {
       const spy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("timed out", "TimeoutError"));
       await expect(client.findWorkEmail(params)).rejects.toBeInstanceOf(PeopleEnrichConnectionError);
