@@ -30,6 +30,7 @@ describe("people_enrich extension", () => {
       "find_mobile",
       "reverse_email",
       "lookup_company",
+      "credit_usage",
       "validate",
     ]);
     for (const tool of tools) {

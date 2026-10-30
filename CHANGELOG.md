@@ -12,6 +12,8 @@
 
 ### Added
 
+- People Enrich retries a cascade step up to 2 more times when its provider times out (`deadline_exceeded`) without charging credits, and adds a free `credit_usage` tool showing remaining credits and the billing period.
+
 - Read-only Google Analytics 4 property discovery, reports and page comparisons with channel and identifiable AI referrals via personal or team Google OAuth (ALG-571).
 
 - MCP server icons persist across restarts and fast lists, support bounded image data URIs, and can be refreshed for user servers or the shared catalog; refresh reports `updated` only once the icon is saved, and `save_failed` (keeping the old icon) when the write fails (ALG-570).

@@ -28,6 +28,9 @@ export interface CapabilityResult {
 }
 
 const MAX_RATE_LIMIT_RETRIES = 5;
+/** Extra tries for a step whose provider timed out without charging credits. */
+const MAX_TIMEOUT_RETRIES = 2;
+const PROVIDER_TIMEOUT_CODES = new Set(["deadline_exceeded", "timeout", "request_timeout", "gateway_timeout"]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -234,10 +237,13 @@ export class PeopleEnrichClient {
   readonly apiKey: string;
   readonly timeoutMs: number;
   readonly baseUrl = "https://api.firecrawl.dev/v2";
+  /** Pause between free provider-timeout retries; injectable for tests. */
+  readonly retryDelayMs: number;
 
-  constructor(options: PeopleEnrichConfig) {
+  constructor(options: PeopleEnrichConfig & { retryDelayMs?: number }) {
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs;
+    this.retryDelayMs = options.retryDelayMs ?? 1000;
   }
 
   /** Free candidate search. Last names come back masked; use ids with find_work_email. */
@@ -524,29 +530,57 @@ export class PeopleEnrichClient {
     return { ok: true };
   }
 
+  /** Free: remaining credits and current billing period for this API key. */
+  async creditUsage(): Promise<Json> {
+    const response = await this.requestJson("/team/credit-usage");
+    const data = rec(response.data ?? response);
+    const num = (value: unknown) => (typeof value === "number" ? value : null);
+    return {
+      remainingCredits: num(data.remainingCredits),
+      planCredits: num(data.planCredits),
+      billingPeriodStart: str(data.billingPeriodStart) ?? null,
+      billingPeriodEnd: str(data.billingPeriodEnd) ?? null,
+    };
+  }
+
   /**
    * Runs steps cheapest-first and stops at the first hit. Misses and unbilled
    * provider failures fall through to the next source; auth and connection
-   * failures abort.
+   * failures abort. A step whose provider reports a timeout (deadline_exceeded)
+   * while charging 0 credits is retried up to MAX_TIMEOUT_RETRIES more times
+   * (~1 s apart) before falling through; our own HTTP timeouts, billed errors
+   * and other provider errors are never retried.
    */
   private async cascade(steps: CascadeStep[], empty: Json): Promise<Json> {
     const attempts: Json[] = [];
     let creditsUsed = 0;
     for (const step of steps) {
-      try {
-        const result = await this.callCapability(step.provider, step.capability, step.options);
-        creditsUsed += result.creditsUsed;
-        const value = result.found ? step.extract(result.data) : undefined;
-        attempts.push({ provider: step.provider, creditsUsed: result.creditsUsed, found: Boolean(value) });
-        if (value) {
-          return { found: true, provider: step.provider, ...value, creditsUsed, attempts };
+      for (let retries = 0; ; retries += 1) {
+        const retryInfo = retries > 0 ? { retries } : {};
+        try {
+          const result = await this.callCapability(step.provider, step.capability, step.options);
+          creditsUsed += result.creditsUsed;
+          const value = result.found ? step.extract(result.data) : undefined;
+          attempts.push({ provider: step.provider, creditsUsed: result.creditsUsed, found: Boolean(value), ...retryInfo });
+          if (value) {
+            return { found: true, provider: step.provider, ...value, creditsUsed, attempts };
+          }
+        } catch (error) {
+          if (error instanceof PeopleEnrichAuthError || error instanceof PeopleEnrichConnectionError) {
+            throw error;
+          }
+          if (!(error instanceof PeopleEnrichError)) throw error;
+          const charged = error instanceof PeopleEnrichProviderError ? error.creditsUsed : 0;
+          const freeTimeout =
+            error instanceof PeopleEnrichProviderError && charged === 0 && PROVIDER_TIMEOUT_CODES.has(error.code ?? "");
+          if (freeTimeout && retries < MAX_TIMEOUT_RETRIES) {
+            await sleep(this.retryDelayMs);
+            continue;
+          }
+          creditsUsed += charged;
+          attempts.push({ provider: step.provider, creditsUsed: charged, found: false, error: error.message, ...retryInfo });
         }
-      } catch (error) {
-        if (error instanceof PeopleEnrichAuthError || error instanceof PeopleEnrichConnectionError) {
-          throw error;
-        }
-        if (!(error instanceof PeopleEnrichError)) throw error;
-        attempts.push({ provider: step.provider, creditsUsed: 0, found: false, error: error.message });
+        break;
       }
     }
     return { found: false, ...empty, creditsUsed, attempts };
@@ -620,7 +654,7 @@ export class PeopleEnrichClient {
       }
       throw new PeopleEnrichProviderError(
         `${provider}/${capability} failed: ${str(error.code) ?? "error"}: ${str(error.message) ?? "unknown"} (no credits charged: ${creditsUsed === 0})`,
-        { endpoint: "/v2/scrape", status: Number(error.status) || undefined },
+        { endpoint: "/v2/scrape", status: Number(error.status) || undefined, code: str(error.code), creditsUsed },
       );
     }
     return { found: true, creditsUsed, data: rec(entry.data) };
@@ -628,21 +662,22 @@ export class PeopleEnrichClient {
 
   /**
    * Paid calls are never retried on 5xx/timeouts to avoid double billing;
-   * only 429 (rejected before running) is retried.
+   * only 429 (rejected before running) is retried. Provider-reported free
+   * timeouts are retried per step in cascade(), not here. Omitting body sends a GET.
    */
-  private async requestJson(path: string, body: Json): Promise<Json> {
+  private async requestJson(path: string, body?: Json): Promise<Json> {
     const endpoint = `/v2${path}`;
-    const requestBody = JSON.stringify(body);
+    const requestBody = body === undefined ? undefined : JSON.stringify(body);
 
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt += 1) {
       let response: Response;
       try {
         response = await fetch(`${this.baseUrl}${path}`, {
-          method: "POST",
+          method: requestBody === undefined ? "GET" : "POST",
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
             Accept: "application/json",
-            "Content-Type": "application/json",
+            ...(requestBody === undefined ? {} : { "Content-Type": "application/json" }),
           },
           body: requestBody,
           signal: AbortSignal.timeout(this.timeoutMs),

@@ -96,6 +96,7 @@ export const LookupCompanyParamsSchema = z
   .strict();
 
 export const ValidateParamsSchema = z.object({}).strict();
+export const CreditUsageParamsSchema = z.object({}).strict();
 
 export type PeopleEnrichConfig = z.infer<typeof PeopleEnrichConfigSchema>;
 export type SearchPeopleParams = z.infer<typeof SearchPeopleParamsSchema>;
@@ -126,6 +127,7 @@ const EnrichmentResultSchema = z.object({
   creditsUsed: z.number(),
   attempts: z.array(z.object({
     provider: z.string(), creditsUsed: z.number(), found: z.boolean(), error: z.string().optional(),
+    retries: z.number().optional(),
   })),
 });
 export const SearchPeopleResultSchema = z.object({
@@ -137,6 +139,12 @@ export const SearchPeopleResultSchema = z.object({
     title: z.string().optional(), company: z.string().optional(), hasEmail: z.boolean().nullable().optional(),
     hasDirectPhone: z.union([z.boolean(), z.string()]).nullable().optional(),
   })),
+});
+export const CreditUsageResultSchema = z.object({
+  remainingCredits: z.number().nullable(),
+  planCredits: z.number().nullable(),
+  billingPeriodStart: z.string().nullable(),
+  billingPeriodEnd: z.string().nullable(),
 });
 export const LookupPersonResultSchema = EnrichmentResultSchema.extend({ person: PersonResultSchema.nullable() });
 export const FindWorkEmailResultSchema = EnrichmentResultSchema.extend({

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PeopleEnrichClient } from "../client.js";
-import { PeopleEnrichAuthError, PeopleEnrichValidationError } from "../errors.js";
+import { PeopleEnrichAuthError, PeopleEnrichConnectionError, PeopleEnrichValidationError } from "../errors.js";
 
 function entry(provider: string, capability: string, creditsCost: number, extra: Record<string, unknown>) {
   return new Response(
@@ -10,7 +10,7 @@ function entry(provider: string, capability: string, creditsCost: number, extra:
   );
 }
 
-const client = new PeopleEnrichClient({ apiKey: "k", timeoutMs: 1000 });
+const client = new PeopleEnrichClient({ apiKey: "k", timeoutMs: 1000, retryDelayMs: 0 });
 
 function mockFetch(...responses: Response[]) {
   const spy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected extra fetch"));
@@ -306,5 +306,103 @@ describe("PeopleEnrichClient", () => {
     const spy = mockFetch(new Response(JSON.stringify({ success: true, data: { tools: [] } }), { status: 200 }));
     expect(await client.validate()).toEqual({ ok: true });
     expect(spy.mock.calls[0][0]).toBe("https://api.firecrawl.dev/v2/search");
+  });
+
+  describe("provider timeout retries", () => {
+    const timeout = (credits = 0) =>
+      entry("fullenrich", "contacts/work-email", credits, {
+        error: { code: "deadline_exceeded", message: "The request took too long.", status: 504 },
+      });
+    const emailHit = () =>
+      entry("fullenrich", "contacts/work-email", 20, {
+        data: { results: [{ contact_info: { most_probable_work_email: { email: "jane@acme.com" } } }] },
+      });
+    const miss = (provider: string, capability: string) =>
+      entry(provider, capability, 0, { error: { code: "not_found", status: 404 } });
+    const params = { linkedinUrl: "https://linkedin.com/in/jane" };
+
+    it("retries a free timeout and stops when the retry finds the email", async () => {
+      const spy = mockFetch(timeout(), emailHit());
+      const result = await client.findWorkEmail(params);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ found: true, provider: "fullenrich", email: "jane@acme.com", creditsUsed: 20 });
+      expect(result.attempts).toEqual([{ provider: "fullenrich", creditsUsed: 20, found: true, retries: 1 }]);
+    });
+
+    it("tries a timing-out step 3 times, then falls through", async () => {
+      const spy = mockFetch(
+        timeout(),
+        timeout(),
+        timeout(),
+        miss("datalegion", "people/enrich-base-with-contact"),
+        entry("apollo", "people/bulk-match", 0, { data: { matches: [null] } }),
+      );
+      const result = await client.findWorkEmail(params);
+      expect(spy).toHaveBeenCalledTimes(5);
+      for (const call of [0, 1, 2]) expect(sentBody(spy, call).alexandria.provider).toBe("fullenrich");
+      expect(sentBody(spy, 3).alexandria.provider).toBe("datalegion");
+      const attempts = result.attempts as Array<Record<string, unknown>>;
+      expect(attempts).toHaveLength(3);
+      expect(attempts[0]).toMatchObject({ provider: "fullenrich", creditsUsed: 0, found: false, retries: 2 });
+      expect(attempts[1]).not.toHaveProperty("retries");
+    });
+
+    it("does not retry a timeout that charged credits", async () => {
+      const spy = mockFetch(
+        timeout(5),
+        miss("datalegion", "people/enrich-base-with-contact"),
+        entry("apollo", "people/bulk-match", 0, { data: { matches: [null] } }),
+      );
+      const result = await client.findWorkEmail(params);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(result).toMatchObject({ found: false, creditsUsed: 5 });
+      expect((result.attempts as Array<Record<string, unknown>>)[0]).toMatchObject({ creditsUsed: 5 });
+      expect((result.attempts as Array<Record<string, unknown>>)[0]).not.toHaveProperty("retries");
+    });
+
+    it("does not retry our own HTTP timeout and still aborts", async () => {
+      const spy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+      await expect(client.findWorkEmail(params)).rejects.toBeInstanceOf(PeopleEnrichConnectionError);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry other provider errors", async () => {
+      const spy = mockFetch(
+        entry("fullenrich", "contacts/work-email", 0, { error: { code: "provider_error", message: "bad", status: 502 } }),
+        miss("datalegion", "people/enrich-base-with-contact"),
+        entry("apollo", "people/bulk-match", 0, { data: { matches: [null] } }),
+      );
+      const result = await client.findWorkEmail(params);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect((result.attempts as Array<Record<string, unknown>>)[0]).toMatchObject({ error: expect.stringContaining("provider_error") });
+    });
+  });
+
+  it("reads credit usage with a free GET", async () => {
+    const spy = mockFetch(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { remainingCredits: 1000, planCredits: 5000, billingPeriodStart: "2025-01-01T00:00:00Z", billingPeriodEnd: "2025-02-01T00:00:00Z" },
+        }),
+        { status: 200 },
+      ),
+    );
+    expect(await client.creditUsage()).toEqual({
+      remainingCredits: 1000,
+      planCredits: 5000,
+      billingPeriodStart: "2025-01-01T00:00:00Z",
+      billingPeriodEnd: "2025-02-01T00:00:00Z",
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe("https://api.firecrawl.dev/v2/team/credit-usage");
+    expect(init?.method).toBe("GET");
+    expect(init?.body).toBeUndefined();
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer k");
+  });
+
+  it("maps a credit usage 401 to an auth error", async () => {
+    mockFetch(new Response("bad key", { status: 401 }));
+    await expect(client.creditUsage()).rejects.toBeInstanceOf(PeopleEnrichAuthError);
   });
 });

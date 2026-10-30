@@ -11,6 +11,8 @@ import {
   ReverseEmailParamsSchema,
   SearchPeopleParamsSchema,
   ValidateParamsSchema,
+  CreditUsageParamsSchema,
+  CreditUsageResultSchema,
 } from "./models.js";
 import { defineToolExtension } from "../tool-extension.js";
 
@@ -25,7 +27,8 @@ Workflow:
 3. people_enrich_find_work_email (20 credits typical, up to 80). Pass apolloId only when the search candidate had hasEmail=true — Apollo bills 30 for a matched person even when no email is unlocked.
 4. people_enrich_find_mobile (50 credits typical, up to 175) only after the user explicitly approves the cost.
 people_enrich_reverse_email (10 credits typical, up to 30) identifies the person behind an email; people_enrich_lookup_company (5 credits typical, up to 30) returns firmographics.
-Strip accents from names (Éric → Eric). Never repeat a paid call whose result you already have. found=false is a normal outcome, not an error.`,
+Strip accents from names (Éric → Eric). Never repeat a paid call whose result you already have. found=false is a normal outcome, not an error.
+people_enrich_credit_usage (free) shows remaining credits and the billing period; check it before expensive lookups or when credits may be low.`,
   configSchema: PeopleEnrichConfigSchema,
   requiredSecrets: ["apiKey"],
   advancedConfigFields: ["timeoutMs"],
@@ -77,6 +80,17 @@ Strip accents from names (Éric → Eric). Never repeat a paid call whose result
           "Company firmographics (industry, headcount, HQ, founding year, description) from a domain or LinkedIn URL. Billed only by the source that matches: 5, else 10, else 30; misses are free.",
         parameters: LookupCompanyParamsSchema,
         execute: async (params) => await client.lookupCompany(LookupCompanyParamsSchema.parse(params)),
+      },
+      {
+        name: "credit_usage",
+        description:
+          "Free. Remaining Firecrawl credits for this API key and the current billing period. Check before expensive lookups (mobile) or when the user asks about credits.",
+        parameters: CreditUsageParamsSchema,
+        outputSchema: CreditUsageResultSchema,
+        execute: async (params) => {
+          CreditUsageParamsSchema.parse(params);
+          return await client.creditUsage();
+        },
       },
       {
         name: "validate",

@@ -33,5 +33,14 @@ export class PeopleEnrichConnectionError extends PeopleEnrichError {}
 
 export class PeopleEnrichValidationError extends PeopleEnrichError {}
 
-/** Upstream data provider failed (e.g. provider_error 502). Not billed. */
-export class PeopleEnrichProviderError extends PeopleEnrichError {}
+/** Upstream data provider failed (e.g. provider_error 502, deadline_exceeded). */
+export class PeopleEnrichProviderError extends PeopleEnrichError {
+  code?: string;
+  creditsUsed: number;
+
+  constructor(message: string, options: PeopleEnrichErrorOptions & { code?: string; creditsUsed?: number } = {}) {
+    super(message, options);
+    this.code = options.code;
+    this.creditsUsed = options.creditsUsed ?? 0;
+  }
+}
