@@ -25,6 +25,7 @@ The source directory is the build/install directory name. The extension ID is th
 | `gsheets` | `gsheets` | Spreadsheet discovery, reads, row appends, and range updates | Google service-account JSON |
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
+| `lusha` | `lusha` | Fallback email, opt-in phone, and company enrichment after People Enrich found nothing; free usage/pricing and validation | Separate Lusha API key and credits |
 | [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Agent `mcp.json` or non-empty shared catalog |
 | [`notion`](docs/2026-04-18-hr-triage-notion-connector-skill.md) | `notion` | Notion data sources, pages, blocks, and file extraction | OAuth (`oauth.providers.notion`, default) or integration API key |
 | [`pennylane`](docs/specs/pennylane-api-reference.md) | `pennylane` | Pennylane billing reads; guarded draft/quote writes are opt-in (`allowWrite`) | API token |
