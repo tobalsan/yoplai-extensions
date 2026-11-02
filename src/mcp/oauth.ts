@@ -266,15 +266,17 @@ export class McpOAuthStore {
     const preRegistered = staticClient;
     const identity = { url, clientId: staticClient?.clientId };
     const existing = await this.read(agent, server, scope, identity);
+    // MCP scope selection: without a configured list, request every scope the resource advertises (some servers reject an empty scope).
+    const scopes = staticClient?.scopes?.length ? staticClient.scopes : info.resourceMetadata?.scopes_supported ?? [];
     const client: OAuthClientInformationFull = preRegistered
       ? { client_id: preRegistered.clientId, ...(preRegistered.clientSecret ? { client_secret: preRegistered.clientSecret } : {}), redirect_uris: [this.redirectUri] }
       : existing?.client ?? await registerClient(info.authorizationServerUrl, {
         metadata: info.authorizationServerMetadata,
         fetchFn: oauthFetch,
         clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
+        // Register the same scopes as the authorize request: some servers (e.g. Scheduled) give a DCR client without scope an empty set.
+        ...(scopes.length ? { scope: scopes.join(" ") } : {}),
       });
-    // MCP scope selection: without a configured list, request every scope the resource advertises (some servers reject an empty scope).
-    const scopes = staticClient?.scopes?.length ? staticClient.scopes : info.resourceMetadata?.scopes_supported ?? [];
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,

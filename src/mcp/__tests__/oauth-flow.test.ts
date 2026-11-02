@@ -44,9 +44,10 @@ describe("MCP OAuth flow", () => {
 
   it("requests the resource scopes with a dynamically registered client", async () => {
     const start = vi.fn().mockResolvedValue({ authorizationUrl: new URL("https://auth.test/authorize"), codeVerifier: "verifier" });
+    const register = vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: ["http://gateway.test/callback"] });
     vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => ({
       discoverOAuthServerInfo: vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register", authorization_endpoint: "https://auth.test/authorize", token_endpoint: "https://auth.test/token" }, resourceMetadata: { resource: "https://mcp.test/server", authorization_servers: ["https://auth.test"], scopes_supported: ["locations:read", "tickets:read"] } }),
-      registerClient: vi.fn().mockResolvedValue({ client_id: "client", redirect_uris: ["http://gateway.test/callback"] }),
+      registerClient: register,
       startAuthorization: start,
       exchangeAuthorization: vi.fn(),
       refreshAuthorization: vi.fn(),
@@ -57,6 +58,7 @@ describe("MCP OAuth flow", () => {
     const store = new McpOAuthStore(dataDir, "http://gateway.test/callback", hostCredentials);
     const started = await store.begin("casey", "cloudi_fi", "https://mcp.test/server");
 
+    expect(register).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ scope: "locations:read tickets:read" }));
     expect(start).toHaveBeenCalledWith("https://auth.test", expect.objectContaining({ scope: "locations:read tickets:read", clientInformation: expect.objectContaining({ client_id: "client" }) }));
     expect(new URL(started.authorizationUrl).searchParams.get("prompt")).toBeNull();
   });
