@@ -13,6 +13,8 @@
 
 ### Added
 
+- Standalone Lusha V3 fallback enrichment for work emails, opt-in phones, and companies, with billed credit reporting and free account usage/pricing and validation (ALG-591).
+
 - People Enrich retries a cascade step up to 2 more times when its provider times out (`deadline_exceeded`) without charging credits, and adds a free `credit_usage` tool showing remaining credits and the billing period.
 
 - Read-only Google Analytics 4 property discovery, reports and page comparisons with channel and identifiable AI referrals via personal or team Google OAuth (ALG-571).
