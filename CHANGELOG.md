@@ -14,6 +14,8 @@
 
 ### Added
 
+- Gmail attachment metadata and conversation-folder downloads, draft attachments with preservation on update, and email/draft sending behind the off-by-default `allowSend` checkbox (ALG-605).
+
 - Standalone Lusha V3 fallback enrichment for work emails, opt-in phones, and companies, with billed credit reporting and free account usage/pricing and validation (ALG-591).
 
 - People Enrich retries a cascade step up to 2 more times when its provider times out (`deadline_exceeded`) without charging credits, and adds a free `credit_usage` tool showing remaining credits and the billing period.

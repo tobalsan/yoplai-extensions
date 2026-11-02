@@ -1,7 +1,18 @@
+import { mkdtemp, readFile, readdir, rm, writeFile, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { ToolExecutionContext } from "../../tool-extension.js";
 import { describe, expect, it, vi } from "vitest";
 import { GmailClient } from "../client.js";
 
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
+
+async function conversation(run: (context: ToolExecutionContext, folder: string) => Promise<void>) {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "gmail-test-"));
+  try { await run({ conversationFiles: { hostPath: folder, runtimePath: "/conversation" } }, folder); }
+  finally { await rm(folder, { recursive: true, force: true }); }
+}
+const pdfMessage = { id: "m1", payload: { parts: [{ filename: "invoice.pdf", mimeType: "application/pdf", body: { attachmentId: "a1", size: 8 } }] } };
 
 describe("GmailClient", () => {
   it("searches threads with Gmail query pagination and returns minimal messages", async () => {
@@ -41,9 +52,250 @@ describe("GmailClient", () => {
     await expect(client.listLabels({ pageSize: 1 })).resolves.toEqual({ labels: [{ labelId: "L1", name: "One", threadsTotal: 0, threadsUnread: 0 }], nextPageToken: "1" });
   });
 
-  it("returns Gmail attachment IDs, not filenames", async () => {
-    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { headers: [], parts: [{ filename: "report.pdf", body: { attachmentId: "attachment-1" } }] } }] })));
-    await expect(client.getThread({ threadId: "t1" })).resolves.toMatchObject({ messages: [{ attachmentIds: ["attachment-1"] }] });
+  it("returns attachment metadata and keeps legacy IDs while excluding unnamed text parts", async () => {
+    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { headers: [], parts: [{ filename: "report.pdf", mimeType: "application/pdf", body: { attachmentId: "attachment-1", size: 8 } }, { mimeType: "text/plain", body: { attachmentId: "large-text", size: 100 } }] } }] })));
+    await expect(client.getThread({ threadId: "t1", messageFormat: "FULL_CONTENT" })).resolves.toMatchObject({ messages: [{ attachmentIds: ["attachment-1", "large-text"], attachments: [{ messageId: "m1", attachmentId: "attachment-1", filename: "report.pdf", mimeType: "application/pdf", size: 8 }] }] });
+  });
+
+  it("downloads original attachment bytes into the conversation folder", async () => {
+    await conversation(async (context, folder) => {
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(response({ size: 8, data: "JVBERi0xLjQ" }));
+      const result = await new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context);
+      expect(result).toMatchObject({ name: "invoice.pdf", mimeType: "application/pdf", bytes: 8 });
+      expect(result.path).toMatch(/^\/conversation\/[a-f0-9-]+-invoice\.pdf$/);
+      expect(await readFile(path.join(folder, path.basename(result.path)), "utf8")).toBe("%PDF-1.4");
+    });
+  });
+
+  it("rejects declared over-limit attachments before downloading", async () => {
+    await conversation(async (context, folder) => {
+      const fetchImpl = vi.fn().mockResolvedValue(response({ ...pdfMessage, payload: { parts: [{ ...pdfMessage.payload.parts[0], body: { attachmentId: "a1", size: 26_214_401 } }] } }));
+      await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context)).rejects.toMatchObject({ status: 413 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(await readdir(folder)).toEqual([]);
+    });
+  });
+
+  it("counts streamed response bytes even when Gmail understates attachment size", async () => {
+    await conversation(async (context, folder) => {
+      const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(35_000_000)); controller.close(); } });
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(new Response(stream));
+      await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context)).rejects.toMatchObject({ status: 413 });
+      expect(await readdir(folder)).toEqual([]);
+    });
+  });
+
+  it("cancels a hung attachment response without leaving a file", async () => {
+    await conversation(async (context, folder) => {
+      const controller = new AbortController();
+      context.signal = controller.signal;
+      const stream = new ReadableStream({ start(streamController) { streamController.enqueue(new TextEncoder().encode('{"data":"')); } });
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(new Response(stream));
+      const download = new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context);
+      setTimeout(() => controller.abort(new Error("cancelled")), 5);
+      await expect(download).rejects.toThrow("cancelled");
+      expect(await readdir(folder)).toEqual([]);
+    });
+  }, 200);
+
+  it("rechecks the decoded byte limit", async () => {
+    await conversation(async (context, folder) => {
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(response({ data: Buffer.alloc(26_214_401).toString("base64url") }));
+      await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context)).rejects.toMatchObject({ status: 413 });
+      expect(await readdir(folder)).toEqual([]);
+    });
+  });
+
+  it("creates a mixed draft with a PDF, encoded French headers, and UTF-8 bodies", async () => {
+    await conversation(async (context, folder) => {
+      await writeFile(path.join(folder, "facturé.pdf"), "%PDF-1.4");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1", message: pdfMessage }));
+      const result = await new GmailClient("token", fetchImpl).createDraft({ to: ["person@example.com"], subject: "Facturé", body: "Bonjour Zoé", htmlBody: "<p>Bonjour Zoé</p>", attachments: [{ path: "facturé.pdf" }] }, context);
+      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+      expect(raw).toContain("Content-Type: multipart/mixed;");
+      expect(raw).toContain("Content-Type: multipart/alternative;");
+      expect(raw).toContain("Subject: =?UTF-8?B?RmFjdHVyw6k=?=");
+      expect(raw).toContain("filename*=UTF-8''factur%C3%A9.pdf");
+      expect(raw).toContain("Content-Type: application/pdf");
+      expect(raw).toContain("JVBERi0xLjQ=");
+      expect(raw).toContain("Qm9uam91ciBab8Op");
+      expect(result.attachments).toEqual([{ filename: "invoice.pdf", mimeType: "application/pdf", size: 8 }]);
+    });
+  });
+
+  it("accepts exactly 3,600,000 MIME bytes and rejects one byte more before draft creation", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
+    const client = new GmailClient("token", fetchImpl);
+    // This ASCII message has 97 header/separator bytes; the rest is its body.
+    await client.createDraft({ to: ["person@example.com"], body: "x".repeat(3_599_903) });
+    expect(Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").length).toBe(3_600_000);
+    await expect(client.createDraft({ to: ["person@example.com"], body: "x".repeat(3_599_904) })).rejects.toMatchObject({ status: 413 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps draft attachments when an update omits attachments", async () => {
+    const existing = { id: "d1", message: { ...pdfMessage, payload: { ...pdfMessage.payload, headers: [{ name: "To", value: "person@example.com" }] } } };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response(existing)).mockResolvedValueOnce(response({ data: "JVBERi0xLjQ" })).mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response(existing));
+    await new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", subject: "Fixed" });
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/messages/m1/attachments/a1");
+    const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[2][1].body).message.raw, "base64url").toString("utf8");
+    expect(raw).toContain("Subject: Fixed");
+    expect(raw).toContain('filename="invoice.pdf"');
+    expect(raw).toContain("JVBERi0xLjQ=");
+  });
+
+  it.each([false, true])("removes or replaces draft attachments when explicitly supplied (%s)", async (replace) => {
+    await conversation(async (context, folder) => {
+      await writeFile(path.join(folder, "new.pdf"), "replacement");
+      const existing = { id: "d1", message: pdfMessage };
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response(existing)).mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response(existing));
+      await new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", attachments: replace ? [{ path: "new.pdf" }] : [] }, context);
+      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[1][1].body).message.raw, "base64url").toString("utf8");
+      expect(raw).not.toContain("invoice.pdf");
+      expect(raw.includes('filename="new.pdf"')).toBe(replace);
+      expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/attachments/"))).toBe(false);
+    });
+  });
+
+  it("sends a reply with CC and a PDF using the message thread", async () => {
+    await conversation(async (context, folder) => {
+      await writeFile(path.join(folder, "invoice.pdf"), "%PDF-1.4");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "old", threadId: "thread-1", payload: { headers: [{ name: "Message-ID", value: "<original@example.com>" }] } })).mockResolvedValueOnce(response({ id: "sent-1", threadId: "thread-1" }));
+      await expect(new GmailClient("token", fetchImpl).sendEmail({ to: ["bank@example.com"], cc: ["reviewer@example.com"], subject: "Invoice", body: "Attached", replyToMessageId: "old", attachments: [{ path: "invoice.pdf" }] }, context)).resolves.toEqual({ messageId: "sent-1", threadId: "thread-1" });
+      expect(String(fetchImpl.mock.calls[1][0])).toContain("/messages/send");
+      const sent = JSON.parse(fetchImpl.mock.calls[1][1].body);
+      expect(sent.threadId).toBe("thread-1");
+      const raw = Buffer.from(sent.raw, "base64url").toString("utf8");
+      expect(raw).toContain("Cc: reviewer@example.com");
+      expect(raw).toContain("In-Reply-To: <original@example.com>");
+      expect(raw).toContain("References: <original@example.com>");
+      expect(raw).toContain("JVBERi0xLjQ=");
+    });
+  });
+
+  it("sends a draft resource ID", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ id: "sent-1", threadId: "t1" }));
+    await expect(new GmailClient("token", fetchImpl).sendDraft({ draftId: "draft-1" })).resolves.toEqual({ messageId: "sent-1", threadId: "t1" });
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/drafts/send");
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ id: "draft-1" });
+  });
+
+  it.each(["email", "draft"])("never reports sent %s when Gmail omits its message ID", async (kind) => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ threadId: "t1" }));
+    const client = new GmailClient("token", fetchImpl);
+    await expect(kind === "email" ? client.sendEmail({ to: ["a@example.com"], body: "Hello" }) : client.sendDraft({ draftId: "d1" })).rejects.toThrow("message ID");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a send without a nonempty text or HTML body before contacting Gmail", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ id: "sent" }));
+    await expect(new GmailClient("token", fetchImpl).sendEmail({ to: ["person@example.com"], body: "", htmlBody: "" })).rejects.toMatchObject({ status: 400 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each(["escape", "symlink"])("rejects attachment %s before any draft or send request", async (kind) => {
+    await conversation(async (context, folder) => {
+      const outside = await mkdtemp(path.join(os.tmpdir(), "gmail-outside-"));
+      try {
+        const secret = path.join(outside, "outside.pdf");
+        await writeFile(secret, "outside");
+        await symlink(secret, path.join(folder, "link.pdf"));
+        const attachmentPath = kind === "symlink" ? "link.pdf" : "../outside.pdf";
+        const fetchImpl = vi.fn();
+        const client = new GmailClient("token", fetchImpl);
+        await expect(client.createDraft({ to: ["a@example.com"], attachments: [{ path: attachmentPath }] }, context)).rejects.toMatchObject({ status: 400 });
+        await expect(client.sendEmail({ to: ["a@example.com"], body: "Attached", attachments: [{ path: attachmentPath }] }, context)).rejects.toMatchObject({ status: 400 });
+        expect(fetchImpl).not.toHaveBeenCalled();
+      } finally { await rm(outside, { recursive: true, force: true }); }
+    });
+  });
+
+  it("rejects unknown attachment IDs and downloads without conversation files", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(pdfMessage));
+    const client = new GmailClient("token", fetchImpl);
+    await expect(client.downloadAttachment({ messageId: "m1", attachmentId: "a1" })).rejects.toThrow("conversation files folder");
+    await conversation(async (context, folder) => {
+      await expect(client.downloadAttachment({ messageId: "m1", attachmentId: "unknown" }, context)).rejects.toMatchObject({ status: 404 });
+      expect(await readdir(folder)).toEqual([]);
+    });
+  });
+
+  it.each(["email", "draft"])("surfaces Gmail refusal for %s without retrying", async (kind) => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ error: { message: "refused" } }, 500));
+    const client = new GmailClient("token", fetchImpl);
+    await expect(kind === "email" ? client.sendEmail({ to: ["a@example.com"], body: "Hello" }) : client.sendDraft({ draftId: "d1" })).rejects.toMatchObject({ status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a hung send response and can still perform later work", async () => {
+    const controller = new AbortController();
+    const stream = new ReadableStream({ start(streamController) { streamController.enqueue(new TextEncoder().encode('{"id":')); } });
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(stream)).mockResolvedValueOnce(response({ emailAddress: "a@example.com" }));
+    const client = new GmailClient("token", fetchImpl);
+    const sending = client.sendEmail({ to: ["a@example.com"], body: "Hello" }, { signal: controller.signal });
+    setTimeout(() => controller.abort(new Error("cancelled send")), 5);
+    await expect(sending).rejects.toThrow("cancelled send");
+    await expect(client.account()).resolves.toBe("a@example.com");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  }, 200);
+
+  it("times out a hung attachment response and leaves no partial file", async () => {
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutMock = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(5));
+    try {
+      await conversation(async (context, folder) => {
+        const stream = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"data":"')); } });
+        const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(new Response(stream));
+        await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context)).rejects.toMatchObject({ name: "TimeoutError" });
+        expect(await readdir(folder)).toEqual([]);
+      });
+    } finally { timeoutMock.mockRestore(); }
+  });
+
+  it("rejects combined oversized attachments before creating a draft", async () => {
+    await conversation(async (context, folder) => {
+      await writeFile(path.join(folder, "one.pdf"), Buffer.alloc(1_400_000));
+      await writeFile(path.join(folder, "two.pdf"), Buffer.alloc(1_400_000));
+      const fetchImpl = vi.fn();
+      await expect(new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], attachments: [{ path: "one.pdf" }, { path: "two.pdf" }] }, context)).rejects.toMatchObject({ status: 413 });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it("accepts a normalized path inside the folder and rejects filename header injection", async () => {
+    await conversation(async (context, folder) => {
+      await writeFile(path.join(folder, "invoice.pdf"), "%PDF-1.4");
+      await writeFile(path.join(folder, "bad\nname.pdf"), "%PDF-1.4");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
+      const client = new GmailClient("token", fetchImpl);
+      await client.createDraft({ to: ["a@example.com"], attachments: [{ path: "sub/../invoice.pdf" }] }, context);
+      await expect(client.createDraft({ to: ["a@example.com"], attachments: [{ path: "bad\nname.pdf" }] }, context)).rejects.toMatchObject({ status: 400 });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("folds long Unicode subjects into valid RFC 2047 encoded words", async () => {
+    const subject = "Échéance de février — ".repeat(8);
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
+    await new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], subject, body: "Hello" });
+    const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+    const words = raw.match(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g) ?? [];
+    const subjectLines = raw.match(/^Subject:.*(?:\r\n [^\r\n]*)*/m)?.[0].split("\r\n") ?? [];
+    expect(subjectLines.every((line) => line.length <= 76)).toBe(true);
+    expect(words.length).toBeGreaterThan(1);
+    expect(words.every((word) => word.length <= 75)).toBe(true);
+    expect(words.map((word) => Buffer.from(word.slice(10, -2), "base64").toString("utf8")).join("")).toBe(subject);
+  });
+
+  it.each(["constructor", "__proto__"])("uses a binary MIME fallback for unknown extension %s", async (extension) => {
+    await conversation(async (context, folder) => {
+      const filename = `invoice.${extension}`;
+      await writeFile(path.join(folder, filename), "%PDF-1.4");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
+      await new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], attachments: [{ path: filename }] }, context);
+      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+      expect(raw).toContain("Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64");
+    });
   });
 
   it("uses the original message thread when creating a reply draft", async () => {

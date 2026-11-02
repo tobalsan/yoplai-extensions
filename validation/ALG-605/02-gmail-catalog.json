@@ -1,0 +1,24 @@
+{
+  "agentId": "gmail-check",
+  "gmail": [
+    {
+      "id": "gmail",
+      "enabled": true,
+      "configJsonSchema": {
+        "type": "object",
+        "properties": {
+          "allowSend": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable sending email from this Gmail connection.",
+            "title": "Enable sending email"
+          }
+        },
+        "additionalProperties": true,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "configValues": {},
+      "configurable": true
+    }
+  ]
+}

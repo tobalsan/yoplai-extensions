@@ -68,3 +68,20 @@ export async function readConversationFile(sourcePath: string, context: ToolExec
     throw error;
   }
 }
+
+export function safeFilename(value: string): string {
+  const cleaned = path.posix.basename(value.replace(/\\/g, "/")).replace(/[\x00-\x1f\x7f:*?"<>|]/g, "_").replace(/^\.+|[. ]+$/g, "") || "file";
+  const extension = path.extname(cleaned).slice(0, 20);
+  let stem = cleaned.slice(0, cleaned.length - extension.length);
+  while (Buffer.byteLength(stem + extension) > 180) stem = Array.from(stem).slice(0, -1).join("");
+  return stem + extension;
+}
+
+export const BINARY_MIME: Record<string, string> = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+  gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", txt: "text/plain", csv: "text/csv",
+  json: "application/json", zip: "application/zip", doc: "application/msword", xls: "application/vnd.ms-excel", ppt: "application/vnd.ms-powerpoint",
+};
