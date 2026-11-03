@@ -96,21 +96,22 @@ describe("gmail extension", () => {
     }
   });
 
-  it("downloads through tool execution into the supplied conversation folder", async () => {
+  it.each([{ partId: "1" }, { filename: "invoice.pdf", size: 8 }])("downloads through tool execution when Gmail changes attachment IDs (%j)", async (selector) => {
     const hostPath = await mkdtemp(path.join(tmpdir(), "gmail-tool-"));
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(Response.json({ emailAddress: "owner@example.com" }))
-      .mockResolvedValueOnce(Response.json({ id: "message-1", payload: { parts: [{ filename: "invoice.pdf", mimeType: "application/pdf", body: { attachmentId: "attachment-1", size: 8 } }] } }))
+      .mockResolvedValueOnce(Response.json({ id: "message-1", payload: { parts: [{ partId: "1", filename: "invoice.pdf", mimeType: "application/pdf", body: { attachmentId: "refreshed-attachment-1", size: 8 } }] } }))
       .mockResolvedValueOnce(Response.json({ size: 8, data: "JVBERi0xLjc" }));
     try {
       const tools = await extension.getAgentTools({ id: "a1", extensions: { gmail: {} } }, { config: {}, resolveOAuth: vi.fn().mockResolvedValue(connected) });
       const result = await tools.find((tool) => tool.name === "gmail_download_attachment")!.execute(
-        { messageId: "message-1", attachmentId: "attachment-1" },
+        { messageId: "message-1", attachmentId: "attachment-1", ...selector },
         { conversationFiles: { hostPath, runtimePath: "/conversation" } },
       ) as { path: string };
       expect(result).toMatchObject({ path: expect.stringMatching(/^\/conversation\/[^/]+-invoice\.pdf$/), name: "invoice.pdf", mimeType: "application/pdf", bytes: 8, account: "owner@example.com" });
       expect(await readFile(path.join(hostPath, path.basename(result.path)), "utf8")).toBe("%PDF-1.7");
+      expect(vi.mocked(globalThis.fetch).mock.calls[2][0]).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages/message-1/attachments/attachment-1");
     } finally {
       globalThis.fetch = originalFetch;
       await rm(hostPath, { recursive: true, force: true });

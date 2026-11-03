@@ -8,8 +8,8 @@ Tools (mounted as `gmail_<name>`): 13 always available, plus two sending tools w
 - `update_draft` — update an existing draft by Draft ID; omitted fields keep current values, including attachments (`[]` removes them, a list replaces them; HTML body dropped unless resent)
 - `delete_draft` — permanently delete a draft by Draft ID
 - `list_drafts` — list drafts, paginated, optional Gmail query
-- `get_thread` — get a thread and its messages (`MINIMAL` or `FULL_CONTENT`); full messages include attachment `messageId`, `attachmentId`, `filename`, `mimeType`, and `size`
-- `download_attachment` — save original attachment bytes to the conversation folder; returns `path`, `name`, `mimeType`, and `bytes`
+- `get_thread` — get a thread and its messages (`MINIMAL` or `FULL_CONTENT`); full messages include attachment `messageId`, `attachmentId`, `partId`, `filename`, `mimeType`, and `size`
+- `download_attachment` — save original attachment bytes to the conversation folder; pass `messageId`, `attachmentId`, and `partId` from `get_thread` (or `filename` and `size` if `partId` is unavailable); returns `path`, `name`, `mimeType`, and `bytes`
 - `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`
 - `label_thread` / `unlabel_thread` — add/remove labels on a thread
 - `label_message` / `unlabel_message` — add/remove labels on a message
@@ -70,6 +70,8 @@ The Gmail extension page displays **Enable sending email**, an unchecked checkbo
 When send tools are available, confirm recipients and the attachment with the user before each send, unless a scheduled job states its own send rule. A successful send returns `messageId`, `threadId`, and `account`; failures are reported without automatic retries.
 
 ## Attachment limits
+
+Gmail can change `attachmentId` between message reads. Keep the caller's `attachmentId` for downloading, and pass the stable `partId` to locate its filename and MIME type. Without `partId`, `filename` and `size` must uniquely identify the attachment; ambiguous matches fail and require `partId`. Legacy calls with just `messageId` and `attachmentId` still work when the ID matches the current message response; use the selectors above to handle changing IDs.
 
 - Downloads: 25 MiB per file, 30-second timeout, caller cancellation supported. Oversized or interrupted downloads leave no partial file.
 - Draft/send attachments must resolve to regular files inside the current conversation folder. Paths escaping it and symlinks escaping it are rejected; nested paths are unsupported on non-Linux hosts.

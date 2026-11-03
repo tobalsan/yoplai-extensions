@@ -65,17 +65,30 @@ describe("GmailClient", () => {
   });
 
   it("returns attachment metadata and keeps legacy IDs while excluding unnamed text parts", async () => {
-    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { headers: [], parts: [{ filename: "report.pdf", mimeType: "application/pdf", body: { attachmentId: "attachment-1", size: 8 } }, { mimeType: "text/plain", body: { attachmentId: "large-text", size: 100 } }] } }] })));
-    await expect(client.getThread({ threadId: "t1", messageFormat: "FULL_CONTENT" })).resolves.toMatchObject({ messages: [{ attachmentIds: ["attachment-1", "large-text"], attachments: [{ messageId: "m1", attachmentId: "attachment-1", filename: "report.pdf", mimeType: "application/pdf", size: 8 }] }] });
+    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { headers: [], parts: [{ partId: "1", filename: "report.pdf", mimeType: "application/pdf", body: { attachmentId: "attachment-1", size: 8 } }, { mimeType: "text/plain", body: { attachmentId: "large-text", size: 100 } }] } }] })));
+    await expect(client.getThread({ threadId: "t1", messageFormat: "FULL_CONTENT" })).resolves.toMatchObject({ messages: [{ attachmentIds: ["attachment-1", "large-text"], attachments: [{ messageId: "m1", attachmentId: "attachment-1", partId: "1", filename: "report.pdf", mimeType: "application/pdf", size: 8 }] }] });
   });
 
-  it("downloads original attachment bytes into the conversation folder", async () => {
+  it("downloads original bytes across message reads that each change the attachment ID", async () => {
     await conversation(async (context, folder) => {
-      const fetchImpl = vi.fn().mockResolvedValueOnce(response(pdfMessage)).mockResolvedValueOnce(response({ size: 8, data: "JVBERi0xLjQ" }));
-      const result = await new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context);
-      expect(result).toMatchObject({ name: "invoice.pdf", mimeType: "application/pdf", bytes: 8 });
-      expect(result.path).toMatch(/^\/conversation\/[a-f0-9-]+-invoice\.pdf$/);
-      expect(await readFile(path.join(folder, path.basename(result.path)), "utf8")).toBe("%PDF-1.4");
+      let messageReads = 0;
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+        const pathname = new URL(String(input)).pathname;
+        if (pathname.endsWith("/threads/t1")) return response({ id: "t1", messages: [{ ...pdfMessage, payload: { parts: [{ ...pdfMessage.payload.parts[0], partId: "1" }] } }] });
+        if (pathname.endsWith("/messages/m1")) return response({ ...pdfMessage, payload: { parts: [{ ...pdfMessage.payload.parts[0], partId: "1", body: { attachmentId: `changed-${++messageReads}`, size: 8 } }] } });
+        if (pathname.endsWith("/messages/m1/attachments/a1")) return response({ size: 8, data: "JVBERi0xLjQ" });
+        return response({ error: "Unknown attachment" }, 404);
+      });
+      const client = new GmailClient("token", fetchImpl);
+      const thread = await client.getThread({ threadId: "t1", messageFormat: "FULL_CONTENT" });
+      const attachment = thread.messages[0].attachments![0];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await client.downloadAttachment({ messageId: attachment.messageId, attachmentId: attachment.attachmentId, partId: attachment.partId }, context);
+        expect(result).toMatchObject({ name: "invoice.pdf", mimeType: "application/pdf", bytes: 8 });
+        expect(result.path).toMatch(/^\/conversation\/[a-f0-9-]+-invoice\.pdf$/);
+        expect(await readFile(path.join(folder, path.basename(result.path)), "utf8")).toBe("%PDF-1.4");
+      }
+      expect(messageReads).toBe(2);
     });
   });
 
@@ -83,6 +96,18 @@ describe("GmailClient", () => {
     await conversation(async (context, folder) => {
       const fetchImpl = vi.fn().mockResolvedValue(response({ ...pdfMessage, payload: { parts: [{ ...pdfMessage.payload.parts[0], body: { attachmentId: "a1", size: 26_214_401 } }] } }));
       await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "a1" }, context)).rejects.toMatchObject({ status: 413 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(await readdir(folder)).toEqual([]);
+    });
+  });
+
+  it("requires a part ID when filename and size identify multiple attachments", async () => {
+    await conversation(async (context, folder) => {
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "m1", payload: { parts: [
+        { partId: "1", filename: "invoice.pdf", body: { attachmentId: "new-1", size: 8 } },
+        { partId: "2", filename: "invoice.pdf", body: { attachmentId: "new-2", size: 8 } },
+      ] } })).mockResolvedValueOnce(response({ data: "JVBERi0xLjQ" }));
+      await expect(new GmailClient("token", fetchImpl).downloadAttachment({ messageId: "m1", attachmentId: "old-2", filename: "invoice.pdf", size: 8 }, context)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("partId") });
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(await readdir(folder)).toEqual([]);
     });
@@ -158,6 +183,30 @@ describe("GmailClient", () => {
     expect(raw).toContain("Subject: Fixed");
     expect(raw).toContain('filename="invoice.pdf"');
     expect(raw).toContain("JVBERi0xLjQ=");
+  });
+
+  it("preserves draft attachment bytes using the IDs from each current draft read", async () => {
+    let draftReads = 0;
+    const uploads: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const pathname = new URL(String(input)).pathname;
+      if (init?.method === "PUT") {
+        uploads.push(String(init.body));
+        return response({ id: "d1" });
+      }
+      if (pathname.endsWith("/drafts/d1")) return response({ id: "d1", message: { ...pdfMessage, payload: { parts: [{ ...pdfMessage.payload.parts[0], body: { attachmentId: `current-${++draftReads}`, size: 8 } }] } } });
+      if (pathname.endsWith(`/messages/m1/attachments/current-${draftReads}`)) return response({ data: "JVBERi0xLjQ" });
+      return response({ error: "Stale attachment ID" }, 404);
+    });
+    const client = new GmailClient("token", fetchImpl);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(client.updateDraft({ draftId: "d1", subject: "Fixed" })).resolves.toMatchObject({ attachments: [{ filename: "invoice.pdf", mimeType: "application/pdf", size: 8 }] });
+    }
+    expect(uploads).toHaveLength(2);
+    for (const mime of uploads) {
+      expect(mime).toContain('filename="invoice.pdf"');
+      expect(mime).toContain("JVBERi0xLjQ=");
+    }
   });
 
   it("keeps a named attachment stored directly in the draft MIME part", async () => {

@@ -50,7 +50,13 @@ export type CreateLabelParams = z.infer<typeof CreateLabelParamsSchema>;
 
 export const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
-export const DownloadAttachmentParamsSchema = z.object({ messageId: z.string().min(1), attachmentId: z.string().min(1) }).strict();
+export const DownloadAttachmentParamsSchema = z.object({
+  messageId: z.string().min(1),
+  attachmentId: z.string().min(1),
+  partId: z.string().optional().describe("Stable MIME part ID from get_thread attachments; pass this alongside attachmentId."),
+  filename: z.string().min(1).optional().describe("Attachment filename from get_thread; use with size if partId is unavailable."),
+  size: z.number().int().nonnegative().optional().describe("Attachment size in bytes from get_thread; use with filename if partId is unavailable."),
+}).strict();
 export type DownloadAttachmentParams = z.infer<typeof DownloadAttachmentParamsSchema>;
 
 export const SendEmailParamsSchema = CreateDraftParamsSchema;

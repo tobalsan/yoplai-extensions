@@ -165,7 +165,7 @@ export default defineToolExtension({
       },
       {
         name: "download_attachment",
-        description: "Download an attachment from a message into the current conversation folder (25 MiB maximum).",
+        description: "Download an attachment from a message into the current conversation folder (25 MiB maximum). Pass messageId, attachmentId, and partId from get_thread attachments. If partId is unavailable, pass filename and size instead; they must identify one attachment. Gmail attachment IDs can change between reads.",
         parameters: DownloadAttachmentParamsSchema,
         outputSchema: z.object({ path: z.string(), name: z.string(), mimeType: z.string(), bytes: z.number(), account: z.string().nullable() }),
         execute: run(DownloadAttachmentParamsSchema, (gmail, params, context) => gmail.downloadAttachment(params, context)),

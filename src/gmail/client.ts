@@ -20,7 +20,7 @@ import {
 export type GmailFetch = typeof fetch;
 
 type GmailHeader = { name?: string; value?: string };
-type GmailPart = { mimeType?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPart[]; filename?: string };
+type GmailPart = { partId?: string; mimeType?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPart[]; filename?: string };
 type GmailMessage = { id?: string; threadId?: string; snippet?: string; payload?: GmailPart & { headers?: GmailHeader[] }; internalDate?: string };
 
 function header(message: GmailMessage, name: string): string {
@@ -68,7 +68,7 @@ function attachmentParts(part: GmailPart | undefined, includeInline = false): Gm
   return [...(part.filename && (part.body?.attachmentId || (includeInline && part.body?.data !== undefined)) ? [part] : []), ...(part.parts ?? []).flatMap((child) => attachmentParts(child, includeInline))];
 }
 function attachmentMetadata(message: GmailMessage) {
-  return attachmentParts(message.payload).map((part) => ({ messageId: message.id ?? "", attachmentId: part.body!.attachmentId!, filename: part.filename!, mimeType: part.mimeType ?? "application/octet-stream", size: part.body?.size ?? 0 }));
+  return attachmentParts(message.payload).map((part) => ({ messageId: message.id ?? "", attachmentId: part.body!.attachmentId!, partId: part.partId ?? "", filename: part.filename!, mimeType: part.mimeType ?? "application/octet-stream", size: part.body?.size ?? 0 }));
 }
 function date(message: GmailMessage): string {
   const value = header(message, "Date");
@@ -144,8 +144,15 @@ export class GmailClient {
     if (!context?.conversationFiles) throw new Error("A conversation files folder is required to download Gmail attachments.");
     const signal = executionSignal(context);
     const message = await this.request(`/messages/${encodeURIComponent(params.messageId)}?format=full`, { signal }) as GmailMessage;
-    const part = attachmentParts(message.payload).find((part) => part.body?.attachmentId === params.attachmentId);
-    if (!part) throw new GmailFileError("Attachment not found on message.", 404);
+    // Attachment IDs can change between Gmail reads; partId identifies the MIME part.
+    const matches = attachmentParts(message.payload).filter((part) => {
+      if (params.partId !== undefined) return part.partId === params.partId;
+      if (params.filename !== undefined || params.size !== undefined) return params.filename !== undefined && params.size !== undefined && part.filename === params.filename && part.body?.size === params.size;
+      return part.body?.attachmentId === params.attachmentId;
+    });
+    if (matches.length > 1) throw new GmailFileError("Multiple attachments match; pass partId from get_thread.", 400);
+    const part = matches[0];
+    if (!part) throw new GmailFileError("Attachment not found on message. Pass partId or filename and size from get_thread.", 404);
     if ((part.body?.size ?? 0) > 25 * 1024 * 1024) throw new GmailFileError("Attachment exceeds the 25 MiB download limit.", 413);
     const data = await this.request(`/messages/${encodeURIComponent(params.messageId)}/attachments/${encodeURIComponent(params.attachmentId)}`, { signal }, Math.ceil(25 * 1024 * 1024 * 4 / 3) + 1024) as { data?: string };
     if (typeof data.data !== "string") throw new GmailFileError("Gmail returned no attachment data.", 502);
