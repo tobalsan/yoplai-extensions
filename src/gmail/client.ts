@@ -93,6 +93,8 @@ function asMessage(message: GmailMessage, full: boolean) {
   };
 }
 type OutgoingAttachment = { filename: string; mimeType: string; bytes: Buffer };
+// download_attachment saves files as `<uuid>-<name>`; the recipient sees `<name>`.
+const DOWNLOAD_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(?=.)/i;
 export const MAX_MIME_BYTES = 36_700_160;
 const MAX_ATTACHMENT_BYTES = 25_000_000;
 function encodedHeader(value: string): string {
@@ -275,7 +277,7 @@ export class GmailClient {
       const bytes = await readConversationFile(attachment.path, context, signal, remaining);
       remaining -= bytes.length;
       const extension = path.extname(attachment.path).slice(1).toLowerCase();
-      files.push({ filename: path.basename(attachment.path), mimeType: Object.hasOwn(BINARY_MIME, extension) ? BINARY_MIME[extension] : "application/octet-stream", bytes });
+      files.push({ filename: path.basename(attachment.path).replace(DOWNLOAD_PREFIX, ""), mimeType: Object.hasOwn(BINARY_MIME, extension) ? BINARY_MIME[extension] : "application/octet-stream", bytes });
     }
     return files;
   }

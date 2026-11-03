@@ -180,6 +180,18 @@ describe("GmailClient", () => {
     });
   });
 
+  it("drops the download UUID prefix from the attachment name the recipient sees", async () => {
+    await conversation(async (context, folder) => {
+      const saved = "6b15a53f-5dbd-4159-8070-50e4bf3ab6ee-invoice.pdf";
+      await writeFile(path.join(folder, saved), "%PDF-1.4");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1", message: pdfMessage }));
+      await new GmailClient("token", fetchImpl).createDraft({ to: ["person@example.com"], body: "Attached", attachments: [{ path: saved }] }, context);
+      const raw = String(fetchImpl.mock.calls[0][1].body);
+      expect(raw).toContain('filename="invoice.pdf"');
+      expect(raw).not.toContain("6b15a53f");
+    });
+  });
+
   it("accepts exactly 36,700,160 MIME bytes and rejects one byte more before draft creation", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
     const client = new GmailClient("token", fetchImpl);
