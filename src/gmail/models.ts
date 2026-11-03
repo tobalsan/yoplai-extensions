@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-export const GmailConfigSchema = z.object({}).passthrough();
+export const GmailConfigSchema = z.object({
+  allowSend: z.boolean().default(false).describe("Enable sending email from this Gmail connection."),
+}).passthrough();
 
 const PageSchema = z.object({
   pageSize: z.number().int().min(1).max(50).optional().default(20),
@@ -15,6 +17,7 @@ export const CreateDraftParamsSchema = z.object({
   body: z.string().optional(),
   htmlBody: z.string().optional(),
   replyToMessageId: z.string().min(1).optional(),
+  attachments: z.array(z.object({ path: z.string().min(1) }).strict()).max(10).optional(),
 }).strict();
 export const UpdateDraftParamsSchema = CreateDraftParamsSchema.omit({ replyToMessageId: true }).partial().extend({ draftId: z.string().min(1) }).strict();
 export const DeleteDraftParamsSchema = z.object({ draftId: z.string().min(1) }).strict();
@@ -46,3 +49,17 @@ export type LabelMessageParams = z.infer<typeof LabelMessageParamsSchema>;
 export type CreateLabelParams = z.infer<typeof CreateLabelParamsSchema>;
 
 export const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+export const DownloadAttachmentParamsSchema = z.object({
+  messageId: z.string().min(1),
+  attachmentId: z.string().min(1),
+  partId: z.string().optional().describe("Stable MIME part ID from get_thread attachments; pass this alongside attachmentId."),
+  filename: z.string().min(1).optional().describe("Attachment filename from get_thread; use with size if partId is unavailable."),
+  size: z.number().int().nonnegative().optional().describe("Attachment size in bytes from get_thread; use with filename if partId is unavailable."),
+}).strict();
+export type DownloadAttachmentParams = z.infer<typeof DownloadAttachmentParamsSchema>;
+
+export const SendEmailParamsSchema = CreateDraftParamsSchema;
+export const SendDraftParamsSchema = z.object({ draftId: z.string().min(1) }).strict();
+export type SendEmailParams = z.infer<typeof SendEmailParamsSchema>;
+export type SendDraftParams = z.infer<typeof SendDraftParamsSchema>;

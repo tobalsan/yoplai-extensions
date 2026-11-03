@@ -1,0 +1,73 @@
+### Page
+- Page URL: http://127.0.0.1:3080/agents/gmail-check/extensions/gmail
+- Page Title: [DEV :3080] Extension — Yoplai
+- Console: 2 errors, 1 warnings
+### Snapshot
+```yaml
+- generic [ref=f1e4]:
+  - complementary [ref=f1e5]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - link "Yoplai" [ref=f1e8] [cursor=pointer]:
+          - /url: /
+        - generic [ref=f1e10]: DEV
+        - button "«" [ref=f1e11] [cursor=pointer]
+      - generic [ref=f1e12]:
+        - navigation "Primary" [ref=f1e13]:
+          - button "Search" [ref=f1e14] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f1e15]: 
+          - link "Agents" [ref=f1e17] [cursor=pointer]:
+            - /url: /agents
+            - generic [aria-hidden] [ref=f1e18]: 
+          - link "Skills" [ref=f1e20] [cursor=pointer]:
+            - /url: /skills
+            - generic [aria-hidden] [ref=f1e21]: 
+          - link "Dashboards" [ref=f1e23] [cursor=pointer]:
+            - /url: /dashboards
+            - generic [aria-hidden] [ref=f1e24]: 
+          - link "Admin" [ref=f1e26] [cursor=pointer]:
+            - /url: /admin/extensions
+            - generic [aria-hidden] [ref=f1e27]: 
+        - region "Sessions" [ref=f1e29]:
+          - generic [ref=f1e30]:
+            - region "Projects" [ref=f1e31]:
+              - generic [ref=f1e32]:
+                - generic [ref=f1e33]: Projects
+                - button "New project" [ref=f1e34] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f1e35]: +
+            - region "Recent" [ref=f1e36]
+      - generic [ref=f1e38]:
+        - link "Archive" [ref=f1e39] [cursor=pointer]:
+          - /url: /archive
+          - generic [aria-hidden] [ref=f1e40]: 
+        - button "Switch to dark mode" [ref=f1e42] [cursor=pointer]:
+          - generic [ref=f1e45]: Dark
+  - generic [ref=f1e47]:
+    - link "← Back to agent" [ref=f1e48] [cursor=pointer]:
+      - /url: /agents/gmail-check/edit
+    - heading "Gmail" [level=1] [ref=f1e52]
+    - paragraph [ref=f1e53]: "Gmail mailbox tools via Google OAuth: connect your own account (Just me) or a shared team account (Whole team)."
+    - generic [ref=f1e54]:
+      - tablist "Credentials for" [ref=f1e55]:
+        - tab "Just me Only used by you" [disabled] [ref=f1e56]:
+          - generic [ref=f1e60]:
+            - generic [ref=f1e61]: Just me
+            - generic [ref=f1e62]: Only used by you
+        - tab "Whole team Not set up Can be used by the whole team" [selected] [ref=f1e63]:
+          - generic [ref=f1e69]:
+            - generic [ref=f1e70]:
+              - text: Whole team
+              - generic [ref=f1e71]: Not set up
+            - generic [ref=f1e72]: Can be used by the whole team
+      - tabpanel [ref=f1e73]:
+        - generic [ref=f1e74]:
+          - generic [ref=f1e75]: Gmail
+          - button "Connect Gmail" [ref=f1e77] [cursor=pointer]
+        - generic [ref=f1e80]:
+          - generic [ref=f1e85]:
+            - generic [ref=f1e86] [cursor=pointer]:
+              - checkbox "Enable sending email" [ref=f1e87]
+              - text: Enable sending email
+            - generic [ref=f1e88]: Enable sending email from this Gmail connection.
+          - generic [ref=f1e89]: Saved ✓
+```

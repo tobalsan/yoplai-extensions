@@ -1,0 +1,9 @@
+$ vitest run
+
+ RUN  v4.1.2 /Users/agents/orchestration/worker/workspaces/ALG-605/repo
+
+
+ Test Files  92 passed (92)
+      Tests  1485 passed (1485)
+   Start at  09:50:59
+   Duration  4.53s (transform 3.01s, setup 0ms, import 9.10s, tests 15.87s, environment 5ms)

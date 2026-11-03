@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Gmail `get_thread` MINIMAL and `search_threads` results include attachment metadata without requiring full message bodies (ALG-605).
+- Gmail attachment downloads use stable MIME part IDs (or unique filename/size pairs) to find metadata when Gmail changes attachment IDs between reads (ALG-605).
 - MCP dynamic client registration sends the requested scopes. Servers such as Scheduled gave a client with no scope an empty set, and the connect failed with `invalid_scope` (ALG-603).
 - MCP clients reuse output-schema validators across connections and release caller abort listeners after requests, preventing per-call memory growth while preserving validation and cancellation (ALG-573).
 
@@ -13,6 +15,8 @@
 - MCP servers no longer read the host `oauth.providers` config. Set `oauth.clientId` (and `oauth.clientSecret` if the provider requires one) on the server in `mcp.json`, or use dynamic client registration. Installs that used `oauth.providers.google` or `hubspot` for an MCP server must add an `oauth` block to it, and users connect again once.
 
 ### Added
+
+- Gmail attachment metadata and conversation-folder downloads, draft attachments with preservation on update, and email/draft sending behind the off-by-default `allowSend` checkbox. Drafts and sends use media uploads with a 25 MB attachment total and 36,700,160-byte MIME limit (ALG-605).
 
 - Standalone Lusha V3 fallback enrichment for work emails, opt-in phones, and companies, with billed credit reporting and free account usage/pricing and validation (ALG-591).
 

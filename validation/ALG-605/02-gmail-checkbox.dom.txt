@@ -1,0 +1,64 @@
+- generic [ref=f2e4]:
+  - complementary [ref=f2e5]:
+    - generic [ref=f2e6]:
+      - generic [ref=f2e7]:
+        - link "Yoplai" [ref=f2e8] [cursor=pointer]:
+          - /url: /
+        - generic [ref=f2e10]: DEV
+        - button "«" [ref=f2e11] [cursor=pointer]
+      - generic [ref=f2e12]:
+        - navigation "Primary" [ref=f2e13]:
+          - button "Search" [ref=f2e14] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f2e15]: 
+          - link "Agents" [ref=f2e17] [cursor=pointer]:
+            - /url: /agents
+            - generic [aria-hidden] [ref=f2e18]: 
+          - link "Skills" [ref=f2e20] [cursor=pointer]:
+            - /url: /skills
+            - generic [aria-hidden] [ref=f2e21]: 
+          - link "Dashboards" [ref=f2e23] [cursor=pointer]:
+            - /url: /dashboards
+            - generic [aria-hidden] [ref=f2e24]: 
+          - link "Admin" [ref=f2e26] [cursor=pointer]:
+            - /url: /admin/extensions
+            - generic [aria-hidden] [ref=f2e27]: 
+        - region "Sessions" [ref=f2e29]:
+          - generic [ref=f2e30]:
+            - region "Projects" [ref=f2e31]:
+              - generic [ref=f2e32]:
+                - generic [ref=f2e33]: Projects
+                - button "New project" [ref=f2e34] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f2e35]: +
+            - region "Recent" [ref=f2e36]
+      - generic [ref=f2e38]:
+        - link "Archive" [ref=f2e39] [cursor=pointer]:
+          - /url: /archive
+          - generic [aria-hidden] [ref=f2e40]: 
+        - button "Switch to dark mode" [ref=f2e42] [cursor=pointer]:
+          - generic [ref=f2e45]: Dark
+  - generic [ref=f2e47]:
+    - link "← Back to agent" [ref=f2e48] [cursor=pointer]:
+      - /url: /agents/gmail-check/edit
+    - heading "Gmail" [level=1] [ref=f2e52]
+    - paragraph [ref=f2e53]: "Gmail mailbox tools via Google OAuth: connect your own account (Just me) or a shared team account (Whole team)."
+    - generic [ref=f2e54]:
+      - tablist "Credentials for" [ref=f2e55]:
+        - tab "Just me Only used by you" [disabled] [ref=f2e56]:
+          - generic [ref=f2e60]:
+            - generic [ref=f2e61]: Just me
+            - generic [ref=f2e62]: Only used by you
+        - tab "Whole team Not set up Can be used by the whole team" [selected] [ref=f2e63]:
+          - generic [ref=f2e69]:
+            - generic [ref=f2e70]:
+              - text: Whole team
+              - generic [ref=f2e71]: Not set up
+            - generic [ref=f2e72]: Can be used by the whole team
+      - tabpanel [ref=f2e73]:
+        - generic [ref=f2e74]:
+          - generic [ref=f2e75]: Gmail
+          - button "Connect Gmail" [ref=f2e77] [cursor=pointer]
+        - generic [ref=f2e81]:
+          - generic [ref=f2e82] [cursor=pointer]:
+            - checkbox "Enable sending email" [ref=f2e83]
+            - text: Enable sending email
+          - generic [ref=f2e84]: Enable sending email from this Gmail connection.

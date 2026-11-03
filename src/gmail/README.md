@@ -2,20 +2,23 @@
 
 Gmail mailbox tools for an agent, via **Google OAuth** — personal (**Just me**) or shared (**Whole team**) connections — no pasted secrets. The host supplies a fresh Google OAuth token when building the agent's tools; this extension stores neither tokens nor mailbox data.
 
-Tools (mounted as `gmail_<name>`), the Google Gmail MCP's current ten-tool surface:
+Tools (mounted as `gmail_<name>`): 13 always available, plus two sending tools when enabled:
 
-- `create_draft` — create an email draft without sending it (supports `to`/`cc`/`bcc`, text or HTML body, `replyToMessageId`)
-- `update_draft` — update an existing draft by Draft ID; omitted fields keep current values (HTML body dropped unless resent)
+- `create_draft` — create an email draft without sending it (supports `to`/`cc`/`bcc`, text or HTML body, `replyToMessageId`, and `attachments: [{ path }]`)
+- `update_draft` — update an existing draft by Draft ID; omitted fields keep current values, including attachments (`[]` removes them, a list replaces them; HTML body dropped unless resent)
 - `delete_draft` — permanently delete a draft by Draft ID
 - `list_drafts` — list drafts, paginated, optional Gmail query
-- `get_thread` — get a thread and its messages (`MINIMAL` or `FULL_CONTENT`)
-- `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`
+- `get_thread` — get a thread and its messages; both `MINIMAL` and `FULL_CONTENT` include attachment `messageId`, `attachmentId`, `partId`, `filename`, `mimeType`, and `size`. Only `FULL_CONTENT` includes `plaintextBody` and legacy `attachmentIds`
+- `download_attachment` — save original attachment bytes to the conversation folder; pass `messageId`, `attachmentId`, and `partId` from `get_thread` (or `filename` and `size` if `partId` is unavailable); returns `path`, `name`, `mimeType`, and `bytes`
+- `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`; returns `MINIMAL` messages including attachment metadata
 - `label_thread` / `unlabel_thread` — add/remove labels on a thread
 - `label_message` / `unlabel_message` — add/remove labels on a message
 - `list_labels` — list user-defined labels, paginated
 - `create_label` — create a label, optional colors
+- `send_email` — send with recipients, text/HTML body, optional reply threading and attachments (`allowSend: true` only)
+- `send_draft` — send a Draft ID from `list_drafts` or `create_draft` (`allowSend: true` only)
 
-Scopes requested: `gmail.modify` + `userinfo.email`. No send, no delete, no settings access.
+Scopes requested: `gmail.modify` + `userinfo.email`. Google's [messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send) and [drafts.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send) references list `gmail.modify`, so existing connections need no reconnect. Sending is controlled by tool availability, off by default. No settings tools are exposed.
 
 Every successful result includes `account`, the connected mailbox identity.
 
@@ -43,13 +46,13 @@ ln -sfn "$PWD/dist/gmail" ~/.yoplai/extensions/gmail
 
 ## 2. Enable it for an agent
 
-Opt in under `extensions` in the agent's `agent.yaml`. Config is empty — the token is injected by the host, not read from here.
+Opt in under `extensions` in the agent's `agent.yaml`; the host injects the token. Sending is off by default; enable it only for agents that should send mail.
 
 `~/.yoplai/agents/<agent>/agent.yaml`:
 
 ```yaml
 extensions:
-  gmail: {}                # presence opts in; enabled: true is optional
+  gmail: {}                # downloads and drafts; sending disabled
 ```
 
 A fuller example alongside other extensions:
@@ -58,9 +61,23 @@ A fuller example alongside other extensions:
 name: mail-triage
 model: claude-sonnet-5
 extensions:
-  gmail: {}                # Google OAuth — nothing else to configure here
+  gmail: { allowSend: true }
   googleDrive: {}
 ```
+
+The Gmail extension page displays **Enable sending email**, an unchecked checkbox by default. For a **Just me** connection, the user controls this personal setting, shared across their agents. For a **Whole team** connection, an admin controls the setting per agent, matching Google Drive's `allowWrite` behavior.
+
+When send tools are available, confirm recipients and the attachment with the user before each send, unless a scheduled job states its own send rule. A successful send returns `messageId`, `threadId`, and `account`; failures are reported without automatic retries.
+
+## Attachment limits
+
+Gmail can change `attachmentId` between message reads. Keep the caller's `attachmentId` for downloading, and pass the stable `partId` to locate its filename and MIME type. Without `partId`, `filename` and `size` must uniquely identify the attachment; ambiguous matches fail and require `partId`. Legacy calls with just `messageId` and `attachmentId` still work when the ID matches the current message response; use the selectors above to handle changing IDs.
+
+- Downloads: 25 MiB per file, 30-second timeout, caller cancellation supported. Oversized or interrupted downloads leave no partial file.
+- Draft/send attachments must resolve to regular files inside the current conversation folder. Paths escaping it and symlinks escaping it are rejected; nested paths are unsupported on non-Linux hosts.
+- At most 10 attachments per outgoing message. Total original attachment bytes must not exceed **25 MB (25,000,000 bytes)**. The complete MIME message (headers, bodies, and base64 attachments) must not exceed **36,700,160 bytes** (`MAX_MIME_BYTES`). Both limits are checked before uploading.
+- Draft creation, draft updates, and email sending use Gmail's media upload endpoints: `uploadType=media` for MIME alone, or `uploadType=multipart` with JSON metadata and `message/rfc822` for replies/thread preservation. The MIME is uploaded directly rather than base64url-encoded again in JSON.
+- Downloaded files can be read, displayed, or reused with `attachments: [{ path: "<returned path>" }]`. Draft results list attachment filenames, MIME types, and sizes so a human can inspect the draft in Gmail before sending.
 
 ## 3. Operator: register a Google OAuth client (one-time, in GCP)
 
@@ -126,7 +143,7 @@ In the Yoplai web UI, open the agent's **Gmail** extension page (or the agent's 
 
 ## Behavior notes
 
-- `list_drafts` normally returns Gmail Draft resource IDs. Gmail's REST drafts endpoint cannot filter by query; when `query` is provided, the extension searches `in:draft` messages with Gmail query syntax instead. In that response, `draftIdKind` is `"message"` and each `id` is a Gmail message ID.
+- `list_drafts` always returns Gmail Draft resource IDs with full draft fields. The optional `query` goes to the Gmail `drafts.list` `q` parameter and uses Gmail search syntax.
 - `list_labels` returns user-defined labels only, as the Gmail MCP contract does. Gmail system label IDs such as `INBOX`, `TRASH`, `SPAM`, `STARRED`, `UNREAD`, and `IMPORTANT` remain valid inputs for label mutation tools.
 
 Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md` (same Google OAuth framework).
