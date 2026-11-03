@@ -99,19 +99,19 @@ export default defineToolExtension({
       },
       {
         name: "update_draft",
-        description: "Update an existing draft by Draft ID (from list_drafts without query). Omitted fields keep current values, including attachments; attachments: [] removes all, a list replaces them. HTML body is dropped unless htmlBody is resent.",
+        description: "Update an existing draft by Draft ID (from list_drafts). Omitted fields keep current values, including attachments; attachments: [] removes all, a list replaces them. HTML body is dropped unless htmlBody is resent.",
         parameters: UpdateDraftParamsSchema,
         execute: run(UpdateDraftParamsSchema, (gmail, params, context) => gmail.updateDraft(params, context)),
       },
       {
         name: "delete_draft",
-        description: "Permanently delete a draft by Draft ID (from list_drafts without query). Not recoverable.",
+        description: "Permanently delete a draft by Draft ID (from list_drafts). Not recoverable.",
         parameters: DeleteDraftParamsSchema,
         execute: run(DeleteDraftParamsSchema, (gmail, params) => gmail.deleteDraft(params)),
       },
       {
         name: "list_drafts",
-        description: "List drafts with pagination. With query, Gmail REST searches draft messages; ids are message IDs and draftIdKind reports this deviation.",
+        description: "List drafts with pagination and an optional Gmail search query. Returns Draft IDs.",
         parameters: ListDraftsParamsSchema,
         execute: run(ListDraftsParamsSchema, (gmail, params) => gmail.listDrafts(params)),
       },
@@ -180,7 +180,7 @@ export default defineToolExtension({
         },
         {
           name: "send_draft",
-          description: "Send an existing draft. Use a Draft ID from list_drafts without query; query results contain message IDs, which Gmail rejects with 404. Confirm recipients and attachment with the user before sending, unless a scheduled job states its send rule.",
+          description: "Send an existing draft. Use a Draft ID from list_drafts or create_draft. Confirm recipients and attachment with the user before sending, unless a scheduled job states its send rule.",
           parameters: SendDraftParamsSchema,
           outputSchema: z.object({ messageId: z.string(), threadId: z.string().nullable(), account: z.string().nullable() }),
           execute: run(SendDraftParamsSchema, (gmail, params, context) => gmail.sendDraft(params, context)),

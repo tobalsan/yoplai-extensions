@@ -52,11 +52,18 @@ describe("GmailClient", () => {
     expect((error as Error).message).toContain(body.slice(0, 500));
   });
 
-  it("searches draft messages when a draft query is supplied", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(response({ messages: [{ id: "message-1", threadId: "thread-1", payload: { headers: [] } }] }));
+  it("filters drafts by query and returns Draft IDs with full draft fields", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response({ drafts: [{ id: "draft-1", message: { id: "message-1" } }] }))
+      .mockResolvedValueOnce(response({ id: "draft-1", message: { id: "message-1", threadId: "thread-1", payload: { headers: [{ name: "Subject", value: "Proposal" }, { name: "To", value: "client@example.com" }] } } }));
     const client = new GmailClient("token", fetchImpl);
-    await expect(client.listDrafts({ query: "subject:proposal", pageSize: 20 })).resolves.toMatchObject({ draftIdKind: "message", drafts: [{ id: "message-1", threadId: "thread-1" }] });
-    expect(String(fetchImpl.mock.calls[0][0])).toContain("q=in%3Adraft+subject%3Aproposal");
+    const result = await client.listDrafts({ query: "subject:proposal", pageSize: 20 });
+    expect(result).toEqual({ drafts: [expect.objectContaining({ id: "draft-1", threadId: "thread-1", subject: "Proposal", toRecipients: ["client@example.com"] })], nextPageToken: null });
+    expect(result).not.toHaveProperty("draftIdKind");
+    const listUrl = new URL(String(fetchImpl.mock.calls[0][0]));
+    expect(listUrl.pathname).toMatch(/\/drafts$/);
+    expect(listUrl.searchParams.get("q")).toBe("subject:proposal");
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/drafts/draft-1?format=full");
   });
 
   it("lists only user labels and paginates them", async () => {

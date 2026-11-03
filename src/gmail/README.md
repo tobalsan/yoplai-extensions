@@ -16,7 +16,7 @@ Tools (mounted as `gmail_<name>`): 13 always available, plus two sending tools w
 - `list_labels` — list user-defined labels, paginated
 - `create_label` — create a label, optional colors
 - `send_email` — send with recipients, text/HTML body, optional reply threading and attachments (`allowSend: true` only)
-- `send_draft` — send a Draft ID from `list_drafts` without `query` (`allowSend: true` only)
+- `send_draft` — send a Draft ID from `list_drafts` or `create_draft` (`allowSend: true` only)
 
 Scopes requested: `gmail.modify` + `userinfo.email`. Google's [messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send) and [drafts.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send) references list `gmail.modify`, so existing connections need no reconnect. Sending is controlled by tool availability, off by default. No settings tools are exposed.
 
@@ -143,7 +143,7 @@ In the Yoplai web UI, open the agent's **Gmail** extension page (or the agent's 
 
 ## Behavior notes
 
-- `list_drafts` normally returns Gmail Draft resource IDs. Gmail's REST drafts endpoint cannot filter by query; when `query` is provided, the extension searches `in:draft` messages with Gmail query syntax instead. In that response, `draftIdKind` is `"message"` and each `id` is a Gmail message ID.
+- `list_drafts` always returns Gmail Draft resource IDs with full draft fields. The optional `query` goes to the Gmail `drafts.list` `q` parameter and uses Gmail search syntax.
 - `list_labels` returns user-defined labels only, as the Gmail MCP contract does. Gmail system label IDs such as `INBOX`, `TRASH`, `SPAM`, `STARRED`, `UNREAD`, and `IMPORTANT` remain valid inputs for label mutation tools.
 
 Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md` (same Google OAuth framework).

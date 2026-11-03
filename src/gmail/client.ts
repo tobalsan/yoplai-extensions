@@ -221,14 +221,8 @@ export class GmailClient {
     return profile.emailAddress ?? "";
   }
   async listDrafts(params: ListDraftsParams) {
-    if (params.query) {
-      // Gmail's drafts endpoint cannot filter. Search messages instead; its IDs
-      // are message IDs, not Draft resource IDs (documented extension deviation).
-      const query = new URLSearchParams({ maxResults: String(params.pageSize), q: `in:draft ${params.query}`, ...(params.pageToken ? { pageToken: params.pageToken } : {}) });
-      const data = await this.request(`/messages?${query}`) as { messages?: GmailMessage[]; nextPageToken?: string };
-      return { drafts: (data.messages ?? []).map((message) => this.draft(message.id ?? "", message)), nextPageToken: data.nextPageToken ?? null, draftIdKind: "message" as const };
-    }
-    const data = await this.request(`/drafts?${new URLSearchParams({ maxResults: String(params.pageSize), ...(params.pageToken ? { pageToken: params.pageToken } : {}) })}`) as { drafts?: Array<{ id?: string }>; nextPageToken?: string };
+    const query = new URLSearchParams({ maxResults: String(params.pageSize), ...(params.query ? { q: params.query } : {}), ...(params.pageToken ? { pageToken: params.pageToken } : {}) });
+    const data = await this.request(`/drafts?${query}`) as { drafts?: Array<{ id?: string }>; nextPageToken?: string };
     const drafts = await Promise.all((data.drafts ?? []).map(async (item) => this.getDraft(item.id ?? "")));
     return { drafts, nextPageToken: data.nextPageToken ?? null };
   }
