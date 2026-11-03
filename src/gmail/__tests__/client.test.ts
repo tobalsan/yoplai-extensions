@@ -6,6 +6,18 @@ import { describe, expect, it, vi } from "vitest";
 import { GmailClient } from "../client.js";
 
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
+function uploaded(init: RequestInit): { mime: string; metadata?: unknown } {
+  const contentType = new Headers(init.headers).get("content-type") ?? "";
+  if (contentType === "message/rfc822") return { mime: String(init.body) };
+  const boundary = contentType.match(/boundary="?([^";]+)"?/)?.[1];
+  expect(contentType).toContain("multipart/related");
+  expect(boundary).toBeTruthy();
+  const parts = String(init.body).split(`--${boundary}`);
+  expect(parts).toHaveLength(4);
+  expect(parts[1]).toContain("Content-Type: application/json");
+  expect(parts[2]).toContain("Content-Type: message/rfc822");
+  return { metadata: JSON.parse(parts[1].split("\r\n\r\n")[1]), mime: parts[2].slice(parts[2].indexOf("\r\n\r\n") + 4, -2) };
+}
 
 async function conversation(run: (context: ToolExecutionContext, folder: string) => Promise<void>) {
   const folder = await mkdtemp(path.join(os.tmpdir(), "gmail-test-"));
@@ -111,7 +123,9 @@ describe("GmailClient", () => {
       await writeFile(path.join(folder, "facturé.pdf"), "%PDF-1.4");
       const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1", message: pdfMessage }));
       const result = await new GmailClient("token", fetchImpl).createDraft({ to: ["person@example.com"], subject: "Facturé", body: "Bonjour Zoé", htmlBody: "<p>Bonjour Zoé</p>", attachments: [{ path: "facturé.pdf" }] }, context);
-      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+      expect(fetchImpl.mock.calls[0][0]).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=media");
+      expect(new Headers(fetchImpl.mock.calls[0][1].headers).get("content-type")).toBe("message/rfc822");
+      const raw = String(fetchImpl.mock.calls[0][1].body);
       expect(raw).toContain("Content-Type: multipart/mixed;");
       expect(raw).toContain("Content-Type: multipart/alternative;");
       expect(raw).toContain("Subject: =?UTF-8?B?RmFjdHVyw6k=?=");
@@ -123,13 +137,13 @@ describe("GmailClient", () => {
     });
   });
 
-  it("accepts exactly 3,600,000 MIME bytes and rejects one byte more before draft creation", async () => {
+  it("accepts exactly 36,700,160 MIME bytes and rejects one byte more before draft creation", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
     const client = new GmailClient("token", fetchImpl);
     // This ASCII message has 97 header/separator bytes; the rest is its body.
-    await client.createDraft({ to: ["person@example.com"], body: "x".repeat(3_599_903) });
-    expect(Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").length).toBe(3_600_000);
-    await expect(client.createDraft({ to: ["person@example.com"], body: "x".repeat(3_599_904) })).rejects.toMatchObject({ status: 413 });
+    await client.createDraft({ to: ["person@example.com"], body: "x".repeat(36_700_063) });
+    expect(Buffer.byteLength(uploaded(fetchImpl.mock.calls[0][1]).mime)).toBe(36_700_160);
+    await expect(client.createDraft({ to: ["person@example.com"], body: "x".repeat(36_700_064) })).rejects.toMatchObject({ status: 413 });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
@@ -138,10 +152,23 @@ describe("GmailClient", () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(response(existing)).mockResolvedValueOnce(response({ data: "JVBERi0xLjQ" })).mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response(existing));
     await new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", subject: "Fixed" });
     expect(String(fetchImpl.mock.calls[1][0])).toContain("/messages/m1/attachments/a1");
-    const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[2][1].body).message.raw, "base64url").toString("utf8");
+    expect(fetchImpl.mock.calls[2][0]).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts/d1?uploadType=media");
+    expect(fetchImpl.mock.calls[2][1].method).toBe("PUT");
+    const raw = uploaded(fetchImpl.mock.calls[2][1]).mime;
     expect(raw).toContain("Subject: Fixed");
     expect(raw).toContain('filename="invoice.pdf"');
     expect(raw).toContain("JVBERi0xLjQ=");
+  });
+
+  it("keeps a named attachment stored directly in the draft MIME part", async () => {
+    const existing = { id: "d1", message: { id: "m1", payload: { parts: [{ filename: "note.txt", mimeType: "text/plain", body: { data: "SGVsbG8", size: 5 } }] } } };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response(existing)).mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response(existing));
+    const result = await new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", subject: "Fixed" });
+    const mime = uploaded(fetchImpl.mock.calls[1][1]).mime;
+    expect(mime).toContain('filename="note.txt"');
+    expect(mime).toContain("SGVsbG8=");
+    expect(result.attachments).toEqual([{ filename: "note.txt", mimeType: "text/plain", size: 5 }]);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/attachments/"))).toBe(false);
   });
 
   it.each([false, true])("removes or replaces draft attachments when explicitly supplied (%s)", async (replace) => {
@@ -150,7 +177,7 @@ describe("GmailClient", () => {
       const existing = { id: "d1", message: pdfMessage };
       const fetchImpl = vi.fn().mockResolvedValueOnce(response(existing)).mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response(existing));
       await new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", attachments: replace ? [{ path: "new.pdf" }] : [] }, context);
-      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[1][1].body).message.raw, "base64url").toString("utf8");
+      const raw = uploaded(fetchImpl.mock.calls[1][1]).mime;
       expect(raw).not.toContain("invoice.pdf");
       expect(raw.includes('filename="new.pdf"')).toBe(replace);
       expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/attachments/"))).toBe(false);
@@ -162,10 +189,10 @@ describe("GmailClient", () => {
       await writeFile(path.join(folder, "invoice.pdf"), "%PDF-1.4");
       const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "old", threadId: "thread-1", payload: { headers: [{ name: "Message-ID", value: "<original@example.com>" }] } })).mockResolvedValueOnce(response({ id: "sent-1", threadId: "thread-1" }));
       await expect(new GmailClient("token", fetchImpl).sendEmail({ to: ["bank@example.com"], cc: ["reviewer@example.com"], subject: "Invoice", body: "Attached", replyToMessageId: "old", attachments: [{ path: "invoice.pdf" }] }, context)).resolves.toEqual({ messageId: "sent-1", threadId: "thread-1" });
-      expect(String(fetchImpl.mock.calls[1][0])).toContain("/messages/send");
-      const sent = JSON.parse(fetchImpl.mock.calls[1][1].body);
-      expect(sent.threadId).toBe("thread-1");
-      const raw = Buffer.from(sent.raw, "base64url").toString("utf8");
+      expect(fetchImpl.mock.calls[1][0]).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart");
+      const sent = uploaded(fetchImpl.mock.calls[1][1]);
+      expect(sent.metadata).toEqual({ threadId: "thread-1" });
+      const raw = sent.mime;
       expect(raw).toContain("Cc: reviewer@example.com");
       expect(raw).toContain("In-Reply-To: <original@example.com>");
       expect(raw).toContain("References: <original@example.com>");
@@ -239,6 +266,28 @@ describe("GmailClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   }, 200);
 
+  it.each(["create", "update"])("cancels a hung draft readback after %s", async (operation) => {
+    const controller = new AbortController();
+    let streamController!: ReadableStreamDefaultController;
+    const stream = new ReadableStream({ start(value) { streamController = value; } });
+    const fetchImpl = vi.fn();
+    if (operation === "update") fetchImpl.mockResolvedValueOnce(response({ id: "d1" }));
+    fetchImpl.mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(new Response(stream)).mockResolvedValueOnce(response({ emailAddress: "a@example.com" }));
+    const client = new GmailClient("token", fetchImpl);
+    const context = { signal: controller.signal };
+    const pending = operation === "create" ? client.createDraft({ to: ["a@example.com"] }, context) : client.updateDraft({ draftId: "d1" }, context);
+    const outcome = pending.then(() => "success", (error: Error) => error.message);
+    setTimeout(() => controller.abort(new Error("cancelled readback")), 5);
+    try {
+      expect(await Promise.race([outcome, new Promise((resolve) => setTimeout(() => resolve("hung"), 50))])).toBe("cancelled readback");
+      await expect(client.account()).resolves.toBe("a@example.com");
+    } finally {
+      if (!controller.signal.aborted) controller.abort();
+      try { streamController.close(); } catch { /* Already cancelled by the reader. */ }
+      await outcome;
+    }
+  });
+
   it("times out a hung attachment response and leaves no partial file", async () => {
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutMock = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(5));
@@ -252,12 +301,19 @@ describe("GmailClient", () => {
     } finally { timeoutMock.mockRestore(); }
   });
 
-  it("rejects combined oversized attachments before creating a draft", async () => {
+  it("accepts 25 MB of attachment originals and rejects one byte more before uploading", async () => {
     await conversation(async (context, folder) => {
-      await writeFile(path.join(folder, "one.pdf"), Buffer.alloc(1_400_000));
-      await writeFile(path.join(folder, "two.pdf"), Buffer.alloc(1_400_000));
-      const fetchImpl = vi.fn();
-      await expect(new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], attachments: [{ path: "one.pdf" }, { path: "two.pdf" }] }, context)).rejects.toMatchObject({ status: 413 });
+      await writeFile(path.join(folder, "one.pdf"), Buffer.alloc(12_500_000));
+      await writeFile(path.join(folder, "two.pdf"), Buffer.alloc(12_500_000));
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
+      const client = new GmailClient("token", fetchImpl);
+      const params = { to: ["a@example.com"], attachments: [{ path: "one.pdf" }, { path: "two.pdf" }] };
+      await expect(client.createDraft(params, context)).resolves.toMatchObject({ id: "d1" });
+      expect(fetchImpl.mock.calls[0][0]).toContain("/upload/gmail/v1/users/me/drafts");
+      await writeFile(path.join(folder, "two.pdf"), Buffer.alloc(12_500_001));
+      fetchImpl.mockClear();
+      await expect(client.createDraft(params, context)).rejects.toMatchObject({ status: 413 });
+      await expect(client.sendEmail({ ...params, body: "Attached" }, context)).rejects.toMatchObject({ status: 413 });
       expect(fetchImpl).not.toHaveBeenCalled();
     });
   });
@@ -278,7 +334,7 @@ describe("GmailClient", () => {
     const subject = "Échéance de février — ".repeat(8);
     const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
     await new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], subject, body: "Hello" });
-    const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+    const raw = uploaded(fetchImpl.mock.calls[0][1]).mime;
     const words = raw.match(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g) ?? [];
     const subjectLines = raw.match(/^Subject:.*(?:\r\n [^\r\n]*)*/m)?.[0].split("\r\n") ?? [];
     expect(subjectLines.every((line) => line.length <= 76)).toBe(true);
@@ -293,7 +349,7 @@ describe("GmailClient", () => {
       await writeFile(path.join(folder, filename), "%PDF-1.4");
       const fetchImpl = vi.fn().mockResolvedValueOnce(response({ id: "d1" })).mockResolvedValueOnce(response({ id: "d1" }));
       await new GmailClient("token", fetchImpl).createDraft({ to: ["a@example.com"], attachments: [{ path: filename }] }, context);
-      const raw = Buffer.from(JSON.parse(fetchImpl.mock.calls[0][1].body).message.raw, "base64url").toString("utf8");
+      const raw = uploaded(fetchImpl.mock.calls[0][1]).mime;
       expect(raw).toContain("Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64");
     });
   });
@@ -306,7 +362,8 @@ describe("GmailClient", () => {
     const client = new GmailClient("token", fetchImpl);
     await client.createDraft({ to: ["person@example.com"], replyToMessageId: "message-1" });
     expect(String(fetchImpl.mock.calls[0][0])).toContain("/messages/message-1");
-    expect(JSON.parse(fetchImpl.mock.calls[1][1].body).message.threadId).toBe("thread-1");
+    expect(fetchImpl.mock.calls[1][0]).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=multipart");
+    expect(uploaded(fetchImpl.mock.calls[1][1]).metadata).toEqual({ message: { threadId: "thread-1" } });
   });
 
   it("updates a draft, keeping omitted fields and thread", async () => {
@@ -319,9 +376,9 @@ describe("GmailClient", () => {
     await client.updateDraft({ draftId: "draft-1", subject: "New" });
     expect(fetchImpl.mock.calls[1][1].method).toBe("PUT");
     expect(String(fetchImpl.mock.calls[1][0])).toContain("/drafts/draft-1");
-    const sent = JSON.parse(fetchImpl.mock.calls[1][1].body);
-    expect(sent.message.threadId).toBe("thread-1");
-    const raw = Buffer.from(sent.message.raw, "base64url").toString("utf8");
+    const sent = uploaded(fetchImpl.mock.calls[1][1]);
+    expect(sent.metadata).toEqual({ message: { threadId: "thread-1" } });
+    const raw = sent.mime;
     expect(raw).toContain("Subject: New");
     expect(raw).toContain("To: a@example.com");
     expect(raw).toContain("In-Reply-To: <m1@x>");

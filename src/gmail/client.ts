@@ -63,9 +63,9 @@ function attachments(part: GmailPart | undefined): string[] {
   if (!part) return [];
   return [part.body?.attachmentId, ...(part.parts ?? []).flatMap(attachments)].filter((value): value is string => Boolean(value));
 }
-function attachmentParts(part: GmailPart | undefined): GmailPart[] {
+function attachmentParts(part: GmailPart | undefined, includeInline = false): GmailPart[] {
   if (!part) return [];
-  return [...(part.body?.attachmentId && part.filename ? [part] : []), ...(part.parts ?? []).flatMap(attachmentParts)];
+  return [...(part.filename && (part.body?.attachmentId || (includeInline && part.body?.data !== undefined)) ? [part] : []), ...(part.parts ?? []).flatMap((child) => attachmentParts(child, includeInline))];
 }
 function attachmentMetadata(message: GmailMessage) {
   return attachmentParts(message.payload).map((part) => ({ messageId: message.id ?? "", attachmentId: part.body!.attachmentId!, filename: part.filename!, mimeType: part.mimeType ?? "application/octet-stream", size: part.body?.size ?? 0 }));
@@ -92,8 +92,8 @@ function asMessage(message: GmailMessage, full: boolean) {
   };
 }
 type OutgoingAttachment = { filename: string; mimeType: string; bytes: Buffer };
-export const MAX_MIME_BYTES = 3_600_000;
-const MAX_ATTACHMENT_BYTES = Math.floor(MAX_MIME_BYTES * 3 / 4);
+export const MAX_MIME_BYTES = 36_700_160;
+const MAX_ATTACHMENT_BYTES = 25_000_000;
 function encodedHeader(value: string): string {
   if (/[\r\n]/.test(value)) throw new GmailFileError("Headers must not contain line breaks.", 400);
   if (!/[^\x20-\x7e]/.test(value)) return value;
@@ -165,8 +165,8 @@ export class GmailClient {
     const signal = executionSignal(context);
     const files = await this.localAttachments(params.attachments, context, signal);
     const reply = params.replyToMessageId ? await this.request(`/messages/${encodeURIComponent(params.replyToMessageId)}?format=metadata`, { signal }) as GmailMessage : undefined;
-    const raw = Buffer.from(rawMessage(params, reply ? header(reply, "Message-ID") : undefined, files)).toString("base64url");
-    const data = await this.request("/messages/send", { method: "POST", signal, body: JSON.stringify({ raw, ...(reply?.threadId ? { threadId: reply.threadId } : {}) }) }) as GmailMessage;
+    const mime = rawMessage(params, reply ? header(reply, "Message-ID") : undefined, files);
+    const data = await this.uploadMessage("/messages/send", "POST", mime, signal, reply?.threadId ? { threadId: reply.threadId } : undefined) as GmailMessage;
     if (!data.id) throw new GmailFileError("Gmail did not return a sent message ID.", 502);
     return { messageId: data.id, threadId: data.threadId ?? "" };
   }
@@ -182,12 +182,9 @@ export class GmailClient {
     const reply = params.replyToMessageId
       ? await this.request(`/messages/${encodeURIComponent(params.replyToMessageId)}?format=metadata`, { signal }) as GmailMessage
       : undefined;
-    const message = {
-      raw: Buffer.from(rawMessage(params, reply ? header(reply, "Message-ID") : undefined, files)).toString("base64url"),
-      ...(reply?.threadId ? { threadId: reply.threadId } : {}),
-    };
-    const data = await this.request("/drafts", { method: "POST", signal, body: JSON.stringify({ message }) }) as { id?: string };
-    return this.getDraft(data.id ?? "");
+    const mime = rawMessage(params, reply ? header(reply, "Message-ID") : undefined, files);
+    const data = await this.uploadMessage("/drafts", "POST", mime, signal, reply?.threadId ? { message: { threadId: reply.threadId } } : undefined) as { id?: string };
+    return this.getDraft(data.id ?? "", signal);
   }
   async updateDraft(params: UpdateDraftParams, context?: ToolExecutionContext) {
     const signal = executionSignal(context);
@@ -203,19 +200,16 @@ export class GmailClient {
       body: params.body ?? body(existing.payload),
       htmlBody: params.htmlBody,
     };
-    const message = {
-      raw: Buffer.from(rawMessage(merged, header(existing, "In-Reply-To") || undefined, files)).toString("base64url"),
-      ...(existing.threadId ? { threadId: existing.threadId } : {}),
-    };
-    await this.request(`/drafts/${id}`, { method: "PUT", signal, body: JSON.stringify({ id: params.draftId, message }) });
-    return this.getDraft(params.draftId);
+    const mime = rawMessage(merged, header(existing, "In-Reply-To") || undefined, files);
+    await this.uploadMessage(`/drafts/${id}`, "PUT", mime, signal, existing.threadId ? { message: { threadId: existing.threadId } } : undefined);
+    return this.getDraft(params.draftId, signal);
   }
   async deleteDraft(params: { draftId: string }) {
     await this.request(`/drafts/${encodeURIComponent(params.draftId)}`, { method: "DELETE" });
     return { deleted: true, draftId: params.draftId };
   }
-  async account() {
-    const profile = await this.request("/profile") as { emailAddress?: string };
+  async account(context?: ToolExecutionContext) {
+    const profile = await this.request("/profile", { signal: executionSignal(context) }) as { emailAddress?: string };
     return profile.emailAddress ?? "";
   }
   async listDrafts(params: ListDraftsParams) {
@@ -258,11 +252,11 @@ export class GmailClient {
   private async existingAttachments(message: GmailMessage, signal: AbortSignal): Promise<OutgoingAttachment[]> {
     const files: OutgoingAttachment[] = [];
     let remaining = MAX_ATTACHMENT_BYTES;
-    const parts = attachmentParts(message.payload);
+    const parts = attachmentParts(message.payload, true);
     if (parts.length > 10) throw new GmailFileError("At most 10 attachments are supported.", 413);
     for (const part of parts) {
       if ((part.body?.size ?? 0) > remaining) throw new GmailFileError("Draft attachments exceed the outgoing message limit.", 413);
-      const data = await this.request(`/messages/${encodeURIComponent(message.id ?? "")}/attachments/${encodeURIComponent(part.body!.attachmentId!)}`, { signal }, Math.ceil(remaining * 4 / 3) + 1024) as { data?: string };
+      const data = part.body?.attachmentId ? await this.request(`/messages/${encodeURIComponent(message.id ?? "")}/attachments/${encodeURIComponent(part.body.attachmentId)}`, { signal }, Math.ceil(remaining * 4 / 3) + 1024) as { data?: string } : part.body!;
       if (typeof data.data !== "string") throw new GmailFileError("Gmail returned no attachment data.", 502);
       const bytes = Buffer.from(data.data, "base64url");
       if (bytes.length > remaining) throw new GmailFileError("Draft attachments exceed the outgoing message limit.", 413);
@@ -283,11 +277,16 @@ export class GmailClient {
     }
     return files;
   }
-  private async getDraft(id: string) { const data = await this.request(`/drafts/${encodeURIComponent(id)}?format=full`) as { id?: string; message?: GmailMessage }; return this.draft(data.id ?? id, data.message ?? {}); }
-  private draft(id: string, message: GmailMessage) { return { id, subject: header(message, "Subject"), threadId: message.threadId ?? "", toRecipients: recipients(message, "To"), ccRecipients: recipients(message, "Cc"), bccRecipients: recipients(message, "Bcc"), plaintextBody: body(message.payload), date: date(message), attachments: attachmentMetadata(message).map(({ filename, mimeType, size }) => ({ filename, mimeType, size })) }; }
+  private async getDraft(id: string, signal?: AbortSignal) { const data = await this.request(`/drafts/${encodeURIComponent(id)}?format=full`, { signal }) as { id?: string; message?: GmailMessage }; return this.draft(data.id ?? id, data.message ?? {}); }
+  private draft(id: string, message: GmailMessage) { return { id, subject: header(message, "Subject"), threadId: message.threadId ?? "", toRecipients: recipients(message, "To"), ccRecipients: recipients(message, "Cc"), bccRecipients: recipients(message, "Bcc"), plaintextBody: body(message.payload), date: date(message), attachments: attachmentParts(message.payload, true).map((part) => ({ filename: part.filename!, mimeType: part.mimeType ?? "application/octet-stream", size: part.body?.size ?? 0 })) }; }
   private async modify(path: string, labelIds: string[], remove: boolean) { await this.request(path, { method: "POST", body: JSON.stringify(remove ? { removeLabelIds: labelIds } : { addLabelIds: labelIds }) }); }
-  private async request(path: string, init: RequestInit = {}, maxResponseBytes?: number) {
-    const response = await this.fetchImpl(`${GMAIL_API_BASE}${path}`, { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
+  private async uploadMessage(path: string, method: string, mime: string, signal: AbortSignal, metadata?: object) {
+    const boundary = `yoplai-upload-${crypto.randomUUID()}`;
+    const body = metadata ? [`--${boundary}`, "Content-Type: application/json; charset=UTF-8", "", JSON.stringify(metadata), `--${boundary}`, "Content-Type: message/rfc822", "", mime, `--${boundary}--`, ""].join("\r\n") : mime;
+    return this.request(`${path}?uploadType=${metadata ? "multipart" : "media"}`, { method, signal, body, headers: { "Content-Type": metadata ? `multipart/related; boundary="${boundary}"` : "message/rfc822" } }, undefined, "https://gmail.googleapis.com/upload/gmail/v1/users/me");
+  }
+  private async request(path: string, init: RequestInit = {}, maxResponseBytes?: number, base = GMAIL_API_BASE) {
+    const response = await this.fetchImpl(`${base}${path}`, { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...Object.fromEntries(new Headers(init.headers)) } });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       const responseBody = body.slice(0, 500);

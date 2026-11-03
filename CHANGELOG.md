@@ -14,7 +14,7 @@
 
 ### Added
 
-- Gmail attachment metadata and conversation-folder downloads, draft attachments with preservation on update, and email/draft sending behind the off-by-default `allowSend` checkbox (ALG-605).
+- Gmail attachment metadata and conversation-folder downloads, draft attachments with preservation on update, and email/draft sending behind the off-by-default `allowSend` checkbox. Drafts and sends use media uploads with a 25 MB attachment total and 36,700,160-byte MIME limit (ALG-605).
 
 - Standalone Lusha V3 fallback enrichment for work emails, opt-in phones, and companies, with billed credit reporting and free account usage/pricing and validation (ALG-591).
 

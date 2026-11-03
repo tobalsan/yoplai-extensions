@@ -24,8 +24,8 @@ describe("gmail extension", () => {
     expect(prompt).toContain("confirm the recipients and the attachment with the user before each send, unless a scheduled job states the send rule");
     expect(prompt).toContain("conversation folder");
     expect(prompt).toContain("25 MiB");
-    expect(prompt).toContain("3,600,000");
-    expect(prompt).toContain("2,700,000");
+    expect(prompt).toContain("36,700,160");
+    expect(prompt).toContain("25,000,000");
     expect(prompt).toContain("10 files");
   });
 
@@ -132,14 +132,37 @@ describe("gmail extension", () => {
         { conversationFiles: { hostPath, runtimePath: "/conversation" } },
       )).resolves.toEqual({ messageId: "sent-1", threadId: "thread-1", account: "owner@example.com" });
       const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-      expect(url).toMatch(/\/messages\/send$/);
-      const mime = Buffer.from(JSON.parse(init.body as string).raw, "base64url").toString("utf8");
+      expect(url).toBe("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media");
+      expect(new Headers(init.headers).get("content-type")).toBe("message/rfc822");
+      const mime = String(init.body);
       expect(mime).toContain("Cc: reviewer@example.com\r\n");
       expect(mime).toContain('filename="invoice.pdf"');
       expect(mime).toContain("JVBERi0xLjc=");
     } finally {
       globalThis.fetch = originalFetch;
       await rm(hostPath, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a hung mailbox check before sending and allows subsequent work", async () => {
+    const originalFetch = globalThis.fetch;
+    const controller = new AbortController();
+    let streamController!: ReadableStreamDefaultController;
+    const stream = new ReadableStream({ start(value) { streamController = value; } });
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(stream)).mockResolvedValueOnce(Response.json({ emailAddress: "owner@example.com" })).mockResolvedValueOnce(Response.json({ labels: [] }));
+    globalThis.fetch = fetchMock;
+    let outcome: Promise<unknown> | undefined;
+    try {
+      const tools = await extension.getAgentTools({ id: "a1", extensions: { gmail: { allowSend: true } } }, { config: {}, resolveOAuth: vi.fn().mockResolvedValue(connected) });
+      outcome = tools.find((tool) => tool.name === "gmail_send_email")!.execute({ to: ["a@example.com"], body: "Hello" }, { signal: controller.signal }).then(() => "sent", (error: Error) => error.message);
+      setTimeout(() => controller.abort(new Error("cancelled mailbox check")), 5);
+      expect(await Promise.race([outcome, new Promise((resolve) => setTimeout(() => resolve("hung"), 50))])).toBe("cancelled mailbox check");
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/messages/send"))).toBe(false);
+      await expect(tools.find((tool) => tool.name === "gmail_list_labels")!.execute({})).resolves.toMatchObject({ labels: [], account: "owner@example.com" });
+    } finally {
+      try { streamController.close(); } catch { /* Already cancelled by the reader. */ }
+      await outcome;
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -162,7 +185,7 @@ describe("gmail extension", () => {
       )).resolves.toMatchObject({ id: "draft-1", attachments: [{ filename: "invoice.pdf", mimeType: "application/pdf", size: 8 }], account: "owner@example.com" });
       const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
       const [, init] = calls.find(([, init]) => init.method === "POST" || init.method === "PUT")!;
-      const mime = Buffer.from(JSON.parse(init.body as string).message.raw, "base64url").toString("utf8");
+      const mime = String(init.body);
       expect(mime).toContain("Content-Type: multipart/mixed");
       expect(mime).toContain("JVBERi0xLjc=");
     } finally {

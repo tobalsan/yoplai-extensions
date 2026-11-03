@@ -33,7 +33,7 @@ export default defineToolExtension({
   id: "gmail",
   displayName: "Gmail",
   description: "Gmail mailbox tools via Google OAuth: connect your own account (Just me) or a shared team account (Whole team).",
-  systemPrompt: "Use Gmail-compatible query syntax. Gmail content is returned only for this tool call; never repeat it unnecessarily. Send tools exist only when allowSend is enabled. If they are not in your tool list, do not claim an email was sent. When you have them, confirm the recipients and the attachment with the user before each send, unless a scheduled job states the send rule. Attachments download to the conversation folder, up to 25 MiB each. Drafts and sends accept at most 10 files from that folder; the full MIME message is limited to 3,600,000 bytes, allowing roughly 2,700,000 total original attachment bytes minus body, headers, and base64 line wrapping. Omit attachments on draft updates to keep existing files; [] removes them and a list replaces them.",
+  systemPrompt: "Use Gmail-compatible query syntax. Gmail content is returned only for this tool call; never repeat it unnecessarily. Send tools exist only when allowSend is enabled. If they are not in your tool list, do not claim an email was sent. When you have them, confirm the recipients and the attachment with the user before each send, unless a scheduled job states the send rule. Attachments download to the conversation folder, up to 25 MiB each. Drafts and sends accept at most 10 files from that folder; total original attachment bytes must not exceed 25 MB (25,000,000 bytes), and the full MIME message including bodies, headers, and base64 line wrapping must not exceed 36,700,160 bytes. Omit attachments on draft updates to keep existing files; [] removes them and a list replaces them.",
   configSchema: GmailConfigSchema,
   configFieldTitles: { allowSend: "Enable sending email" },
   requiredSecrets: [],
@@ -60,7 +60,7 @@ export default defineToolExtension({
 
       const parsed = schema.parse(value);
       try {
-        const account = await client.account();
+        const account = await client.account(context);
         if (
           connected.account
           && account

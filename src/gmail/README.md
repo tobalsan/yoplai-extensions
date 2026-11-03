@@ -73,8 +73,8 @@ When send tools are available, confirm recipients and the attachment with the us
 
 - Downloads: 25 MiB per file, 30-second timeout, caller cancellation supported. Oversized or interrupted downloads leave no partial file.
 - Draft/send attachments must resolve to regular files inside the current conversation folder. Paths escaping it and symlinks escaping it are rejected; nested paths are unsupported on non-Linux hosts.
-- At most 10 attachments per outgoing message. The complete MIME message (headers, bodies, and base64 attachments) is limited to **3,600,000 bytes** (`MAX_MIME_BYTES`), leaving roughly **2,700,000 bytes** for attachment originals before body, headers, and base64 line wrapping.
-- This conservative limit keeps the base64url `raw` JSON under Google's 5 MB simple-request limit. A larger JSON send has not been verified against a test mailbox; raising the limit requires that check or the upload endpoint.
+- At most 10 attachments per outgoing message. Total original attachment bytes must not exceed **25 MB (25,000,000 bytes)**. The complete MIME message (headers, bodies, and base64 attachments) must not exceed **36,700,160 bytes** (`MAX_MIME_BYTES`). Both limits are checked before uploading.
+- Draft creation, draft updates, and email sending use Gmail's media upload endpoints: `uploadType=media` for MIME alone, or `uploadType=multipart` with JSON metadata and `message/rfc822` for replies/thread preservation. The MIME is uploaded directly rather than base64url-encoded again in JSON.
 - Downloaded files can be read, displayed, or reused with `attachments: [{ path: "<returned path>" }]`. Draft results list attachment filenames, MIME types, and sizes so a human can inspect the draft in Gmail before sending.
 
 ## 3. Operator: register a Google OAuth client (one-time, in GCP)
