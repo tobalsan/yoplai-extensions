@@ -88,7 +88,8 @@ function asMessage(message: GmailMessage, full: boolean) {
     toRecipients: recipients(message, "To"),
     ccRecipients: recipients(message, "Cc"),
     date: date(message),
-    ...(full ? { plaintextBody: body(message.payload), attachmentIds: attachments(message.payload), attachments: attachmentMetadata(message) } : {}),
+    attachments: attachmentMetadata(message),
+    ...(full ? { plaintextBody: body(message.payload), attachmentIds: attachments(message.payload) } : {}),
   };
 }
 type OutgoingAttachment = { filename: string; mimeType: string; bytes: Buffer };

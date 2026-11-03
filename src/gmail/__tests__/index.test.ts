@@ -96,6 +96,29 @@ describe("gmail extension", () => {
     }
   });
 
+  it.each(["gmail_get_thread", "gmail_search_threads"])("lists attachments without full bodies through %s", async (name) => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ emailAddress: "owner@example.com" }));
+    if (name === "gmail_search_threads") fetchMock.mockResolvedValueOnce(Response.json({ threads: [{ id: "t1" }] }));
+    fetchMock.mockResolvedValueOnce(Response.json({ id: "t1", messages: [{ id: "m1", payload: { parts: [
+      { partId: "0", mimeType: "text/plain", body: { data: "SGVsbG8" } },
+      { partId: "1", filename: "invoice.pdf", mimeType: "application/pdf", body: { attachmentId: "a1", size: 8 } },
+    ] } }] }));
+    globalThis.fetch = fetchMock;
+    try {
+      const tools = await extension.getAgentTools({ id: "a1", extensions: { gmail: {} } }, { config: {}, resolveOAuth: vi.fn().mockResolvedValue(connected) });
+      const result = await tools.find((tool) => tool.name === name)!.execute(name === "gmail_get_thread" ? { threadId: "t1", messageFormat: "MINIMAL" } : { query: "has:attachment" }) as { messages?: unknown[]; threads?: { messages: unknown[] }[]; account: string };
+      const messages = result.messages ?? result.threads![0].messages;
+      expect(messages).toEqual([{
+        id: "m1", snippet: "", subject: "", sender: "", toRecipients: [], ccRecipients: [], date: "",
+        attachments: [{ messageId: "m1", attachmentId: "a1", partId: "1", filename: "invoice.pdf", mimeType: "application/pdf", size: 8 }],
+      }]);
+      expect(result.account).toBe("owner@example.com");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each([{ partId: "1" }, { filename: "invoice.pdf", size: 8 }])("downloads through tool execution when Gmail changes attachment IDs (%j)", async (selector) => {
     const hostPath = await mkdtemp(path.join(tmpdir(), "gmail-tool-"));
     const originalFetch = globalThis.fetch;

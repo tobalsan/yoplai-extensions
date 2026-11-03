@@ -8,9 +8,9 @@ Tools (mounted as `gmail_<name>`): 13 always available, plus two sending tools w
 - `update_draft` — update an existing draft by Draft ID; omitted fields keep current values, including attachments (`[]` removes them, a list replaces them; HTML body dropped unless resent)
 - `delete_draft` — permanently delete a draft by Draft ID
 - `list_drafts` — list drafts, paginated, optional Gmail query
-- `get_thread` — get a thread and its messages (`MINIMAL` or `FULL_CONTENT`); full messages include attachment `messageId`, `attachmentId`, `partId`, `filename`, `mimeType`, and `size`
+- `get_thread` — get a thread and its messages; both `MINIMAL` and `FULL_CONTENT` include attachment `messageId`, `attachmentId`, `partId`, `filename`, `mimeType`, and `size`. Only `FULL_CONTENT` includes `plaintextBody` and legacy `attachmentIds`
 - `download_attachment` — save original attachment bytes to the conversation folder; pass `messageId`, `attachmentId`, and `partId` from `get_thread` (or `filename` and `size` if `partId` is unavailable); returns `path`, `name`, `mimeType`, and `bytes`
-- `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`
+- `search_threads` — search threads with Gmail query syntax, paginated, optional `includeTrash`; returns `MINIMAL` messages including attachment metadata
 - `label_thread` / `unlabel_thread` — add/remove labels on a thread
 - `label_message` / `unlabel_message` — add/remove labels on a message
 - `list_labels` — list user-defined labels, paginated

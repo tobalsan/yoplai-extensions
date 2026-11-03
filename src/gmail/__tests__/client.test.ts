@@ -32,7 +32,7 @@ describe("GmailClient", () => {
       .mockResolvedValueOnce(response({ threads: [{ id: "t1" }], nextPageToken: "next" }))
       .mockResolvedValueOnce(response({ id: "t1", messages: [{ id: "m1", snippet: "hello", payload: { headers: [{ name: "Subject", value: "Hi" }, { name: "From", value: "sender@example.com" }, { name: "Date", value: "2026-07-17" }] } }] }));
     const client = new GmailClient("token", fetchImpl);
-    await expect(client.searchThreads({ query: "is:unread", pageSize: 20, pageToken: "old", includeTrash: true })).resolves.toEqual({ threads: [{ id: "t1", messages: [{ id: "m1", snippet: "hello", subject: "Hi", sender: "sender@example.com", toRecipients: [], ccRecipients: [], date: "2026-07-17" }] }], nextPageToken: "next" });
+    await expect(client.searchThreads({ query: "is:unread", pageSize: 20, pageToken: "old", includeTrash: true })).resolves.toEqual({ threads: [{ id: "t1", messages: [{ id: "m1", snippet: "hello", subject: "Hi", sender: "sender@example.com", toRecipients: [], ccRecipients: [], date: "2026-07-17", attachments: [] }] }], nextPageToken: "next" });
     expect(String(fetchImpl.mock.calls[0][0])).toContain("q=is%3Aunread");
     expect(String(fetchImpl.mock.calls[0][0])).toContain("includeSpamTrash=true");
   });
@@ -67,6 +67,17 @@ describe("GmailClient", () => {
   it("returns attachment metadata and keeps legacy IDs while excluding unnamed text parts", async () => {
     const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { headers: [], parts: [{ partId: "1", filename: "report.pdf", mimeType: "application/pdf", body: { attachmentId: "attachment-1", size: 8 } }, { mimeType: "text/plain", body: { attachmentId: "large-text", size: 100 } }] } }] })));
     await expect(client.getThread({ threadId: "t1", messageFormat: "FULL_CONTENT" })).resolves.toMatchObject({ messages: [{ attachmentIds: ["attachment-1", "large-text"], attachments: [{ messageId: "m1", attachmentId: "attachment-1", partId: "1", filename: "report.pdf", mimeType: "application/pdf", size: 8 }] }] });
+  });
+
+  it("lists nested attachments in minimal threads without bodies or legacy IDs", async () => {
+    const client = new GmailClient("token", vi.fn().mockResolvedValue(response({ id: "t1", messages: [{ id: "m1", payload: { parts: [
+      { mimeType: "multipart/mixed", parts: [{ partId: "1.1", filename: "invoice.pdf", mimeType: "application/pdf", body: { attachmentId: "a1", size: 8 } }] },
+      { mimeType: "text/plain", body: { data: "SGVsbG8", attachmentId: "large-text", size: 100 } },
+    ] } }] })));
+    const thread = await client.getThread({ threadId: "t1", messageFormat: "MINIMAL" });
+    expect(thread.messages[0].attachments).toEqual([{ messageId: "m1", attachmentId: "a1", partId: "1.1", filename: "invoice.pdf", mimeType: "application/pdf", size: 8 }]);
+    expect(thread.messages[0]).not.toHaveProperty("plaintextBody");
+    expect(thread.messages[0]).not.toHaveProperty("attachmentIds");
   });
 
   it("downloads original bytes across message reads that each change the attachment ID", async () => {

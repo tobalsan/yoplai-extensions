@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Gmail `get_thread` MINIMAL and `search_threads` results include attachment metadata without requiring full message bodies (ALG-605).
 - Gmail attachment downloads use stable MIME part IDs (or unique filename/size pairs) to find metadata when Gmail changes attachment IDs between reads (ALG-605).
 - MCP dynamic client registration sends the requested scopes. Servers such as Scheduled gave a client with no scope an empty set, and the connect failed with `invalid_scope` (ALG-603).
 - MCP clients reuse output-schema validators across connections and release caller abort listeners after requests, preventing per-call memory growth while preserving validation and cancellation (ALG-573).
