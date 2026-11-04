@@ -171,6 +171,27 @@ it.each([
   }));
   await expect(run.execute("save_file", { path: `/workspace/files/edited.${suffix}`, fileId: "file-1" })).resolves.toMatchObject({ fileId: "file-1", name: "Original", mimeType: targetMime });
 });
+it("pins the shared uploaded XLSX replacement request (mocked Google acceptance)", async () => {
+  const run = await tools(true);
+  await writeFile(path.join(run.hostPath, "edited.xlsx"), new Uint8Array([80, 75, 0, 255]));
+  google(
+    metadata("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Quarterly.xlsx", {
+      driveId: "shared-drive-1", shared: true, isAppAuthorized: false, capabilities: { canEdit: true },
+    }),
+    Response.json({ id: "file-1", name: "Quarterly.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+  );
+  await expect(run.execute("save_file", { path: "/workspace/files/edited.xlsx", fileId: "file-1" })).resolves.toMatchObject({
+    fileId: "file-1", name: "Quarterly.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const [input, init] = vi.mocked(fetch).mock.calls[1];
+  expect(new URL(String(input)).pathname).toBe("/upload/drive/v3/files/file-1");
+  expect(init?.method).toBe("PATCH");
+  const body = Buffer.from(await new Response(init?.body).arrayBuffer());
+  expect(body.toString()).toContain('"mimeType":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"');
+  expect(body.toString()).toContain("Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  expect(body.toString()).not.toContain('"name"');
+  expect(body.includes(Buffer.from([80, 75, 0, 255]))).toBe(true);
+});
 it.each(["application/vnd.google-apps.document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.google-apps.folder", "application/vnd.google-apps.shortcut"])("rejects incompatible replacement content for %s", async (mime) => {
   const run = await tools(true);
   await writeFile(path.join(run.hostPath, "wrong.pdf"), "%PDF");
