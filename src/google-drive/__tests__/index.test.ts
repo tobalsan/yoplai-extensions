@@ -28,6 +28,12 @@ describe("googleDrive extension", () => {
     expect(prompt).toContain("rowOffset, maxRows, and columns");
     expect(prompt).toContain("Before writing, read the target tab or range");
     expect(prompt).toContain("report the updated range and cell count");
+    expect(prompt).toContain("allowWrite grants full Drive access");
+    expect(prompt).toContain("must first read the target");
+    expect(prompt).toContain("must report what changed");
+    expect(prompt).toContain("before/after summary");
+    expect(prompt).not.toContain("drive.file");
+    expect(prompt).not.toContain("app-created");
   });
 
   it("exports the expected extension contract with an oauth requirement", () => {
@@ -38,6 +44,16 @@ describe("googleDrive extension", () => {
       provider: "google",
       scopes: [
         "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ],
+    });
+    expect(typeof extension.oauth === "function" ? extension.oauth({ global: {}, agent: {}, merged: { allowWrite: true } }) : extension.oauth).toEqual({
+      provider: "google",
+      scopes: [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/presentations",
         "https://www.googleapis.com/auth/userinfo.email",
       ],
     });
@@ -164,9 +180,10 @@ describe("write mode", () => {
     const scopes = resolveOAuth.mock.calls[0][1].scopes;
     expect(scopes).toEqual([
       "https://www.googleapis.com/auth/drive.readonly",
-      ...(expectedWrite ? ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] : []),
+      ...(expectedWrite ? ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] : []),
       "https://www.googleapis.com/auth/userinfo.email",
     ]);
+    expect(scopes).not.toContain("https://www.googleapis.com/auth/drive.file");
     await tools[0].execute({});
     expect(resolveOAuth).toHaveBeenCalledTimes(2);
     expect(resolveOAuth.mock.calls[1][1]).toEqual(resolveOAuth.mock.calls[0][1]);

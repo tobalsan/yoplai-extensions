@@ -286,6 +286,19 @@ describe("GoogleDriveClient writes", () => {
     expect((init?.headers as Record<string, string>)["Content-Type"]).toBe(uploadMime);
   });
 
+  it.each([
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/pdf",
+  ])("refuses to overwrite %s with string content before sending a PATCH", async (mimeType) => {
+    const fetchMock = vi.fn<DriveFetch>().mockResolvedValueOnce(jsonResponse({ name: "Quarterly", mimeType })).mockResolvedValueOnce(jsonResponse({ id: "file/1" }));
+    await expect(makeClient(fetchMock).updateFileContent({ fileId: "file/1", content: "replacement" })).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringMatching(/download_file.*save_file/),
+    });
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("renames and moves with Drive parent query parameters", async () => {
     const fetchMock = vi.fn<DriveFetch>().mockResolvedValue(jsonResponse({ id: "file" }));
     await makeClient(fetchMock).renameMoveFile({ fileId: "file", name: "New name", addParentId: "new", removeParentId: "old" });

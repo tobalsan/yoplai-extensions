@@ -16,7 +16,7 @@ Tools (mounted as `googleDrive_<name>`):
 - `slides_render({ presentationId? | presentationUrl?, slideIds? })` — selected slide PNGs saved into this conversation, in presentation order; with more than one slide also one 2-column contact-sheet PNG (`contactSheet: { path, columns, slideIds } | null`, `contactSheetError` if it could not be built) — read that first, open single slides only for detail
 - `validate` — confirm the connection is live; returns the connected Google account
 
-Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests `drive.file`, `spreadsheets` and `presentations`; no full `drive` scope. `drive.file` permits creating/editing app-created files; `spreadsheets` permits editing existing Sheets; `presentations` permits editing existing decks when the user has edit permission. Existing write-enabled connections reconnect once for the new scope. Read tools retain `drive.readonly`.
+Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests full `drive`, `spreadsheets` and `presentations` access, allowing writes to any file the connected user can edit. The Sheets and Slides APIs still need their respective scopes. Existing write-enabled connections reconnect once for the new scope. Read tools retain `drive.readonly`.
 
 Write tools (only mounted when `allowWrite: true`):
 
@@ -24,7 +24,7 @@ Write tools (only mounted when `allowWrite: true`):
 - `slides_add_elements({ presentationId? | presentationUrl?, slideId? | newSlide?, elements, requiredRevisionId?, render? })` — add point-based elements to a slide or a new blank slide in one batch update
 - `slides_batch_update({ presentationId? | presentationUrl?, requests? | requestsPath?, requiredRevisionId?, renderSlideIds? })` — pass-through Google Slides requests (or a conversation JSON file: array or `{ requests }`, max 5 MB); revision-guarded edits in place; a string `replaceAllText.containsText` is normalized to `{ text, matchCase: true }`
 - `create_folder` — name and optional parent folder id
-- `save_file({ path, fileId? | name + parentId?, convert? })` — upload a local conversation file as a new copy or replace an app-accessible file while keeping its format
+- `save_file({ path, fileId? | name + parentId?, convert? })` — upload a local conversation file as a new copy or replace an existing fileId while keeping its format
 - `create_file` — text/CSV content, optional MIME type/parent; `convertTo: "doc" | "sheet"` creates a Google Doc or Sheet
 - `update_file_content` — overwrite content (text for Docs, CSV for Sheets)
 - `rename_move_file` — rename and/or add/remove parent folders
@@ -45,7 +45,9 @@ Use `read_file` for extracted text. For native Slides, use the deck workflow bel
 
 Google documents that [Office upload conversion during an update replaces the complete contents of an existing Google Doc, Sheet or Slide](https://developers.google.com/workspace/drive/api/guides/manage-uploads#convert_to_google_docs_types). Multipart uploads use Office media Content-Type and the target's existing native MIME type in metadata. Actual Google conversion and fidelity must also be verified against a connected test account.
 
-The approved scope remains `drive.file`, not full `drive`. Creating copies works; replacing arbitrary user-owned files does not. Replace only files the app created or the user explicitly authorized for this app. A Google Sheets grant alone does not authorize a Drive media replacement of an arbitrary existing Sheet. For Frederic's template, download the original docx, edit only its body, and save a new docx copy.
+`allowWrite` grants full Drive access. When the user asks, replace the original in place, keeping its format: uploaded XLSX stays XLSX, and native Docs/Sheets/Slides stay native. First read the target, then report what changed: the file, tabs/ranges or sections, and a before/after summary. A file-permission refusal needs a copy or access change, not an OAuth reconnect.
+
+For uploaded XLSX/DOCX/PPTX, use `download_file` → edit the local copy → `save_file` with `fileId`; the Sheets API cannot edit uploaded Office files. For native Google Sheet cell edits, prefer `sheets_update_range` / `sheets_append_rows`. Reserve download/edit/save replacement for layout, formatting or whole-file changes: importing the matching Office file replaces the complete contents of the native file. `update_file_content` accepts only text types (`text/*`, `application/json`), native Google Docs and native Google Sheets; other formats return a 400 directing you to `download_file` + `save_file`.
 
 ## Native Google Slides
 
@@ -107,7 +109,7 @@ Root `extensions.googleDrive.allowWrite` sets the shared default; an agent's exp
 In the [Google Cloud Console](https://console.cloud.google.com/):
 
 1. **Enable the Google Drive API, Google Sheets API and Google Slides API** (APIs & Services → Library).
-2. **OAuth consent screen** — add `.../auth/drive.readonly` and `userinfo.email`; write mode also needs `.../auth/drive.file`, `.../auth/spreadsheets` and `.../auth/presentations`.
+2. **OAuth consent screen** — add `.../auth/drive.readonly` and `userinfo.email`; write mode also needs `.../auth/drive`, `.../auth/spreadsheets` and `.../auth/presentations`.
 3. **Credentials → Create OAuth client ID → Web application.**
 4. Under **Authorized redirect URIs**, add — byte-for-byte, per deployment:
 
@@ -174,15 +176,19 @@ Operator reference (host repo): `yoplai/docs/oauth-google-drive-setup.md`.
 
 ## Human OAuth verification checklist
 
-Use the external-testing Google OAuth app (no agent-driven OAuth E2E):
+Thinh owns these live checks (no agent-driven OAuth E2E). Before rollout, check the deployment's consent-screen type in GCP and add `drive` to the consent-screen scopes. Full `drive` is restricted: Internal Workspace apps do not need Google verification; External production apps require restricted-scope verification, including a security assessment. In External Testing, only listed test users can connect. The deployment's type must be checked in the console.
 
 1. Confirm read-only mode lists/reads files and exposes no writes; enable and save `allowWrite` on the agent page, then reconnect with the write scopes.
 2. Create a Sheet with `create_file` (`convertTo: "sheet"`), append rows, and update an A1 range, including a pre-existing Sheet.
 3. Read the result, rename/move the file, and confirm the reported changes in Drive.
 4. Confirm Gmail tools still work on the same Google connection after Drive reconnect (Google incremental consent preserves prior grants).
 5. Confirm an agent `allowWrite: false` overrides a root `true` default and hides write tools.
+6. With a reconnected write-enabled connection, read an existing shared uploaded XLSX, edit the local copy and use `save_file` with its `fileId`. Confirm the same original file, link and XLSX format remain, and that the agent reports the file, tabs/ranges and before/after summary.
+7. Read and edit an existing native Sheet in place, preferring `sheets_update_range` / `sheets_append_rows` for cells. Confirm it stays native with the same link and sharing, and that the agent reports what changed.
+8. With an old write-enabled grant that has not reconnected, confirm tools return `insufficient_scope` with an authorization link. Confirm the Connect card shows **Not granted** with **Grant … access**, then reconnect once to approve full Drive access.
+9. Try a view-only file: confirm Google's file-permission error is preserved and the agent asks for edit access or offers a copy, without asking for an OAuth reconnect.
 
-Requires the platform release with config-dependent OAuth requirements; land platform first.
+Requires the existing platform support for config-dependent OAuth requirements. The companion OAuth setup documentation PR has no merge-order dependency.
 
 ## Human Slides verification before release
 

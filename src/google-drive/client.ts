@@ -234,6 +234,10 @@ export class GoogleDriveClient {
 
   async updateFileContent(params: UpdateFileContentParams): Promise<unknown> {
     const metadata = await this.#getFileMetadata(params.fileId);
+    if (!metadata.mimeType?.startsWith("text/") && metadata.mimeType !== "application/json"
+      && metadata.mimeType !== "application/vnd.google-apps.document" && metadata.mimeType !== "application/vnd.google-apps.spreadsheet") {
+      throw Object.assign(new Error("update_file_content cannot replace this file with text. Use download_file, edit the local file, then save_file with fileId to preserve its format."), { status: 400 });
+    }
     const mimeType = metadata.mimeType === "application/vnd.google-apps.spreadsheet" ? "text/csv"
       : metadata.mimeType === "application/vnd.google-apps.document" ? "text/plain"
       : metadata.mimeType ?? "text/plain";
