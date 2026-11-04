@@ -64,7 +64,7 @@ Images: prefer public PNG, JPEG or GIF URLs (image element url with slides_add_e
 
 Chat Office uploads are read-only: copy them into the conversation folder before save_file. Use convert: true only on a new DOCX/XLSX/PPTX copy; export native decks with download_file format pdf or the default Office format.`,
   configSchema: GoogleDriveConfigSchema,
-  configFieldTitles: { allowWrite: "Enable creating and writing files" },
+  configFieldTitles: { allowWrite: "Enable creating, writing, and deleting files" },
   requiredSecrets: [],
   oauthProviders: [googleOAuthProvider],
   oauth: (config) => ({
