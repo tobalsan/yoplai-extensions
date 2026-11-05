@@ -239,16 +239,12 @@ it("bounds user refresh connection to ten seconds without a separate OAuth probe
   let started = false;
   const live = await t.start(async () => { started = true; return new Promise<never>(() => {}); });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let complete = false;
-  const pending = live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" }).then((result) => { complete = true; return result; });
-  while (!started && !network.mock.calls.length) await new Promise((resolve) => setImmediate(resolve));
-  // The connection and favicon each have a bounded deadline, without a second initialize probe.
-  // Step fake time and let real file I/O between timers settle, so the bound holds under suite load.
-  for (let elapsed = 0; elapsed < 15_001 && !complete; elapsed += 1_000) {
-    await vi.advanceTimersByTimeAsync(1_000);
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  expect(complete).toBe(true);
+  const pending = live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" });
+  while (!started) await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(10_000);
+  // Real OAuth-store reads settle before the separate favicon deadline starts.
+  while (!network.mock.calls.length) await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(5_000);
   await expect(pending).resolves.toMatchObject({ status: "unreachable", server: { state: "unreachable", error: "MCP server status timed out" } });
   await live.extension.stop();
 });
