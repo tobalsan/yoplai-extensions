@@ -33,5 +33,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
+        env:
+          # No gateway installation in this job; assert its pdf-parse PDF.js pin.
+          GATEWAY_PDFJS_VERSION: "5.4.296"
       - name: Test
         run: pnpm test
