@@ -134,6 +134,7 @@ describe("MCP OAuth routes", () => {
   });
 
   it("runs authorize, callback, and status against an OAuth MCP server", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
     const exchange = vi.fn().mockResolvedValue({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 });
     const discover = vi.fn().mockResolvedValue({ authorizationServerUrl: "https://auth.test", authorizationServerMetadata: { registration_endpoint: "https://auth.test/register" } });
     const redirectUri = "https://yoplai.example.com/api/mcp/oauth/callback";
