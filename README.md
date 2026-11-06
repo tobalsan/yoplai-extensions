@@ -51,12 +51,35 @@ New installs should use `~/.yoplai` / `YOPLAI_*`.
 
 ```bash
 pnpm install
-pnpm build
+GATEWAY_ROOT=/path/to/yoplai/apps/gateway pnpm build
 mkdir -p ~/.yoplai/extensions
 ln -sfn "$PWD/dist/hiveage" ~/.yoplai/extensions/hiveage
 ln -sfn "$PWD/dist/pipedrive" ~/.yoplai/extensions/pipedrive
 ln -sfn "$PWD/dist/pennylane" ~/.yoplai/extensions/pennylane
 ```
+
+### PDF.js compatibility
+
+Drive, Notion and Confluence load PDF.js in the gateway process. Their exact
+`pdfjs-dist` pin must match the PDF.js dependency used by the gateway's
+`pdf-parse` (currently `5.4.296` for `pdf-parse@2.4.5`). The first step of
+`pnpm build` checks both the extension API/worker pair and the gateway version,
+without network access.
+
+Set `GATEWAY_ROOT` to the directory whose installed dependencies include the
+gateway's `pdf-parse` (`apps/gateway` in a platform checkout). The guard resolves
+PDF.js from that installed parser, including pnpm overrides. It fails if the
+gateway cannot be resolved or any version differs; it never guesses a deploy
+layout. Deploy builds should use this mode against the gateway being deployed.
+
+For standalone builds without an installed gateway, explicitly assert the
+gateway's verified version: `GATEWAY_PDFJS_VERSION=5.4.296 pnpm build`. This is an
+operator assertion, not gateway discovery; CI uses it and it must be updated
+when the gateway's pin changes. `GATEWAY_ROOT` takes precedence if both are set,
+so a broken path cannot silently fall back to the assertion. With neither
+variable, the build fails. After deployment, restart the gateway to load the
+aligned dependencies, then verify Drive and `extract_document` PDF reads in
+both orders across fresh gateway lifetimes.
 
 Yoplai v3 keeps agent config in each agent workspace. Root `yoplai.json` only discovers agent folders and can hold shared extension defaults.
 
