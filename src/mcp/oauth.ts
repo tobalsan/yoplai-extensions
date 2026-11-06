@@ -62,6 +62,7 @@ export type OAuthState = "connected" | "disconnected" | "needs_reconnect";
 
 export interface OAuthConnection {
   client: OAuthClientInformationFull;
+  clientSource?: "cimd";
   tokens: OAuthTokens;
   connectedAt: string;
   authorizationServerUrl: string;
@@ -93,6 +94,7 @@ export interface PendingOAuthFlow {
   codeVerifier: string;
   createdAt: number;
   client: OAuthClientInformationFull;
+  clientSource?: "cimd";
 }
 
 export class McpOAuthFlowError extends Error {
@@ -134,7 +136,7 @@ export class McpOAuthStore {
   private readonly refreshes = new Map<string, { promise: Promise<McpTokenResult>; controller: AbortController; waiters: number; totalDeadline: boolean }>();
   private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
-  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver) {}
+  constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly clientMetadataUrl?: string) {}
 
   private legacyKey(agent: string, server: string, scope: CredentialScope): CredentialKey {
     return { agentId: agent, integration: `mcp:${server}`, scope };
@@ -260,23 +262,26 @@ export class McpOAuthStore {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
     const dynamic = Boolean(info.authorizationServerMetadata?.registration_endpoint);
-    if (!staticClient && !dynamic) {
+    const cimd = info.authorizationServerMetadata?.client_id_metadata_document_supported === true && this.clientMetadataUrl;
+    if (!staticClient && !cimd && !dynamic) {
       throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId (and oauth.clientSecret if the provider requires one) on this server in mcp.json");
     }
     const preRegistered = staticClient;
     const identity = { url, clientId: staticClient?.clientId };
     const existing = await this.read(agent, server, scope, identity);
+    const reusableClient = existing?.clientSource === "cimd" ? undefined : existing?.client;
+    const clientSource = !preRegistered && !reusableClient && cimd ? "cimd" as const : undefined;
     // MCP scope selection: without a configured list, request every scope the resource advertises (some servers reject an empty scope).
     const scopes = staticClient?.scopes?.length ? staticClient.scopes : info.resourceMetadata?.scopes_supported ?? [];
     const client: OAuthClientInformationFull = preRegistered
       ? { client_id: preRegistered.clientId, ...(preRegistered.clientSecret ? { client_secret: preRegistered.clientSecret } : {}), redirect_uris: [this.redirectUri] }
-      : existing?.client ?? await registerClient(info.authorizationServerUrl, {
+      : reusableClient ?? (cimd ? { client_id: cimd, redirect_uris: [this.redirectUri], token_endpoint_auth_method: "none" } : await registerClient(info.authorizationServerUrl, {
         metadata: info.authorizationServerMetadata,
         fetchFn: oauthFetch,
         clientMetadata: { client_name: "Yoplai MCP", redirect_uris: [this.redirectUri], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" },
         // Register the same scopes as the authorize request: some servers (e.g. Scheduled) give a DCR client without scope an empty set.
         ...(scopes.length ? { scope: scopes.join(" ") } : {}),
-      });
+      }));
     const state = crypto.randomBytes(32).toString("base64url");
     const auth = await startAuthorization(info.authorizationServerUrl, {
       metadata: info.authorizationServerMetadata,
@@ -291,7 +296,7 @@ export class McpOAuthStore {
       auth.authorizationUrl.searchParams.set("access_type", "offline");
       auth.authorizationUrl.searchParams.set("prompt", "consent");
     }
-    this.pending.set(state, { returnTo, actor, onComplete, scope, agent, server, url, identity, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client });
+    this.pending.set(state, { returnTo, actor, onComplete, scope, agent, server, url, identity, codeVerifier: auth.codeVerifier, createdAt: Date.now(), client, clientSource });
     return { state, authorizationUrl: auth.authorizationUrl.toString() };
   }
 
@@ -308,7 +313,7 @@ export class McpOAuthStore {
       const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
       const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
       const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
-      await this.write(pending.agent, pending.server, { client: pending.client, tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
+      await this.write(pending.agent, pending.server, { client: pending.client, ...(pending.clientSource ? { clientSource: pending.clientSource } : {}), tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
       onConnected?.(pending);
       await pending.onComplete?.(pending.server);
       return pending;

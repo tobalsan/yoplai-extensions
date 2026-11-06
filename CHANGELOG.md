@@ -18,6 +18,8 @@
 
 ### Added
 
+- MCP OAuth supports Client ID Metadata Documents (CIMD) between static clients and dynamic registration, with a public `/api/mcp/oauth/client-metadata.json` route on HTTPS gateways. Localhost gateways keep dynamic registration.
+
 - Gmail attachment metadata and conversation-folder downloads, draft attachments with preservation on update, and email/draft sending behind the off-by-default `allowSend` checkbox. Drafts and sends use media uploads with a 25 MB attachment total and 36,700,160-byte MIME limit (ALG-605).
 
 - Standalone Lusha V3 fallback enrichment for work emails, opt-in phones, and companies, with billed credit reporting and free account usage/pricing and validation (ALG-591).

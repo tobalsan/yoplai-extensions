@@ -12,6 +12,7 @@ import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type 
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, normalizeServerIcon, siteLabel } from "./icon.js";
+import { buildOAuthClientMetadata } from "./client-metadata.js";
 import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
 import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps, type ResolvedToolExtensionConfig } from "../tool-extension.js";
 
@@ -716,11 +717,12 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
   } satisfies McpApps,
   async start(ctx: McpRuntime) {
     runtime = ctx;
-    oauth = new McpOAuthStore(ctx.getDataDir(), resolveOAuthRedirectUri(ctx.getConfig()), ctx.credentials, (agentId, name) => {
+    const redirectUri = resolveOAuthRedirectUri(ctx.getConfig());
+    oauth = new McpOAuthStore(ctx.getDataDir(), redirectUri, ctx.credentials, (agentId, name) => {
       let server: McpServerConfig | undefined;
       try { server = loadedForAgent(agentId)?.servers.find((item) => item.name === name); } catch { return undefined; }
       return server?.type === "http" ? { url: server.url, clientId: server.oauth?.clientId } : undefined;
-    });
+    }, buildOAuthClientMetadata(redirectUri)?.url);
     connect = ctx.credentialConnect;
     resolveIcon = createIconResolver(ctx.getDataDir());
     unregister = connect?.registerOAuthConnector("mcp", async ({ agentId, userId, actorEmail, impersonatorUserId, targetId, onComplete }) => {
@@ -730,6 +732,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     });
   },
   registerRoutes(app: RouteApp) {
+    app.get("/mcp/oauth/client-metadata.json", async (c) => {
+      const metadata = runtime && buildOAuthClientMetadata(resolveOAuthRedirectUri(runtime.getConfig()));
+      return metadata ? c.json(metadata.document) : c.text("Not found", 404);
+    });
     function actor(c: RouteContext): AuditActor {
       const auth = c.get?.("multiUserAuthContext");
       if (!isRecord(auth)) return {};
