@@ -62,6 +62,11 @@ const drive: Transport = {
     const ranges: string[] = [];
     const fetchMock = vi.fn<DriveFetch>(async (input) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith("/values:batchGet")) {
+        const batch = url.searchParams.getAll("ranges");
+        ranges.push(...batch);
+        return Response.json({ valueRanges: batch.map((range) => data.values[range] ?? {}) });
+      }
       const match = url.pathname.match(/\/values\/(.+)$/);
       if (!match) return Response.json(data.meta);
       const range = decodeURIComponent(match[1]);

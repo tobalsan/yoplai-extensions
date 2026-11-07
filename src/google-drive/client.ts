@@ -39,6 +39,10 @@ import {
 } from "../google-sheets.js";
 
 const SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
+/** Upper bound of ranges sent in one `values:batchGet` request. */
+const BATCH_GET_MAX_RANGES = 50;
+/** Upper bound of a `values:batchGet` URL, well under common 8 KB request-line limits. */
+const BATCH_GET_MAX_URL_LENGTH = 8000;
 
 export type DriveFetch = typeof fetch;
 
@@ -287,10 +291,14 @@ export class GoogleDriveClient {
       properties?: { title?: string };
       sheets?: Array<{ properties?: { sheetId?: number; title?: string; index?: number; gridProperties?: { rowCount?: number; columnCount?: number } } }>;
     };
-    const tabs = await Promise.all((spreadsheet.sheets ?? []).map(async (sheet) => {
+    const sheets = spreadsheet.sheets ?? [];
+    const titled = sheets.map((sheet) => sheet.properties?.title ?? "").filter(Boolean);
+    const headerValues = await this.#batchGetValues(spreadsheetId, titled.map((title) => `${quoteSheetName(title)}!1:${params.maxHeaderScanRows}`), "ROWS");
+    let next = 0;
+    const tabs = sheets.map((sheet) => {
       const props = sheet.properties;
       const title = props?.title ?? "";
-      const values = title ? await this.#getValues(spreadsheetId, `${quoteSheetName(title)}!1:${params.maxHeaderScanRows}`, "ROWS").then((r) => normalizeValues(r.values)) : [];
+      const values = title ? normalizeValues(headerValues[next++]) : [];
       const detected = detectHeaderRow(values, params.maxHeaderScanRows);
       return {
         tabName: title,
@@ -302,7 +310,7 @@ export class GoogleDriveClient {
         headerRowIndex: detected.headerRowIndex,
         isEmpty: values.length === 0 || !values.some((row) => row.some((cell) => cell.trim())),
       };
-    }));
+    });
     return { spreadsheetId, spreadsheetTitle: spreadsheet.properties?.title ?? "", spreadsheetUrl: spreadsheetUrl(spreadsheetId), tabs };
   }
 
@@ -354,6 +362,35 @@ export class GoogleDriveClient {
     const url = new URL(`${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`);
     url.searchParams.set("majorDimension", majorDimension);
     return (await this.#request(url.toString())).json() as Promise<{ range?: string; majorDimension?: string; values?: unknown }>;
+  }
+
+  /** Reads many ranges with `values:batchGet`; returns each range's `values` in request order. */
+  async #batchGetValues(spreadsheetId: string, ranges: string[], majorDimension: string): Promise<unknown[]> {
+    const base = new URL(`${SHEETS_API_BASE}/${encodeURIComponent(spreadsheetId)}/values:batchGet`);
+    base.searchParams.set("majorDimension", majorDimension);
+    // Ranges travel as query params, so cap each request by range count and URL length.
+    const chunks: string[][] = [];
+    let length = Infinity;
+    for (const range of ranges) {
+      const added = 1 + new URLSearchParams({ ranges: range }).toString().length;
+      const chunk = chunks.at(-1);
+      if (!chunk || chunk.length >= BATCH_GET_MAX_RANGES || length + added > BATCH_GET_MAX_URL_LENGTH) {
+        chunks.push([range]);
+        length = base.toString().length + added;
+      } else {
+        chunk.push(range);
+        length += added;
+      }
+    }
+    const results: unknown[] = [];
+    // Sequential on purpose: each batch is one quota read, a parallel burst is what exhausted the quota.
+    for (const chunk of chunks) {
+      const url = new URL(base);
+      for (const range of chunk) url.searchParams.append("ranges", range);
+      const data = (await (await this.#request(url.toString())).json()) as { valueRanges?: Array<{ values?: unknown }> };
+      results.push(...chunk.map((_, i) => data.valueRanges?.[i]?.values));
+    }
+    return results;
   }
 
   async #sheetValues(spreadsheetId: string, range: string, values: (string | number | boolean)[][], append: boolean, valueInputOption = "USER_ENTERED"): Promise<unknown> {
