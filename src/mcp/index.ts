@@ -320,10 +320,17 @@ export function resolveOAuthRedirectUri(config: McpRuntimeConfig): string {
   return `${origin.replace(/\/+$/, "")}/api/mcp/oauth/callback`;
 }
 
+/** How long a tool-list manager dropped by a reset keeps serving running agents before it is closed. */
+const RETIRED_MANAGER_GRACE_MS = 15 * 60_000;
+
 export function createMcpExtension(clientFactory?: McpClientFactory) {
   const loggedStates = new Map<string, number>();
   const loggedConfigErrors = new Set<string>();
   const managers = new Map<string, Promise<McpClientManager>>();
+  // Keys of cached tool-list managers. Every other manager key is single-use and closed by its own caller.
+  const toolListKeys = new Set<string>();
+  // Tool-list managers dropped by a reset, still serving tool handles held by running agents until their delayed close.
+  const retired = new Map<Promise<McpClientManager>, ReturnType<typeof setTimeout>>();
   const oauthServers = new Set<string>();
   const oauthProbeResults = new Map<string, { result: boolean; until: number }>();
   const oauthProbes = new Map<string, Promise<boolean>>();
@@ -564,11 +571,17 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
   }
 
   async function resetManagers(agent?: string): Promise<void> {
-    const keys = [...managers.keys()].filter((key) => !agent || key.startsWith(`${agent}:`));
+    const keys = [...toolListKeys].filter((key) => !agent || key.startsWith(`${agent}:`));
     for (const key of keys) {
+      toolListKeys.delete(key);
       const pending = managers.get(key);
       managers.delete(key);
-      if (pending) void pending.then((manager) => manager.close()).catch(() => {});
+      if (!pending) continue;
+      const timer = setTimeout(() => {
+        void pending.then((manager) => manager.close()).catch(() => {}).finally(() => retired.delete(pending));
+      }, RETIRED_MANAGER_GRACE_MS);
+      timer.unref?.();
+      retired.set(pending, timer);
     }
   }
 
@@ -1231,9 +1244,12 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     oauthProbeResults.clear();
     oauthProbes.clear();
     oauthServers.clear();
-    const resolvedManagers = await Promise.all([...managers.values()]);
-    await Promise.all(resolvedManagers.map((manager) => manager.close()));
+    for (const timer of retired.values()) clearTimeout(timer);
+    const pending = [...managers.values(), ...retired.keys()];
     managers.clear();
+    toolListKeys.clear();
+    retired.clear();
+    await Promise.all(pending.map((manager) => manager.then((resolved) => resolved.close(), () => {})));
     loggedStates.clear();
     loggedConfigErrors.clear();
     await baseExtension.stop();
@@ -1247,7 +1263,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     const revision = merged.fingerprint;
     const loaded = merged.loaded;
     logConfigErrors(loaded, agent.id, configPath, revision, context.userId);
-    const manager = await getManager(`${agent.id}:${configPath}:${revision}:${context.userId ?? "anonymous"}`, agent.id, loaded.servers, "tools", context.userId);
+    const managerKey = `${agent.id}:${configPath}:${revision}:${context.userId ?? "anonymous"}`;
+    toolListKeys.add(managerKey);
+    const manager = await getManager(managerKey, agent.id, loaded.servers, "tools", context.userId);
     const definitions = await manager.listTools();
     const tools = adaptMcpTools(definitions, manager);
     const namespaceForServer = (name: string) => {
