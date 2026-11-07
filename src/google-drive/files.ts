@@ -119,11 +119,11 @@ export async function uploadDriveFile(metadata: { name?: string; mimeType: strin
     if (endpoint.protocol !== "https:" || endpoint.hostname !== "www.googleapis.com") throw new Error("Google returned an invalid resumable upload location.");
     let response: Response;
     try {
-      response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length) }, body: new Uint8Array(bytes) });
+      response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType }, body: new Uint8Array(bytes) });
     } catch (error) {
       signal.throwIfAborted();
       if (!(error instanceof TypeError && error.cause)) throw error;
-      const status = await request(location, { method: "PUT", signal, headers: { "Content-Range": `bytes */${bytes.length}`, "Content-Length": "0" }, body: new Uint8Array(0) }, [308]).catch(error => {
+      const status = await request(location, { method: "PUT", signal, headers: { "Content-Range": `bytes */${bytes.length}` }, body: new Uint8Array(0) }, [308]).catch(error => {
         signal.throwIfAborted();
         throw uploadFailure(error, bytes.length, "status query");
       });
@@ -133,7 +133,7 @@ export async function uploadDriveFile(metadata: { name?: string; mimeType: strin
         const range = status.headers.get("Range");
         const start = range ? Number(range.match(/^bytes=0-(\d+)$/)?.[1]) + 1 : 0;
         if (!Number.isSafeInteger(start) || start < 0 || start >= bytes.length) throw uploadFailure(new Error(`Invalid acknowledged range: ${range}`), bytes.length, "status query");
-        response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Length": String(bytes.length - start), "Content-Range": `bytes ${start}-${bytes.length - 1}/${bytes.length}` }, body: new Uint8Array(bytes.subarray(start)) }).catch(error => {
+        response = await request(location, { method: "PUT", signal, headers: { "Content-Type": mimeType, "Content-Range": `bytes ${start}-${bytes.length - 1}/${bytes.length}` }, body: new Uint8Array(bytes.subarray(start)) }).catch(error => {
           signal.throwIfAborted();
           if (error instanceof TypeError && error.cause) throw uploadNetworkError(error, bytes.length, "resume PUT");
           throw error;

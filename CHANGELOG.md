@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Google Drive saves over 5 MB no longer fail with `invalid content-length header`; the resumable upload lets `fetch` set `Content-Length` instead of duplicating it (ALG-634).
 - MCP tool calls to a connected OAuth server that is rate-limited or unreachable return a transient `reason: "unavailable"` error with the upstream text instead of `not_connected`, so scheduled jobs are no longer failed with "Reconnect mcp credentials" (ALG-633).
 - Drive, Notion and Confluence PDF reading uses the gateway's PDF.js version; builds reject incompatible or unknown gateway versions (ALG-620).
 - Gmail `get_thread` MINIMAL and `search_threads` results include attachment metadata without requiring full message bodies (ALG-605).
