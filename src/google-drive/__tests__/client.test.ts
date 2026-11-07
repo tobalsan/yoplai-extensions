@@ -346,10 +346,93 @@ describe("GoogleDriveClient writes", () => {
   it("inspects tabs and detects headers", async () => {
     const fetchMock = vi.fn<DriveFetch>()
       .mockResolvedValueOnce(jsonResponse({ properties: { title: "Book" }, sheets: [{ properties: { sheetId: 0, title: "Clients", index: 0, gridProperties: { rowCount: 100, columnCount: 3 } } }] }))
-      .mockResolvedValueOnce(jsonResponse({ values: [["Name", "Email"], ["Alice", "a@x"]] }));
+      .mockResolvedValueOnce(jsonResponse({ valueRanges: [{ range: "Clients!A1:C10", values: [["Name", "Email"], ["Alice", "a@x"]] }] }));
     const result = await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 10 });
-    expect(decodeURIComponent(String(fetchMock.mock.calls[1][0]))).toContain("'Clients'!1:10");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const batchUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(batchUrl.pathname).toBe("/v4/spreadsheets/s1/values:batchGet");
+    expect(batchUrl.searchParams.getAll("ranges")).toEqual(["'Clients'!1:10"]);
+    expect(batchUrl.searchParams.get("majorDimension")).toBe("ROWS");
     expect(result).toMatchObject({ spreadsheetTitle: "Book", tabs: [{ tabName: "Clients", rowCount: 100, headers: ["Name", "Email"], headerRowIndex: 1, isEmpty: false }] });
+  });
+
+  it("inspects a 120-tab sheet with 3 sequential batch reads instead of 120", async () => {
+    const titles = Array.from({ length: 120 }, (_, i) => `Tab ${i + 1}`);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = vi.fn<DriveFetch>(async (input) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/values:batchGet")) {
+        return jsonResponse({ properties: { title: "Book" }, sheets: titles.map((title, index) => ({ properties: { sheetId: 100 + index, title, index } })) });
+      }
+      // Each tab's header row holds its own name, so tab/value pairing is checkable.
+      return jsonResponse({ valueRanges: url.searchParams.getAll("ranges").map((range) => ({ values: [[range.slice(1, range.indexOf("'!")), "Email"]] })) });
+    });
+    const result = await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 5 });
+    // 1 metadata read + ceil(120 / 50 ranges per batch) = 1 + 3.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(maxInFlight).toBe(1);
+    const batchSizes = fetchMock.mock.calls.slice(1).map(([input]) => new URL(String(input)).searchParams.getAll("ranges").length);
+    expect(batchSizes).toEqual([50, 50, 20]);
+    const tabs = (result as { tabs: Array<{ tabName: string; sheetId: number; headers: string[] }> }).tabs;
+    expect(tabs).toHaveLength(120);
+    expect(tabs[0]).toMatchObject({ tabName: "Tab 1", sheetId: 100, headers: ["Tab 1", "Email"] });
+    expect(tabs[50]).toMatchObject({ tabName: "Tab 51", sheetId: 150, headers: ["Tab 51", "Email"] });
+    expect(tabs[119]).toMatchObject({ tabName: "Tab 120", sheetId: 219, headers: ["Tab 120", "Email"] });
+    expect(tabs.every((tab) => tab.headers[0] === tab.tabName)).toBe(true);
+  });
+
+  it("splits batch reads earlier when long non-ASCII tab names would make the URL too long", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `${"é".repeat(98)}${String(i + 1).padStart(2, "0")}`);
+    const fetchMock = vi.fn<DriveFetch>(async (input) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/values:batchGet")) {
+        return jsonResponse({ properties: { title: "Book" }, sheets: titles.map((title, index) => ({ properties: { sheetId: index, title, index } })) });
+      }
+      return jsonResponse({ valueRanges: url.searchParams.getAll("ranges").map((range) => ({ values: [[range.slice(-7, -5), "Total"]] })) });
+    });
+    const result = await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 5 });
+    // Base URL ".../s1/values:batchGet?majorDimension=ROWS" is 84 chars; each "&ranges='<name>'!1:5" encodes to
+    // 8 + 3 + 98*6 + 2 + 3 + 3 + 1 + 3 + 1 = 612 chars. An 8000-char URL budget fits 12 ranges (84 + 12*612 = 7428).
+    const batches = fetchMock.mock.calls.slice(1).map(([input]) => String(input));
+    expect(batches.map((url) => new URL(url).searchParams.getAll("ranges").length)).toEqual([12, 12, 6]);
+    expect(batches.every((url) => url.length <= 8000)).toBe(true);
+    const tabs = (result as { tabs: Array<{ tabName: string; headers: string[] }> }).tabs;
+    expect(tabs.map((tab) => tab.headers[0])).toEqual(Array.from({ length: 30 }, (_, i) => String(i + 1).padStart(2, "0")));
+  });
+
+  it("inspects blank-title and empty tabs without reading the blank-title one", async () => {
+    const fetchMock = vi.fn<DriveFetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        properties: { title: "Book" },
+        sheets: [
+          { properties: { sheetId: 1, title: "Empty", index: 0 } },
+          { properties: { sheetId: 2, title: "", index: 1 } },
+          { properties: { sheetId: 3, title: "Orders", index: 2 } },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ valueRanges: [{ range: "Empty!A1:Z3" }, { range: "Orders!A1:Z3", values: [["Id", "Amount"]] }] }));
+    const result = await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 3 });
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.getAll("ranges")).toEqual(["'Empty'!1:3", "'Orders'!1:3"]);
+    expect(result).toMatchObject({
+      tabs: [
+        { tabName: "Empty", sheetId: 1, headers: [], headerRowIndex: null, isEmpty: true },
+        { tabName: "", sheetId: 2, headers: [], headerRowIndex: null, isEmpty: true },
+        { tabName: "Orders", sheetId: 3, headers: ["Id", "Amount"], headerRowIndex: 1, isEmpty: false },
+      ],
+    });
+  });
+
+  it("quotes tab names with apostrophes and non-ASCII characters in batch ranges", async () => {
+    const fetchMock = vi.fn<DriveFetch>()
+      .mockResolvedValueOnce(jsonResponse({ properties: { title: "Book" }, sheets: [{ properties: { sheetId: 7, title: "Café d'Été – 東京", index: 0 } }] }))
+      .mockResolvedValueOnce(jsonResponse({ valueRanges: [{ values: [["Ville"]] }] }));
+    await makeClient(fetchMock).sheetsInspect({ spreadsheetId: "s1", maxHeaderScanRows: 10 });
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.getAll("ranges")).toEqual(["'Café d''Été – 東京'!1:10"]);
   });
 
   it("reads a sheet as rows with offset, limit, and columns", async () => {
