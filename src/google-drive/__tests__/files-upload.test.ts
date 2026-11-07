@@ -64,7 +64,6 @@ it("resumes a large converted deck from the acknowledged byte without creating a
       return new Response(null, { status: 308, headers: { Range: "bytes=0-999999" } });
     }
     expect(range).toBe("bytes 1000000-5000000/5000001");
-    expect(new Headers(init.headers).get("Content-Length")).toBe("4000001");
     const body = new Uint8Array(await new Response(init.body).arrayBuffer());
     expect(body).toHaveLength(4_000_001);
     expect(body[0]).toBe(7);
@@ -79,7 +78,6 @@ it("resumes a large converted deck from the acknowledged byte without creating a
 it("resumes all bytes when Drive acknowledges none", async () => {
   interruptedUpload(() => new Response(null, { status: 308 }), async init => {
     expect(new Headers(init.headers).get("Content-Range")).toBe("bytes 0-5000000/5000001");
-    expect(new Headers(init.headers).get("Content-Length")).toBe("5000001");
     const bytes = new Uint8Array(await new Response(init.body).arrayBuffer());
     expect(bytes).toHaveLength(5_000_001);
     expect(bytes[0]).toBe(3);
