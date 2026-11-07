@@ -5,6 +5,7 @@
 ### Fixed
 
 - Google Drive `sheets_inspect` reads tab header rows with a few sequential Sheets `values:batchGet` requests (up to 50 tabs each) instead of one parallel read per tab, so large workbooks no longer exhaust the Sheets read quota. Output is unchanged (ALG-637).
+- Google Drive grants that had `allowWrite` on before full Drive access keep reading Drive, Sheets and Slides. Only write tools refuse with `insufficient_scope` until the user reconnects Google once. Needs a platform with OAuth `minimumScopes` support; older platforms keep refusing every tool (ALG-632).
 - Google Drive saves over 5 MB no longer fail with `invalid content-length header`; the resumable upload lets `fetch` set `Content-Length` instead of duplicating it (ALG-634).
 - MCP tool calls to a connected OAuth server that is rate-limited or unreachable return a transient `reason: "unavailable"` error with the upstream text instead of `not_connected`, so scheduled jobs are no longer failed with "Reconnect mcp credentials" (ALG-633).
 - Drive, Notion and Confluence PDF reading uses the gateway's PDF.js version; builds reject incompatible or unknown gateway versions (ALG-620).

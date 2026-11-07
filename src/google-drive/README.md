@@ -16,7 +16,7 @@ Tools (mounted as `googleDrive_<name>`):
 - `slides_render({ presentationId? | presentationUrl?, slideIds? })` — selected slide PNGs saved into this conversation, in presentation order; with more than one slide also one 2-column contact-sheet PNG (`contactSheet: { path, columns, slideIds } | null`, `contactSheetError` if it could not be built) — read that first, open single slides only for detail
 - `validate` — confirm the connection is live; returns the connected Google account
 
-Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests full `drive`, `spreadsheets` and `presentations` access, allowing writes to any file the connected user can edit. The Sheets and Slides APIs still need their respective scopes. Existing write-enabled connections reconnect once for the new scope. Read tools retain `drive.readonly`.
+Read-only scopes: `drive.readonly` + `userinfo.email` (unchanged). With `allowWrite: true`, also requests full `drive`, `spreadsheets` and `presentations` access, allowing writes to any file the connected user can edit. The Sheets and Slides APIs still need their respective scopes. Existing write-enabled connections keep reading (`minimumScopes` is `drive.readonly` + `userinfo.email`); write tools return `insufficient_scope` until the user reconnects once for the new scope.
 
 Write tools (only mounted when `allowWrite: true`):
 

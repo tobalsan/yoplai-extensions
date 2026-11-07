@@ -34,6 +34,21 @@ const FAILURE_MESSAGES = {
   expired: "Google access has expired. Reconnect Google to continue.",
 };
 
+const WRITE_SCOPES = [
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/presentations",
+];
+
+/** Write grants made before full `drive` still read; writes need one reconnect. */
+const WRITE_SCOPE_REFUSAL = {
+  connected: false,
+  provider: "google",
+  reason: "insufficient_scope",
+  isError: true,
+  message: "Google Drive writing needs more Google permissions. Reconnect Google to grant them; reading still works.",
+};
+
 const NOT_CONNECTED_MESSAGE =
   "Google Drive is not connected. Connect a Google account (Just me or Whole team) in the agent's Google Drive settings.";
 
@@ -71,11 +86,12 @@ Chat Office uploads are read-only: copy them into the conversation folder before
     provider: "google",
     scopes: [
       "https://www.googleapis.com/auth/drive.readonly",
-      ...(config.merged.allowWrite === true ? [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/presentations",
-      ] : []),
+      ...(config.merged.allowWrite === true ? WRITE_SCOPES : []),
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
+    // Reads need only these, so write grants made before full `drive` keep reading.
+    minimumScopes: [
+      "https://www.googleapis.com/auth/drive.readonly",
       "https://www.googleapis.com/auth/userinfo.email",
     ],
   }),
@@ -116,7 +132,8 @@ Chat Office uploads are read-only: copy them into the conversation folder before
       }),
     ];
     if (config.merged.allowWrite === true) {
-      tools.push(
+      const missingWriteScope = connected && WRITE_SCOPES.some((scope) => !connected.scopes.includes(scope));
+      tools.push(...[
         tool("save_file", "Save a conversation file to Drive; relative and absolute paths in subfolders work in production (Linux), while other platforms require the folder root. Create a copy with name and optional parentId, or replace an existing fileId while preserving its format. With a new copy, convert: true imports DOCX/XLSX/PPTX as native Docs/Sheets/Slides.", z.object({ path: z.string().min(1), fileId: z.string().min(1).optional(), name: z.string().min(1).optional(), parentId: z.string().min(1).optional(), convert: z.boolean().optional() }), (client, params, _connected, context) => client.saveFile(params, context)),
         tool("slides_create", "Create a native Google Slides deck in an optional Drive folder from slides with point-based elements (text, rect, roundRect, ellipse, line, local image paths; x/y/w/h in points on a 720 x 405 page), background color, notes and legacy images. roundRect radius works only here: the Slides API cannot set corner radius. Returns slides[].elementIds in drawing order (images first). Rename the file afterwards with rename_move_file.", SlidesCreateParamsSchema, (client, params, _connected, context) => slidesCreate(params, context, (url, init) => client.request(url, init)), SlidesCreateResultSchema),
         tool("slides_batch_update", "Send raw Google Slides request objects for what slides_add_elements cannot do; use requestsPath (conversation JSON file, array or { requests }) for large generated lists. Read existing decks first and pass requiredRevisionId to guard concurrent edits. renderSlideIds renders those slides after the update.", SlidesBatchUpdateParamsSchema, (client, params, _connected, context) => slidesBatchUpdate(params, (url, init) => client.request(url, init), context, slideIds => renderSlides({ presentationId: params.presentationId, presentationUrl: params.presentationUrl, slideIds }, context, (url, init) => client.request(url, init))), SlidesBatchUpdateResultSchema),
@@ -127,7 +144,7 @@ Chat Office uploads are read-only: copy them into the conversation folder before
         tool("rename_move_file", "Rename or move a Drive file. Supply name and/or parent changes.", RenameMoveFileParamsSchema, (client, params) => client.renameMoveFile(params)),
         tool("sheets_update_range", "Update Google Sheet cells using an A1 range and row arrays; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsUpdateRangeParamsSchema, (client, params) => client.sheetsUpdateRange(params)),
         tool("sheets_append_rows", "Append row arrays to a Google Sheet table using an A1 range; valueInputOption defaults to USER_ENTERED (or RAW).", SheetsAppendRowsParamsSchema, (client, params) => client.sheetsAppendRows(params)),
-      );
+      ].map((writeTool) => missingWriteScope ? { ...writeTool, execute: async () => WRITE_SCOPE_REFUSAL } : writeTool));
     }
     return tools.map((tool) => ({
       ...tool,

@@ -18,7 +18,7 @@ async function save(size = 5_000_001, signal?: AbortSignal) {
   bytes.fill(3, 0, Math.min(size, 1_000_000));
   await writeFile(path.join(hostPath, "deck.pptx"), bytes);
   const tools = await extension.getAgentTools({ id: "agent", extensions: { googleDrive: { allowWrite: true } } }, {
-    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: [] }),
+    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] }),
   });
   return tools.find(tool => tool.name === "googleDrive_save_file")!.execute({ path: "deck.pptx", name: "Deck", convert: true }, {
     agentId: "agent", sessionId: "session", userId: "user", signal,
