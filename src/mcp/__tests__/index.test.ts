@@ -705,6 +705,84 @@ it("marks a connected OAuth tool's unavailable response as an error", async () =
   try {
     const tools = await extension.getAgentTools(agent, { config: {} });
     available = false;
-    await expect(tools[0]!.execute({})).resolves.toMatchObject({ isError: true, connected: false, provider: "mcp", reason: "not_connected", authorizeUrl: "/agents/casey/edit" });
+    const result = await tools[0]!.execute({}) as Record<string, unknown>;
+    expect(result).toMatchObject({ isError: true, provider: "mcp", server: "local", reason: "unavailable" });
+    expect(result.message).toMatch(/temporarily unavailable/);
+    expect(result).not.toHaveProperty("connected");
+    expect(result).not.toHaveProperty("authorizeUrl");
   } finally { await extension.stop(); fs.rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+describe("connected OAuth tool calls when the server cannot be reached", () => {
+  // Refusal reasons the platform scheduler treats as "reconnect before this job can run".
+  const schedulerRefusalReasons = ["needs_reconnect", "not_connected", "expired", "revoked", "wrong_account", "insufficient_scope", "provider_not_configured"];
+
+  async function connectedServer(failure: { list?: () => never; connect?: () => never }) {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-transient-"));
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { chat: { url: "https://chat.example.test/mcp", oauth: { clientId: "client" } } } }));
+    const host = credentials();
+    const store = new McpOAuthStore(agentDir, "http://localhost/callback", host, () => ({ url: "https://chat.example.test/mcp", clientId: "client" }));
+    await store.write("casey", "chat", {
+      client: { client_id: "client", redirect_uris: ["http://localhost/callback"] },
+      tokens: { access_token: "fixture-token", token_type: "Bearer" }, connectedAt: new Date().toISOString(),
+      authorizationServerUrl: "https://auth.example.test", state: "connected",
+    });
+    let failing = false;
+    const extension = createMcpExtension(async () => {
+      if (failing) failure.connect?.();
+      return {
+        async listTools() {
+          if (failing) failure.list?.();
+          return [{ server: "chat", name: "read_channel", description: "Read", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }];
+        },
+        async readResource() { return { contents: [] }; },
+        async callTool() { return { content: [{ type: "text", text: "OK" }] }; },
+        async close() {},
+      };
+    });
+    const agent = { id: "casey", workspaceDir: agentDir, extensions: { mcp: {} } };
+    await extension.start({ credentials: host, getDataDir: () => agentDir, getConfig: () => ({}), getAgent: () => agent });
+    const tools = await extension.getAgentTools(agent, { config: {} });
+    failing = true;
+    return {
+      call: async () => await tools[0]!.execute({}, { userId: "alice" }) as Record<string, unknown>,
+      cleanup: async () => { await extension.stop(); fs.rmSync(agentDir, { recursive: true, force: true }); },
+    };
+  }
+
+  it("reports a rate-limited server as temporarily unavailable with the upstream text and no connect link", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = await connectedServer({ list: () => { throw new Error('Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"ratelimited"}],"isError":true},"id":7}'); } });
+    try {
+      const result = await server.call();
+      expect(result).toMatchObject({ isError: true, provider: "mcp", server: "chat", reason: "unavailable" });
+      expect(result.message).toMatch(/temporarily unavailable/);
+      expect(result.message).toContain("ratelimited");
+      expect(result).not.toHaveProperty("connected");
+      expect(result).not.toHaveProperty("authorizeUrl");
+      expect(result).not.toHaveProperty("error");
+      expect(schedulerRefusalReasons).not.toContain(result.reason);
+    } finally { await server.cleanup(); }
+  });
+
+  it("reports a network failure while connecting as temporarily unavailable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = await connectedServer({ connect: () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }); } });
+    try {
+      const result = await server.call();
+      expect(result).toMatchObject({ isError: true, provider: "mcp", server: "chat", reason: "unavailable" });
+      expect(result.message).toContain("fetch failed");
+      expect(result).not.toHaveProperty("connected");
+      expect(result).not.toHaveProperty("authorizeUrl");
+    } finally { await server.cleanup(); }
+  });
+
+  it("still asks the user to reconnect when the server rejects a grant that cannot be refreshed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const server = await connectedServer({ list: () => { throw new Error("401 Unauthorized"); } });
+    try {
+      await expect(server.call()).resolves.toMatchObject({ isError: true, connected: false, provider: "mcp", reason: "not_connected", authorizeUrl: "/agents/casey/edit" });
+    } finally { await server.cleanup(); }
+  });
 });

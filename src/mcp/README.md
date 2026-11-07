@@ -25,6 +25,8 @@ One total deadline covers credentials/refresh, connection, catalog listing, auth
 
 Host-side failures reject with `name: "McpAppsError"` and a string `reason`: `unknown_agent`, `unknown_server`, `unknown_tool`, `not_app_visible`, `not_connected`, `needs_reconnect`, `timeout`, `aborted` or `upstream`. Connection refusals include `authorizeUrl` when available. Upstream JSON-RPC failures reject as `upstream`; tool results with `isError: true` resolve normally.
 
+Agent tool calls to a connected OAuth server that cannot be reached (rate limit, network error, timeout, tool no longer listed) return `isError: true` with `reason: "unavailable"` and the sanitized upstream text, without `connected: false` or a connect link; only auth failures return the `not_connected` refusal.
+
 This slice provides MCP facts and operations only. HTML/CSP validation, resource caching, web view hosting, capture/history and relay routes belong to the platform; deploy this extension with or before ALG-544.
 
 ## Install

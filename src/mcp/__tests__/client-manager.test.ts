@@ -77,7 +77,7 @@ describe("McpClientManager", () => {
     await manager.connect();
     await manager.connect();
     expect(factory).toHaveBeenCalledTimes(2);
-    expect(manager.getErrors()).toEqual([{ server: "remote", message }, { server: "remote", message }]);
+    expect(manager.getErrors()).toEqual([{ server: "remote", message, auth: false }, { server: "remote", message, auth: false }]);
     expect(output.mock.calls).toHaveLength(2);
     for (const [line] of output.mock.calls) {
       expect(line.startsWith('{"level"')).toBe(true);
@@ -227,7 +227,7 @@ describe("McpClientManager", () => {
       args: { text: "hi" },
     });
     expect(calls).toEqual(["good:echo"]);
-    expect(manager.getErrors()).toEqual([{ server: "bad", message: "connection refused" }]);
+    expect(manager.getErrors()).toEqual([{ server: "bad", message: "connection refused", auth: false }]);
   });
 
   it("closes a client when tool discovery fails", async () => {
@@ -274,8 +274,8 @@ describe("McpClientManager", () => {
     await manager.connect();
     await expect(manager.listTools()).resolves.toEqual([]);
     expect(manager.getErrors()).toEqual([
-      { server: "broken", message: "discovery failed" },
-      { server: "broken", message: "close failed" },
+      { server: "broken", message: "discovery failed", auth: false },
+      { server: "broken", message: "close failed", auth: false },
     ]);
     await expect(manager.close()).resolves.toBeUndefined();
   });
@@ -338,7 +338,7 @@ describe("McpClientManager", () => {
     await manager.connect();
 
     expect(marked).toEqual(["claap"]);
-    expect(manager.getErrors()).toEqual([{ server: "claap", message: "401 Unauthorized" }]);
+    expect(manager.getErrors()).toEqual([{ server: "claap", message: "401 Unauthorized", auth: true }]);
   });
 
   it("returns the structured not-connected response after a tool 401", async () => {

@@ -127,6 +127,8 @@ export interface McpServerError {
   server: string;
   message: string;
   category?: McpErrorCategory;
+  /** True when the user must (re)connect; false for transport, timeout or rate-limit failures. */
+  auth?: boolean;
 }
 
 export class SdkMcpClientHandle implements McpClientHandle {
@@ -554,7 +556,8 @@ export class McpClientManager {
 
   private recordError(server: string, error: unknown, reason = "transport_failed"): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.errors.push({ server, message, ...(this.options.statusOnly ? { category: error instanceof OAuthConnectionRequired ? error.failure?.category ?? "authentication" : classifyMcpError(error) } : {}) });
+    const auth = error instanceof OAuthConnectionRequired || isUnauthorized(error) || reason === "unrecoverable_auth";
+    this.errors.push({ server, message, auth, ...(this.options.statusOnly ? { category: error instanceof OAuthConnectionRequired ? error.failure?.category ?? "authentication" : classifyMcpError(error) } : {}) });
     const result = this.tokenResults.get(server);
     const scope = result?.scope;
     const oauthReason = error instanceof OAuthConnectionRequired ? error.reason : isUnauthorized(error) ? result?.reason : undefined;

@@ -7,7 +7,7 @@ export interface McpLogEvent extends McpLogContext {
   scope?: "personal" | "team";
 }
 
-function sanitizeMessage(message: string): string {
+export function sanitizeMessage(message: string): string {
   return message
     .replace(/\?[^\s"'<>]*/g, "")
     .replace(/\b(?:authorization|proxy-authorization|cookie|set-cookie)["']?\s*:[^\r\n]*/gi, "[redacted]")

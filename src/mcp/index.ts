@@ -7,7 +7,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { McpClientManager, OAuthConnectionRequired, type McpServerError, type McpClientFactory } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
-import { logMcpUnavailable, type McpLogPath } from "./logging.js";
+import { logMcpUnavailable, sanitizeMessage, type McpLogPath } from "./logging.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
@@ -1286,7 +1286,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         try {
           const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
           if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params, { signal: execution?.signal }));
-          return connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
+          const errors = fresh.getErrors().filter((error) => error.server === target.name);
+          if (errors.some((error) => error.auth)) return connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
+          const upstream = errors[0] ? ` (${sanitizeMessage(errors[0].message)})` : "";
+          return { isError: true, provider: "mcp", server: target.name, reason: "unavailable", message: `${target.name} is temporarily unavailable${upstream}. Retry later or continue without it.` };
         } finally { managers.delete(key); await fresh.close(); }
       },
     }));
