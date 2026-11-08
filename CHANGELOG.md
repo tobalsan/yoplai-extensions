@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Gmail `search_threads` and `list_drafts` read at most 5 threads or drafts at once instead of all of them in parallel, and Gmail reads retry once after a network `fetch failed`, so one dropped connection no longer fails the whole search. Output and order are unchanged; HTTP errors and writes are not retried (ALG-640).
 - MCP OAuth connect/disconnect and server config changes no longer cut tool calls already running for other users with `Connection closed` / `Not connected`. New OAuth calls use the new credentials at once, later tool loads pick up the new credentials and config, and replaced connections close after 15 minutes (ALG-617).
 - Google Drive `sheets_inspect` reads tab header rows with a few sequential Sheets `values:batchGet` requests (up to 50 tabs each) instead of one parallel read per tab, so large workbooks no longer exhaust the Sheets read quota. Output is unchanged (ALG-637).
 - Google Drive saves over 5 MB no longer fail with `invalid content-length header`; the resumable upload lets `fetch` set `Content-Length` instead of duplicating it (ALG-634).

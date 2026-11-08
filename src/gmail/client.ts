@@ -225,7 +225,7 @@ export class GmailClient {
   async listDrafts(params: ListDraftsParams) {
     const query = new URLSearchParams({ maxResults: String(params.pageSize), ...(params.query ? { q: params.query } : {}), ...(params.pageToken ? { pageToken: params.pageToken } : {}) });
     const data = await this.request(`/drafts?${query}`) as { drafts?: Array<{ id?: string }>; nextPageToken?: string };
-    const drafts = await Promise.all((data.drafts ?? []).map(async (item) => this.getDraft(item.id ?? "")));
+    const drafts = await mapLimited(data.drafts ?? [], (item) => this.getDraft(item.id ?? ""));
     return { drafts, nextPageToken: data.nextPageToken ?? null };
   }
   async getThread(params: GetThreadParams) {
@@ -236,7 +236,7 @@ export class GmailClient {
   async searchThreads(params: SearchThreadsParams) {
     const query = new URLSearchParams({ maxResults: String(params.pageSize), ...(params.query ? { q: params.query } : {}), ...(params.pageToken ? { pageToken: params.pageToken } : {}), ...(params.includeTrash ? { includeSpamTrash: "true" } : {}) });
     const data = await this.request(`/threads?${query}`) as { threads?: Array<{ id?: string }>; nextPageToken?: string };
-    const threads = await Promise.all((data.threads ?? []).map(async (item) => this.getThread({ threadId: item.id ?? "", messageFormat: "MINIMAL" })));
+    const threads = await mapLimited(data.threads ?? [], (item) => this.getThread({ threadId: item.id ?? "", messageFormat: "MINIMAL" }));
     return { threads, nextPageToken: data.nextPageToken ?? null };
   }
   async labelThread(params: LabelThreadParams, remove = false) { await this.modify(`/threads/${encodeURIComponent(params.threadId)}/modify`, params.labelIds, remove); return {}; }
@@ -290,7 +290,16 @@ export class GmailClient {
     return this.request(`${path}?uploadType=${metadata ? "multipart" : "media"}`, { method, signal, body, headers: { "Content-Type": metadata ? `multipart/related; boundary="${boundary}"` : "message/rfc822" } }, undefined, "https://gmail.googleapis.com/upload/gmail/v1/users/me");
   }
   private async request(path: string, init: RequestInit = {}, maxResponseBytes?: number, base = GMAIL_API_BASE) {
-    const response = await this.fetchImpl(`${base}${path}`, { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...Object.fromEntries(new Headers(init.headers)) } });
+    const options = { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...Object.fromEntries(new Headers(init.headers)) } };
+    const send = () => this.fetchImpl(`${base}${path}`, options);
+    let response: Response;
+    try { response = await send(); }
+    catch (error) {
+      // Retry a read once when fetch got no HTTP response (undici `TypeError: fetch failed`); aborts and writes are never retried.
+      if ((init.method ?? "GET") !== "GET" || !(error instanceof TypeError) || error.message !== "fetch failed" || init.signal?.aborted) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try { response = await send(); } catch { throw error; }
+    }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       const responseBody = body.slice(0, 500);
@@ -335,6 +344,15 @@ export class GmailRequestError extends Error {
   constructor(readonly status: number, readonly endpoint: string, readonly method: string, readonly responseBody: string, readonly reason?: string) {
     super(`Gmail request failed (HTTP ${status}) ${method} ${endpoint}${responseBody ? `: ${responseBody}` : ""}`);
   }
+}
+
+/** Like Promise.all over `items.map(task)`, with at most `limit` tasks in flight (Gmail per-user burst). */
+async function mapLimited<T, R>(items: T[], task: (item: T) => Promise<R>, limit = 5): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const index = next++; results[index] = await task(items[index]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function executionSignal(context?: ToolExecutionContext) { return context?.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000); }
