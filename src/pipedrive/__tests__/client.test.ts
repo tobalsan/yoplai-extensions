@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipedriveClient, inCloseDateRange, inWonDateRange } from "../client.js";
 import {
   PipedriveAuthError,
+  PipedriveConnectionError,
   PipedriveNotFoundError,
   PipedriveRateLimitError,
   PipedriveValidationError,
@@ -514,6 +515,20 @@ describe("PipedriveClient retry and error mapping", () => {
     await expect(createClient().listDeals({})).rejects.toBeInstanceOf(ErrorType);
   });
 
+  it.each([400, 409, 422])("keeps Pipedrive's own status %s on a validation error", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ error: "bad field" }, status));
+
+    await expect(createClient().listDeals({})).rejects.toMatchObject({ code: "invalid_input", status });
+  });
+
+  it("leaves network failures unmarked (no code, no 4xx status)", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+
+    const error = await createClient().listDeals({}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PipedriveConnectionError);
+    expect(error).toMatchObject({ code: undefined, status: undefined });
+  });
+
   it("throws PipedriveRateLimitError after exhausting retries on 429", async () => {
     vi.spyOn(globalThis, "setTimeout").mockImplementation((fn: TimerHandler) => {
       if (typeof fn === "function") fn();
@@ -535,6 +550,8 @@ describe("PipedriveClient retry and error mapping", () => {
     );
 
     await expect(createClient().listDeals({})).rejects.toMatchObject({
+      name: "PipedriveServerError",
+      code: undefined,
       endpoint: "deals",
       status: 500,
       responseBody: upstreamBody.slice(0, 500),
@@ -1046,6 +1063,17 @@ describe("PipedriveClient.listDeals custom_fields", () => {
     const spy = mockApi();
     await expect(client().listDeals({ custom_fields: ["Nope"] })).rejects.toThrow(/Unknown deal custom field\(s\): Nope/);
     expect(spy.mock.calls.some(([u]) => new URL(String(u)).pathname === "/api/v2/deals")).toBe(false);
+  });
+
+  it("marks an unknown field name as a caller mistake (invalid_input, HTTP 400)", async () => {
+    mockApi();
+    const failure = client().listDeals({ custom_fields: ["Partner Tier"] });
+    await expect(failure).rejects.toBeInstanceOf(PipedriveValidationError);
+    await expect(failure).rejects.toMatchObject({
+      code: "invalid_input",
+      status: 400,
+      message: expect.stringContaining("Unknown deal custom field(s): Partner Tier"),
+    });
   });
 
   it("omits custom_fields when not requested", async () => {
