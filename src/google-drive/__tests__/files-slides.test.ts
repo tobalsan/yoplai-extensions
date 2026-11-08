@@ -14,7 +14,7 @@ async function tools() {
   const hostPath = await mkdtemp(path.join(process.cwd(), ".files-slides-"));
   roots.push(hostPath);
   const mounted = await extension.getAgentTools({ id: "agent", extensions: { googleDrive: { allowWrite: true } } }, {
-    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "fake-token", scopes: [] }),
+    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "fake-token", scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] }),
   });
   return { hostPath, execute(name: string, params: unknown) {
     const tool = mounted.find((item) => item.name === `googleDrive_${name}`)!;

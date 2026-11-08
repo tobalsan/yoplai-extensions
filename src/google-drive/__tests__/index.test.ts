@@ -46,6 +46,10 @@ describe("googleDrive extension", () => {
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/userinfo.email",
       ],
+      minimumScopes: [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ],
     });
     expect(typeof extension.oauth === "function" ? extension.oauth({ global: {}, agent: {}, merged: { allowWrite: true } }) : extension.oauth).toEqual({
       provider: "google",
@@ -54,6 +58,10 @@ describe("googleDrive extension", () => {
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/presentations",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ],
+      minimumScopes: [
+        "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/userinfo.email",
       ],
     });
@@ -163,6 +171,8 @@ describe("googleDrive extension", () => {
 
 
 describe("write mode", () => {
+  const FULL_WRITE_GRANT = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"];
+
   it("defaults to read-only and exposes writes only when enabled", () => {
     const names = (merged: Record<string, unknown>) => extension.createTools({ global: {}, agent: {}, merged }).map((tool) => tool.name);
     expect(names({})).toEqual(["list_files", "search_files", "read_file", "download_file", "sheets_list_spreadsheets", "sheets_inspect", "sheets_read_sheet", "sheets_read_range", "slides_get", "slides_render", "validate"]);
@@ -199,10 +209,53 @@ describe("write mode", () => {
     await expect(tools.find((tool) => tool.name === "create_file")!.execute({ name: "Clients", content: "" })).resolves.toMatchObject({ reason: "insufficient_scope", authorizeUrl: "/authorize?scopes=write" });
   });
 
+  describe("with a write grant made before full Drive access", () => {
+    const READONLY = "https://www.googleapis.com/auth/drive.readonly";
+    const EMAIL = "https://www.googleapis.com/auth/userinfo.email";
+    const SHEETS = "https://www.googleapis.com/auth/spreadsheets";
+    const SLIDES = "https://www.googleapis.com/auth/presentations";
+    const writeTools = (scopes: string[]) => extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
+      connected: true, provider: "google", accessToken: "token", scopes,
+    } });
+    const oldGrant = [READONLY, SHEETS, SLIDES, "https://www.googleapis.com/auth/drive.file", EMAIL];
+    const driveApi = () => {
+      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => Response.json(init?.method === "POST"
+        ? { id: "folder-1", name: "Clients", mimeType: "application/vnd.google-apps.folder" }
+        : { files: [{ id: "file-1", name: "Plan", mimeType: "text/plain" }] }));
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    };
+
+    it("keeps read tools working", async () => {
+      driveApi();
+      const result = await writeTools(oldGrant).find((tool) => tool.name === "list_files")!.execute({});
+      expect(result).toMatchObject({ files: [{ id: "file-1", name: "Plan" }] });
+    });
+
+    it("refuses write tools until Google is reconnected", async () => {
+      const fetchMock = driveApi();
+      const result = await writeTools(oldGrant).find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" });
+      expect(result).toEqual({
+        connected: false,
+        provider: "google",
+        reason: "insufficient_scope",
+        isError: true,
+        message: "Google Drive writing needs more Google permissions. Reconnect Google to grant them; reading still works.",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("runs write tools once the full write scopes are granted", async () => {
+      driveApi();
+      const result = await writeTools([READONLY, "https://www.googleapis.com/auth/drive", SHEETS, SLIDES, EMAIL]).find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" });
+      expect(result).toMatchObject({ id: "folder-1", name: "Clients" });
+    });
+  });
+
   it("turns API OAuth scope refusals into insufficient_scope", async () => {
     stubDriveFailure(403, "insufficientPermissions");
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
-      connected: true, provider: "google", accessToken: "token", scopes: [],
+      connected: true, provider: "google", accessToken: "token", scopes: FULL_WRITE_GRANT,
     } });
     await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toMatchObject({ reason: "insufficient_scope" });
   });
@@ -215,7 +268,7 @@ describe("write mode", () => {
   ])("maps API status %s (%s) to %s", async (status, body, _reason, expected) => {
     stubDriveFailure(status, body);
     const tools = extension.createTools({ global: {}, agent: {}, merged: { allowWrite: true }, oauth: {
-      connected: true, provider: "google", accessToken: "token", scopes: [],
+      connected: true, provider: "google", accessToken: "token", scopes: FULL_WRITE_GRANT,
     } });
     await expect(tools.find((tool) => tool.name === "create_folder")!.execute({ name: "Clients" })).resolves.toEqual(expected);
   });

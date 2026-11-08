@@ -19,7 +19,7 @@ async function tools(allowWrite = false) {
   roots.push(hostPath);
   const mounted = await extension.getAgentTools({ id: "shared-agent", extensions: { googleDrive: { allowWrite } } }, {
     config: {},
-    resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: [] }),
+    resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] }),
   });
   return { hostPath, context: { agentId: "shared-agent", sessionId: "conversation-a", userId: "alice", conversationFiles: { hostPath, runtimePath: "/workspace/files" } },
     execute: (name: string, params: unknown, context?: object) => {

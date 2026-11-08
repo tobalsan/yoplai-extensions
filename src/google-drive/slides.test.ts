@@ -13,7 +13,7 @@ afterEach(async () => {
 async function tools(allowWrite = true) {
   const hostPath = await mkdtemp(path.join(tmpdir(), "drive-slides-")); roots.push(hostPath);
   const mounted = await extension.getAgentTools({ id: "agent", extensions: { googleDrive: { allowWrite } } }, {
-    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: [] }),
+    config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "test-token", scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] }),
   });
   const context = { agentId: "agent", conversationFiles: { hostPath, runtimePath: "/workspace/files" } };
   return { hostPath, mounted, execute(name: string, params: unknown) {
