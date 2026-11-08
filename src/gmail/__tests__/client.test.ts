@@ -37,6 +37,85 @@ describe("GmailClient", () => {
     expect(String(fetchImpl.mock.calls[0][0])).toContain("includeSpamTrash=true");
   });
 
+  it("fetches at most 5 search threads at once and keeps Gmail's list order", async () => {
+    const ids = ["t01", "t02", "t03", "t04", "t05", "t06", "t07", "t08", "t09", "t10", "t11", "t12"];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/threads")) return response({ threads: ids.map((id) => ({ id })) });
+      const id = url.pathname.split("/").pop()!;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Earlier threads answer later, so completion order differs from list order.
+      await new Promise((resolve) => setTimeout(resolve, 2 * (ids.length - ids.indexOf(id))));
+      inFlight--;
+      return response({ id, messages: [] });
+    });
+    const result = await new GmailClient("token", fetchImpl).searchThreads({ pageSize: 20 });
+    expect(result.threads.map((thread) => thread.id)).toEqual(["t01", "t02", "t03", "t04", "t05", "t06", "t07", "t08", "t09", "t10", "t11", "t12"]);
+    expect(maxInFlight).toBe(5);
+  });
+
+  it("retries a thread read once after a network failure so the search still succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(response({ threads: [{ id: "t1" }] }))
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(response({ id: "t1", messages: [{ id: "m1", snippet: "hello" }] }));
+      const search = new GmailClient("token", fetchImpl).searchThreads({ pageSize: 20 });
+      await vi.runAllTimersAsync();
+      await expect(search).resolves.toMatchObject({ threads: [{ id: "t1", messages: [{ id: "m1", snippet: "hello" }] }] });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(String(fetchImpl.mock.calls[2][0])).toContain("/threads/t1?format=full");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("surfaces the first network failure when the single read retry also fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = new TypeError("fetch failed", { cause: new Error("first-cause") });
+      const fetchImpl = vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(new TypeError("fetch failed", { cause: new Error("second-cause") }));
+      const outcome = expect(new GmailClient("token", fetchImpl).getThread({ threadId: "t1" })).rejects.toBe(first);
+      await vi.runAllTimersAsync();
+      await outcome;
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([
+    ["DELETE", (client: GmailClient) => client.deleteDraft({ draftId: "d1" })],
+    ["POST", (client: GmailClient) => client.labelThread({ threadId: "t1", labelIds: ["LABEL"] })],
+    ["POST", (client: GmailClient) => client.sendDraft({ draftId: "d1" })],
+  ])("never retries a %s write after a network failure", async (_method, write) => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    await expect(write(new GmailClient("token", fetchImpl))).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never retries a PUT draft upload after a network failure", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response({ id: "d1", message: { payload: { headers: [{ name: "To", value: "a@example.com" }] } } }))
+      .mockRejectedValue(new TypeError("fetch failed"));
+    await expect(new GmailClient("token", fetchImpl).updateDraft({ draftId: "d1", subject: "New" })).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1][1].method).toBe("PUT");
+  });
+
+  it("does not retry a read when fetch rejects for a reason other than a network failure", async () => {
+    const invalid = new TypeError("Failed to parse URL from bad input");
+    const fetchImpl = vi.fn().mockRejectedValue(invalid);
+    await expect(new GmailClient("token", fetchImpl).getThread({ threadId: "t1" })).rejects.toBe(invalid);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([429, 500])("surfaces an HTTP %i on a read without retrying", async (status) => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ error: { status: "UNAVAILABLE" } }, status));
+    await expect(new GmailClient("token", fetchImpl).getThread({ threadId: "t1" })).rejects.toMatchObject({ status, method: "GET" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("includes a truncated upstream response body and structured request details", async () => {
     const body = JSON.stringify({ error: { errors: [{ reason: "rateLimitExceeded" }] }, padding: "x".repeat(500) });
     const client = new GmailClient("super-secret", vi.fn().mockResolvedValue(new Response(body, { status: 403 })));
@@ -64,6 +143,25 @@ describe("GmailClient", () => {
     expect(listUrl.pathname).toMatch(/\/drafts$/);
     expect(listUrl.searchParams.get("q")).toBe("subject:proposal");
     expect(String(fetchImpl.mock.calls[1][0])).toContain("/drafts/draft-1?format=full");
+  });
+
+  it("reads at most 5 drafts at once when listing without a query and keeps Gmail's list order", async () => {
+    const ids = ["d01", "d02", "d03", "d04", "d05", "d06", "d07", "d08", "d09", "d10", "d11", "d12"];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/drafts")) return response({ drafts: ids.map((id) => ({ id })) });
+      const id = url.pathname.split("/").pop()!;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 2 * (ids.length - ids.indexOf(id))));
+      inFlight--;
+      return response({ id, message: { threadId: `thread-${id}`, payload: { headers: [] } } });
+    });
+    const result = await new GmailClient("token", fetchImpl).listDrafts({ pageSize: 20 });
+    expect(result.drafts.map((draft) => draft.id)).toEqual(["d01", "d02", "d03", "d04", "d05", "d06", "d07", "d08", "d09", "d10", "d11", "d12"]);
+    expect(maxInFlight).toBe(5);
   });
 
   it("lists only user labels and paginates them", async () => {
