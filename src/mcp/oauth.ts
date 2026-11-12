@@ -149,6 +149,14 @@ export class McpOAuthStore {
     } catch { return undefined; }
   }
 
+  /** MCP server URL the grant is bound to (RFC 8707 `resource`); `resolve()` drops grants issued for another URL. */
+  private resource(agent: string, server: string): URL | undefined {
+    try {
+      const url = this.identify?.(agent, server)?.url;
+      return url ? new URL(url) : undefined;
+    } catch { return undefined; }
+  }
+
   private key(agent: string, server: string, scope: CredentialScope, identity?: McpServerIdentity): CredentialKey {
     const shared = scope.type === "personal" ? this.sharedIdentity(agent, server, identity) : undefined;
     return shared ? { agentId: SHARED_AGENT, integration: `mcp-url:${shared}`, scope } : this.legacyKey(agent, server, scope);
@@ -435,16 +443,22 @@ export class McpOAuthStore {
       await reconnect();
       return { reason: "needs_reconnect", scope: scope.type };
     }
+    let refused: string | undefined;
     try {
-      const fetchFn: typeof fetch = (input, init) => {
+      const fetchFn: typeof fetch = async (input, init) => {
+        refused = undefined;
         statusSignal?.throwIfAborted();
         const signal = statusSignal && init?.signal ? AbortSignal.any([statusSignal, init.signal]) : statusSignal ?? init?.signal;
-        return fetch(input, { ...init, signal });
+        const response = await fetch(input, { ...init, signal });
+        // Rebuild with the current global class: the SDK only reads error bodies that pass `instanceof Response`.
+        const body = response.body ? await response.arrayBuffer() : null;
+        if (!response.ok) refused = `HTTP ${response.status}: ${body ? new TextDecoder().decode(body) : ""}`;
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       };
       const refreshing = (async () => {
         const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl, { fetchFn });
         statusSignal?.throwIfAborted();
-        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token!, fetchFn });
+        return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token!, resource: this.resource(agent, server), fetchFn });
       })();
       const tokens = await (totalDeadline ? refreshing : withTimeout(refreshing, 10_000, "OAuth refresh timed out"));
       const latest = await unchanged();
@@ -453,7 +467,7 @@ export class McpOAuthStore {
       await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
       return { token: tokens.access_token, scope: scope.type };
     } catch (error) {
-      logMcpUnavailable("error", error instanceof Error ? error.message : String(error), {
+      logMcpUnavailable("error", refused ?? (error instanceof Error ? error.message : String(error)), {
         agentId: agent, userId: requesterUserId, path: logPath, server, reason: "refresh_failed", scope: scope.type,
       });
       if (statusSignal?.aborted) return expired();
