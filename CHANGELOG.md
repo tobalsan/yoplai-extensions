@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- MCP OAuth token refresh sends the RFC 8707 `resource` (the MCP server URL), as the code exchange already did, so servers that bind grants to it (e.g. Remote) can accept the refresh. A refused refresh now logs `HTTP <status>: <body>` instead of `[object Response]` (ALG-689, ALG-681).
 - Pipedrive input mistakes (e.g. an unknown deal field name in `list_deals`) now carry `code: "invalid_input"` and status 400, so the gateway logs them at warn and answers HTTP 400 instead of error/500. Pipedrive's own 400/409/422 keep their status; 5xx, timeouts and network errors are unchanged (ALG-659).
 - Gmail `search_threads` and `list_drafts` read at most 5 threads or drafts at once instead of all of them in parallel, and Gmail reads retry once after a network `fetch failed`, so one dropped connection no longer fails the whole search. Output and order are unchanged; HTTP errors and writes are not retried (ALG-640).
 - MCP OAuth connect/disconnect and server config changes no longer cut tool calls already running for other users with `Connection closed` / `Not connected`. New OAuth calls use the new credentials at once, later tool loads pick up the new credentials and config, and replaced connections close after 15 minutes (ALG-617).

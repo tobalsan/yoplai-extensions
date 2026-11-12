@@ -56,6 +56,52 @@ describe("McpOAuthStore", () => {
     expect(JSON.parse(output.mock.calls[1]![0])).toMatchObject({ level: "error", reason: "refresh_failed", path: "status" });
   });
 
+  it("refreshes an expired grant for the MCP server it was issued for (RFC 8707 resource) and stores the new tokens", async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-refresh-resource-")); dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://localhost/callback", hostCredentials, () => ({ url: "https://mcp.remote.example/mcp" }));
+    await store.write("henry", "remote", {
+      client: { client_id: "https://yoplai.example/oauth/client-metadata.json", redirect_uris: ["http://localhost/callback"], token_endpoint_auth_method: "none" }, clientSource: "cimd",
+      tokens: { access_token: "expired", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-01-01T00:00:00Z", expiresAt: "2020-01-01T00:00:00Z", authorizationServerUrl: "https://auth.remote.example", state: "connected",
+    });
+    const tokenBodies: URLSearchParams[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes(".well-known")) return Response.json({ issuer: "https://auth.remote.example", authorization_endpoint: "https://auth.remote.example/authorize", token_endpoint: "https://auth.remote.example/token", response_types_supported: ["code"] });
+      tokenBodies.push(new URLSearchParams(String(init?.body)));
+      return Response.json({ access_token: "fresh", refresh_token: "refresh-2", token_type: "Bearer", expires_in: 3600 });
+    }));
+    await expect(store.accessToken("henry", "remote", 60_000, "phuong")).resolves.toBe("fresh");
+    expect(tokenBodies).toHaveLength(1);
+    expect(tokenBodies[0]!.get("grant_type")).toBe("refresh_token");
+    expect(tokenBodies[0]!.get("refresh_token")).toBe("refresh-1");
+    expect(tokenBodies[0]!.get("resource")).toBe("https://mcp.remote.example/mcp");
+    expect(await store.read("henry", "remote")).toMatchObject({ state: "connected", tokens: { access_token: "fresh", refresh_token: "refresh-2" } });
+  });
+
+  it("logs the token endpoint's status and body when a refresh is refused, even after the global Response class was swapped", async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-refresh-refused-")); dirs.push(dataDir);
+    const store = new McpOAuthStore(dataDir, "http://localhost/callback", hostCredentials, () => ({ url: "https://mcp.remote.example/mcp" }));
+    await store.write("henry", "remote", {
+      client: { client_id: "client", redirect_uris: [] },
+      tokens: { access_token: "expired", refresh_token: "refresh-1", token_type: "Bearer" },
+      connectedAt: "2026-01-01T00:00:00Z", expiresAt: "2020-01-01T00:00:00Z", authorizationServerUrl: "https://auth.remote.example", state: "connected",
+    });
+    // Prod: undici.install() replaces globalThis.Response after fetch was captured, so fetch results fail `instanceof Response`.
+    const FetchResponse = Response;
+    vi.stubGlobal("Response", class InstalledResponse extends FetchResponse {});
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => String(url).includes(".well-known")
+      ? FetchResponse.json({ issuer: "https://auth.remote.example", authorization_endpoint: "https://auth.remote.example/authorize", token_endpoint: "https://auth.remote.example/token", response_types_supported: ["code"] })
+      : new FetchResponse('{"error":"invalid_grant","error_description":"Refresh token expired"}', { status: 400, headers: { "content-type": "application/json" } })));
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(store.accessToken("henry", "remote", 60_000, "phuong")).resolves.toBeUndefined();
+    expect(output.mock.calls).toHaveLength(1);
+    expect(JSON.parse(output.mock.calls[0]![0])).toEqual({
+      level: "error", msg: '[mcp] server "remote" unavailable: HTTP 400: {"error":"invalid_grant","error_description":"Refresh token expired"}',
+      server: "remote", agentId: "henry", userId: "phuong", path: "tools", reason: "refresh_failed", scope: "team",
+    });
+    expect((await store.read("henry", "remote"))?.state).toBe("needs_reconnect");
+  });
+
   it("persists connections in the shared host store and survives a new wrapper", async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-oauth-"));
     dirs.push(dataDir);
