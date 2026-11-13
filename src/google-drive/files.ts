@@ -3,7 +3,14 @@ import path from "node:path";
 import { BINARY_MIME, safeFilename, readConversationFile as readLocalConversationFile } from "../conversation-files.js";
 import type { ToolExecutionContext } from "../tool-extension.js";
 
-export type DriveRequest = (url: string, init?: RequestInit, expectedStatuses?: readonly number[]) => Promise<Response>;
+/** `timeout: false` drops the default 30 s per-request bound; `signal` alone then bounds the request. */
+export type DriveRequestInit = RequestInit & { timeout?: false };
+export type DriveRequest = (url: string, init?: DriveRequestInit, expectedStatuses?: readonly number[]) => Promise<Response>;
+
+/** File bytes (export, alt=media) follow the tool deadline; without one, 300 s like the gateway default. */
+export function fileBytesSignal(context: ToolExecutionContext | undefined): AbortSignal {
+  return context?.signal ?? AbortSignal.timeout(300_000);
+}
 
 /** Tool error with an HTTP status, so the gateway does not report it as a 500. */
 class DriveFileError extends Error {
@@ -18,13 +25,12 @@ const OFFICE: Record<string, { extension: string; mimeType: string }> = {
 
 export async function downloadFile(fileId: string, context: ToolExecutionContext | undefined, request: DriveRequest, format: "office" | "pdf" = "office") {
   if (!context?.conversationFiles) throw new Error("A conversation files folder is required to download Drive files.");
-  const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
-  signal.throwIfAborted();
+  context.signal?.throwIfAborted();
   const folder = await realpath(context.conversationFiles.hostPath);
   const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
   url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("fields", "id,name,mimeType,capabilities(canDownload)");
-  const metadata = await (await request(url.toString(), { signal })).json() as { name: string; mimeType: string; capabilities?: { canDownload?: boolean } };
+  const metadata = await (await request(url.toString(), { signal: context.signal })).json() as { name: string; mimeType: string; capabilities?: { canDownload?: boolean } };
   const native = OFFICE[metadata.mimeType];
   const office = native && format === "pdf" ? { extension: "pdf", mimeType: "application/pdf" } : native;
   if (format === "pdf" && !office) throw new DriveFileError("PDF export requires a native Google Doc, Sheet or Slides deck.", 400);
@@ -36,7 +42,8 @@ export async function downloadFile(fileId: string, context: ToolExecutionContext
     url.searchParams.delete("supportsAllDrives");
     url.searchParams.set("mimeType", office.mimeType);
   } else url.searchParams.set("alt", "media");
-  const response = await request(url.toString(), { signal });
+  const signal = fileBytesSignal(context);
+  const response = await request(url.toString(), { signal, timeout: false });
   const name = safeFilename(metadata.name + (office && !metadata.name.toLowerCase().endsWith(`.${office.extension}`) ? `.${office.extension}` : ""));
   const filename = `${crypto.randomUUID()}-${name}`;
   const destination = path.join(folder, filename);

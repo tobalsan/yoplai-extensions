@@ -3,7 +3,7 @@ import { extractPptxText, readPptxResponse } from "./pptx-text.js";
 import { setTimeout as delayRetry } from "node:timers/promises";
 import * as XLSX from "xlsx";
 import type { ToolExecutionContext } from "../tool-extension.js";
-import { downloadFile, saveFile, type SaveFileParams } from "./files.js";
+import { downloadFile, fileBytesSignal, saveFile, type DriveRequestInit, type SaveFileParams } from "./files.js";
 
 import {
   DRIVE_ABOUT_URL,
@@ -180,7 +180,7 @@ export class GoogleDriveClient {
     return this.#queryFiles(params.query.trim(), params.pageSize, params.pageToken);
   }
 
-  async readFile(params: ReadFileParams): Promise<{
+  async readFile(params: ReadFileParams, context?: ToolExecutionContext): Promise<{
     fileId: string;
     name: string;
     mimeType: string | null;
@@ -188,7 +188,7 @@ export class GoogleDriveClient {
     bytes: number;
     exported: boolean;
   }> {
-    const metadata = await this.#getFileMetadata(params.fileId);
+    const metadata = await this.#getFileMetadata(params.fileId, context?.signal);
     const exportMime = metadata.mimeType
       ? GOOGLE_WORKSPACE_EXPORT_MIME[metadata.mimeType]
       : undefined;
@@ -196,10 +196,11 @@ export class GoogleDriveClient {
     const url = exportMime
       ? driveFileExportUrl(params.fileId, exportMime)
       : driveFileMediaUrl(params.fileId);
-    const response = await this.#request(url);
+    const signal = fileBytesSignal(context);
+    const response = await this.#request(url, { signal, timeout: false });
     const effectiveMime = exportMime ?? metadata.mimeType ?? null;
     const pptx = looksLikePptx(metadata.name, effectiveMime);
-    const buffer = pptx ? await readPptxResponse(response) : Buffer.from(await response.arrayBuffer());
+    const buffer = pptx ? await readPptxResponse(response, signal) : Buffer.from(await response.arrayBuffer());
     const text = await this.#extractText(buffer, metadata.name, effectiveMime);
 
     return {
@@ -435,14 +436,14 @@ export class GoogleDriveClient {
     return { files, nextPageToken: data.nextPageToken ?? null };
   }
 
-  async #getFileMetadata(fileId: string): Promise<{
+  async #getFileMetadata(fileId: string, signal?: AbortSignal): Promise<{
     id: string;
     name: string;
     mimeType: string | null;
   }> {
     const url = new URL(`${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}`);
     url.searchParams.set("fields", "id,name,mimeType");
-    const response = await this.#request(url.toString());
+    const response = await this.#request(url.toString(), { signal });
     const data = (await response.json().catch(() => ({}))) as {
       id?: string;
       name?: string;
@@ -497,9 +498,10 @@ export class GoogleDriveClient {
     return normalizeText(buffer.toString("utf8"));
   }
 
-  async #request(url: string, init: RequestInit = {}, expectedStatuses: readonly number[] = []): Promise<Response> {
+  async #request(url: string, { timeout, ...init }: DriveRequestInit = {}, expectedStatuses: readonly number[] = []): Promise<Response> {
     for (let attempt = 0; ; attempt += 1) {
-      const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+      const signal = timeout === false && init.signal ? init.signal
+        : init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
       signal.throwIfAborted();
       const response = await this.#fetch(url, {
         ...init,
