@@ -7,8 +7,8 @@ const ENTRY_LIMIT = 20_000_000;
 const TOTAL_LIMIT = 100_000_000;
 type XmlNode = { [key: string]: XmlNode[] | string | Record<string, string> };
 const xml = new XMLParser({ preserveOrder: true, ignoreAttributes: false, parseTagValue: false, processEntities: true });
-export async function readPptxResponse(response: Response): Promise<Buffer> {
-  const signal = AbortSignal.timeout(30_000);
+/** Reads the PPTX body until `signal` (the caller's file-bytes bound) aborts. */
+export async function readPptxResponse(response: Response, signal: AbortSignal): Promise<Buffer> {
   const reader = response.body?.getReader();
   if (!reader) return Buffer.alloc(0);
   const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
@@ -16,6 +16,7 @@ export async function readPptxResponse(response: Response): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   try {
+    signal.throwIfAborted();
     for (;;) {
       const chunk = await reader.read();
       signal.throwIfAborted();

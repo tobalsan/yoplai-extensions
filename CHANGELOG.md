@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Google Drive `download_file` and `read_file` wait for file bytes (export and `alt=media`, including the PPTX body) until the tool deadline (the agent's `timeout`, else 300 s) instead of a fixed 30 s, so a slow Google export can finish; cancelling the run aborts it. `read_file` now follows the tool deadline and run cancel. Without a tool deadline, file bytes stop at 300 s. Metadata and every other Google request keep 30 s (ALG-696).
 - MCP OAuth token refresh sends the RFC 8707 `resource` (the MCP server URL), as the code exchange already did, so servers that bind grants to it (e.g. Remote) can accept the refresh. A refused refresh now logs `HTTP <status>: <body>` instead of `[object Response]` (ALG-689, ALG-681).
 - Pipedrive input mistakes (e.g. an unknown deal field name in `list_deals`) now carry `code: "invalid_input"` and status 400, so the gateway logs them at warn and answers HTTP 400 instead of error/500. Pipedrive's own 400/409/422 keep their status; 5xx, timeouts and network errors are unchanged (ALG-659).
 - Gmail `search_threads` and `list_drafts` read at most 5 threads or drafts at once instead of all of them in parallel, and Gmail reads retry once after a network `fetch failed`, so one dropped connection no longer fails the whole search. Output and order are unchanged; HTTP errors and writes are not retried (ALG-640).

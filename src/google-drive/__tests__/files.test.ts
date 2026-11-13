@@ -240,7 +240,8 @@ it("rejects FIFOs without waiting for a writer", async () => {
 it("times out a stalled media stream, cleans it up, and permits the next download", async () => {
   const run = await tools();
   const timeout = AbortSignal.timeout.bind(AbortSignal);
-  vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(30));
+  // Only the 300 s file-bytes bound is shortened; a 30 s bound on the stream would stall this test.
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => timeout(milliseconds === 300_000 ? 30 : milliseconds));
   let pulls = 0;
   google(metadata(), new Response(new ReadableStream({ pull(stream) {
     if (pulls++ === 0) stream.enqueue(new Uint8Array([1, 2, 3]));
@@ -310,4 +311,139 @@ it.each(["runtime", "host", "relative"])("saves a nested %s source on Linux and 
     await expect(save).rejects.toMatchObject({ message: expect.stringMatching(/directly|root/i), status: 400 });
     expect(fetcher).not.toHaveBeenCalled();
   }
+});
+
+/** Fake-timer AbortSignal.timeout, so tests control when 30 s and 300 s bounds fire. */
+function fakeTimeouts() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), milliseconds);
+    return controller.signal;
+  });
+}
+/** Google answers `url`-matching requests after `delay` ms, unless the request signal aborts first. */
+function slowGoogle(isSlow: (url: URL) => boolean, delay: number, slow: () => Response, fast: () => Response) {
+  let started!: () => void;
+  const slowStarted = new Promise<void>((resolve) => { started = resolve; });
+  vi.stubGlobal("fetch", vi.fn((input: string, init: RequestInit) => {
+    if (!isSlow(new URL(input))) return Promise.resolve(fast());
+    started();
+    return new Promise<Response>((resolve, reject) => {
+      setTimeout(() => resolve(slow()), delay);
+      init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+    });
+  }));
+  return slowStarted;
+}
+const isExport = (url: URL) => url.pathname.endsWith("/export");
+
+it("waits past 30 s for a slow export when the tool deadline allows it", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const deadline = new AbortController();
+  const started = slowGoogle(isExport, 45_000, () => new Response("Office bytes"), () => metadata("application/vnd.google-apps.document", "Slow brief"));
+  const pending = run.execute("download_file", { fileId: "file-1" }, { ...run.context, signal: deadline.signal });
+  const outcome = pending.then(() => "resolved", () => "rejected");
+  await started;
+  await vi.advanceTimersByTimeAsync(45_000);
+  vi.useRealTimers();
+  expect(await outcome).toBe("resolved");
+  const result = await pending as { path: string };
+  expect(result).toMatchObject({ name: "Slow brief.docx", bytes: 12 });
+  expect(await readFile(path.join(run.hostPath, path.basename(result.path)), "utf8")).toBe("Office bytes");
+});
+
+it("bounds a hung export at 300 s when no tool deadline exists, leaving no file", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const started = slowGoogle(isExport, 3_600_000, () => new Response("never"), () => metadata("application/vnd.google-apps.document", "Hung brief"));
+  const pending = run.execute("download_file", { fileId: "file-1" });
+  let outcome: unknown = "pending";
+  pending.then(() => { outcome = "resolved"; }, (error: Error) => { outcome = error.name; });
+  await started;
+  await vi.advanceTimersByTimeAsync(299_000);
+  expect(outcome).toBe("pending");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(outcome).toBe("TimeoutError");
+  vi.useRealTimers();
+  expect(await readdir(run.hostPath)).toEqual([]);
+});
+
+it("still fails a hung metadata lookup at 30 s under a longer tool deadline", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const deadline = new AbortController();
+  const started = slowGoogle((url) => !isExport(url), 3_600_000, () => metadata(), () => new Response("unused"));
+  const pending = run.execute("download_file", { fileId: "file-1" }, { ...run.context, signal: deadline.signal });
+  let outcome: unknown = "pending";
+  pending.then(() => { outcome = "resolved"; }, (error: Error) => { outcome = error.name; });
+  await started;
+  await vi.advanceTimersByTimeAsync(29_000);
+  expect(outcome).toBe("pending");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(outcome).toBe("TimeoutError");
+});
+
+it("aborts an in-flight export request when the run is cancelled, leaving no file", async () => {
+  const run = await tools();
+  const cancel = new AbortController();
+  const started = slowGoogle(isExport, 3_600_000, () => new Response("never"), () => metadata("application/vnd.google-apps.document", "Cancelled brief"));
+  const pending = run.execute("download_file", { fileId: "file-1" }, { ...run.context, signal: cancel.signal });
+  await started;
+  cancel.abort();
+  await expect(pending).rejects.toThrow(/abort/i);
+  expect(await readdir(run.hostPath)).toEqual([]);
+});
+
+it("reads a native Doc whose export arrives after 30 s when the tool deadline allows it", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const deadline = new AbortController();
+  const started = slowGoogle(isExport, 45_000, () => new Response("Slow but complete text"), () => metadata("application/vnd.google-apps.document", "Slow brief"));
+  const pending = run.execute("read_file", { fileId: "file-1" }, { ...run.context, signal: deadline.signal });
+  const outcome = pending.then(() => "resolved", () => "rejected");
+  await started;
+  await vi.advanceTimersByTimeAsync(45_000);
+  expect(await outcome).toBe("resolved");
+  await expect(pending).resolves.toMatchObject({ name: "Slow brief", text: "Slow but complete text", exported: true });
+});
+
+it("aborts an in-flight read export when the run is cancelled", async () => {
+  const run = await tools();
+  const cancel = new AbortController();
+  const started = slowGoogle(isExport, 3_600_000, () => new Response("never"), () => metadata("application/vnd.google-apps.document", "Cancelled brief"));
+  const pending = run.execute("read_file", { fileId: "file-1" }, { ...run.context, signal: cancel.signal });
+  await started;
+  cancel.abort();
+  await expect(pending).rejects.toThrow(/abort/i);
+});
+
+it("still fails a hung read metadata lookup at 30 s under a longer tool deadline", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const deadline = new AbortController();
+  const started = slowGoogle((url) => !isExport(url), 3_600_000, () => metadata(), () => new Response("unused"));
+  const pending = run.execute("read_file", { fileId: "file-1" }, { ...run.context, signal: deadline.signal });
+  let outcome: unknown = "pending";
+  pending.then(() => { outcome = "resolved"; }, (error: Error) => { outcome = error.name; });
+  await started;
+  await vi.advanceTimersByTimeAsync(29_000);
+  expect(outcome).toBe("pending");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(outcome).toBe("TimeoutError");
+});
+
+it("bounds a hung read export at 300 s when no tool deadline exists", async () => {
+  const run = await tools();
+  fakeTimeouts();
+  const started = slowGoogle(isExport, 3_600_000, () => new Response("never"), () => metadata("application/vnd.google-apps.document", "Hung brief"));
+  const pending = run.execute("read_file", { fileId: "file-1" });
+  let outcome: unknown = "pending";
+  pending.then(() => { outcome = "resolved"; }, (error: Error) => { outcome = error.name; });
+  await started;
+  await vi.advanceTimersByTimeAsync(299_000);
+  expect(outcome).toBe("pending");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(outcome).toBe("TimeoutError");
 });

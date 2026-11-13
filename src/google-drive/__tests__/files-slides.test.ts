@@ -8,6 +8,7 @@ const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 async function tools() {
@@ -16,9 +17,9 @@ async function tools() {
   const mounted = await extension.getAgentTools({ id: "agent", extensions: { googleDrive: { allowWrite: true } } }, {
     config: {}, resolveOAuth: async () => ({ connected: true, provider: "google", accessToken: "fake-token", scopes: ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/presentations"] }),
   });
-  return { hostPath, execute(name: string, params: unknown) {
+  return { hostPath, execute(name: string, params: unknown, signal?: AbortSignal) {
     const tool = mounted.find((item) => item.name === `googleDrive_${name}`)!;
-    return tool.execute(params, { agentId: "agent", conversationFiles: { hostPath, runtimePath: "/workspace/files" } });
+    return tool.execute(params, { agentId: "agent", conversationFiles: { hostPath, runtimePath: "/workspace/files" }, ...(signal ? { signal } : {}) });
   } };
 }
 it.each([
@@ -141,7 +142,8 @@ it("caps total inflated PPTX XML at 100 MB across otherwise valid entries", asyn
 it("stops a stalled PPTX body at timeout and permits the next read", async () => {
   const run = await tools();
   const timeout = AbortSignal.timeout.bind(AbortSignal);
-  vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(30));
+  // Only the 300 s file-bytes bound is shortened; a 30 s bound on the body would stall this test.
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => timeout(milliseconds === 300_000 ? 30 : milliseconds));
   let canceled = false;
   vi.stubGlobal("fetch", vi.fn(async (input: string) => new URL(input).searchParams.get("alt") === "media"
     ? new Response(new ReadableStream({ pull() { return new Promise(() => {}); }, cancel() { canceled = true; } }))
@@ -171,4 +173,52 @@ it("reads slide and notes text through package-absolute PPTX relationships", asy
     ["ppt/notesSlides/notesSlide1.xml", '<p:notes xmlns:p="p" xmlns:a="a"><p:sp><a:p><a:r><a:t>Visible notes</a:t></a:r></a:p></p:sp></p:notes>'],
   ]));
   await expect(run.execute("read_file", { fileId: "pptx" })).resolves.toMatchObject({ text: "## Slide 1\nVisible title\n\nNotes:\nVisible notes" });
+});
+
+it("reads a PPTX body that finishes after 30 s when the tool deadline allows it", async () => {
+  const run = await tools();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), milliseconds);
+    return controller.signal;
+  });
+  const deck = zip([
+    ["ppt/presentation.xml", '<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst><p:sldId id="1" r:id="first"/></p:sldIdLst></p:presentation>'],
+    ["ppt/_rels/presentation.xml.rels", '<Relationships><Relationship Id="first" Type="x/slide" Target="slides/slide1.xml"/></Relationships>'],
+    ["ppt/slides/slide1.xml", '<p:sld xmlns:p="p" xmlns:a="a"><p:sp><a:p><a:r><a:t>Slow slide</a:t></a:r></a:p></p:sp></p:sld>'],
+  ]);
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bodyStarted = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => new URL(input).searchParams.get("alt") === "media"
+    ? new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array(deck.subarray(0, 10)));
+      bodyStarted();
+      setTimeout(() => { controller.enqueue(new Uint8Array(deck.subarray(10))); controller.close(); }, 45_000);
+    } }))
+    : Response.json({ name: "slow.pptx", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" })));
+  const deadline = new AbortController();
+  const pending = run.execute("read_file", { fileId: "slow" }, deadline.signal);
+  const outcome = pending.then(() => "resolved", () => "rejected");
+  await started;
+  await vi.advanceTimersByTimeAsync(45_000);
+  vi.useRealTimers();
+  expect(await outcome).toBe("resolved");
+  await expect(pending).resolves.toMatchObject({ text: "## Slide 1\nSlow slide" });
+});
+
+it("cancels a stalled PPTX body when the run is cancelled", async () => {
+  const run = await tools();
+  let bodyStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bodyStarted = resolve; });
+  let canceled = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => new URL(input).searchParams.get("alt") === "media"
+    ? new Response(new ReadableStream({ pull() { bodyStarted(); return new Promise(() => {}); }, cancel() { canceled = true; } }))
+    : Response.json({ name: "stalled.pptx", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" })));
+  const cancel = new AbortController();
+  const pending = run.execute("read_file", { fileId: "stalled" }, cancel.signal);
+  await started;
+  cancel.abort();
+  await expect(pending).rejects.toThrow(/abort/i);
+  expect(canceled).toBe(true);
 });
