@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { defineToolExtension } from "../tool-extension.js";
+import { defineToolExtension, type ToolExecutionContext } from "../tool-extension.js";
 import { googleOAuthProvider } from "../google-oauth-provider.js";
 import { CalendarClient, CalendarRequestError } from "./client.js";
 import { CalendarConfigSchema, toolSchemas } from "./models.js";
@@ -37,7 +37,6 @@ export default defineToolExtension({
   createTools(config) {
     const oauth = config.oauth;
     const connected = oauth?.connected ? oauth : undefined;
-    const client = connected ? new CalendarClient(connected.accessToken) : undefined;
     const disconnected = (reason: string, message = messages[reason], agentId?: string) => {
       const fallbackUrl = agentId ? `/agents/${encodeURIComponent(agentId)}/extensions/googleCalendar` : "/agents";
       return { connected: false, provider: "google", reason, message, authorizeUrl: (oauth && !oauth.connected ? oauth.authorizeUrl : undefined) ?? fallbackUrl };
@@ -47,9 +46,11 @@ export default defineToolExtension({
       description: schema.description ?? name,
       parameters: schema,
       annotations: { readOnlyHint: readOnly.has(name) },
-      async execute(value: unknown, context?: { agentId: string }) {
-        if (!client || !connected) return disconnected(oauth && !oauth.connected ? oauth.reason : "not_connected", oauth && !oauth.connected ? oauth.message : messages.not_connected, context?.agentId);
+      async execute(value: unknown, context?: ToolExecutionContext) {
+        if (!connected) return disconnected(oauth && !oauth.connected ? oauth.reason : "not_connected", oauth && !oauth.connected ? oauth.message : messages.not_connected, context?.agentId);
         const params = schema.parse(value);
+        // One client per call: the tool deadline (context.signal) belongs to this call only.
+        const client = new CalendarClient(connected.accessToken, fetch, context?.signal);
         try {
           const account = await client.account();
           if (connected.account && account.toLowerCase() !== connected.account.toLowerCase()) return disconnected("wrong_account", messages.wrong_account, context?.agentId);

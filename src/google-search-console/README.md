@@ -161,7 +161,9 @@ permission. Property-access and API-disabled 403 responses throw a clear
 property/setup error instead of suggesting reconnection; other request errors
 retain Google's message. Exact Google error bodies vary; see the
 [standard errors reference](https://developers.google.com/webmaster-tools/v1/errors).
-HTTP requests time out after 15 seconds. Each tool checks the userinfo account
+HTTP requests run until the tool deadline (the agent's `timeout`, else 300
+seconds) and stop when the run is cancelled; called without a tool deadline,
+they time out after 15 seconds. Each tool checks the userinfo account
 before reading Search Console data to detect a mismatched connection.
 
 No sitemap submission/deletion, site changes, service accounts, scheduled jobs,

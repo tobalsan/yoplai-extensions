@@ -1,4 +1,4 @@
-import { defineToolExtension, notConnected } from "../tool-extension.js";
+import { defineToolExtension, notConnected, type ToolExecutionContext } from "../tool-extension.js";
 import { googleOAuthProvider } from "../google-oauth-provider.js";
 import { SearchConsoleClient, SearchConsoleRequestError } from "./client.js";
 import { ConfigSchema, toolSchemas, outputSchemas } from "./models.js";
@@ -26,10 +26,10 @@ export default defineToolExtension({
       name, description: schema.description ?? name, parameters: schema,
       outputSchema: outputSchemas[name as keyof typeof outputSchemas],
       annotations: { readOnlyHint: true },
-      async execute(value: unknown, context?: { agentId?: string }) {
+      async execute(value: unknown, context?: ToolExecutionContext) {
         if (!connected) return notConnected("google", NOT_CONNECTED, oauth);
         schema.parse(value);
-        const client = new SearchConsoleClient(connected.accessToken);
+        const client = new SearchConsoleClient(connected.accessToken, fetch, context?.signal);
         const refusal = (reason: string) => ({ isError: true, connected: false, provider: "google", reason, message: messages[reason], authorizeUrl: context?.agentId ? `/agents/${encodeURIComponent(context.agentId)}/extensions/googleSearchConsole` : "/agents" });
         try {
           const account = await client.account();

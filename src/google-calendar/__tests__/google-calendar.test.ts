@@ -133,6 +133,49 @@ describe("extension identity and auth signals", () => {
     const tools = calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
     expect(await (await tools)[0].execute({})).toMatchObject({ connected: false, reason });
   });
+  it("waits past 15 seconds for a slow answer when the tool deadline allows it", async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async input => String(input).includes("userinfo") ? json({ email: "me@example.com" }) : await new Promise<Response>(resolve => { answer = resolve; })));
+    const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    let settled = false;
+    const call = tools.find(tool => tool.name === "googleCalendar_list_calendars")!.execute({}, { signal: new AbortController().signal });
+    void call.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(false);
+    answer(json({ items: [{ id: "team@example.com" }] }));
+    expect(await call).toEqual({ calendars: [{ id: "team@example.com" }], nextPageToken: null, account: "me@example.com" });
+  });
+  it("aborts every in-flight Google request of a call when the tool deadline or run cancel fires", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (input, init: RequestInit) => {
+      signals.push(init.signal!);
+      if (String(input).includes("userinfo")) return json({ email: "me@example.com" });
+      if (String(input).includes("calendarList")) return json({ timeZone: "Europe/Paris" });
+      return await new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)));
+    }));
+    const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    const run = new AbortController();
+    const call = tools.find(tool => tool.name === "googleCalendar_list_events")!.execute({ orderBy: "startTimeDesc" }, { signal: run.signal });
+    await vi.waitFor(() => expect(signals).toHaveLength(3));
+    run.abort(new Error("run cancelled"));
+    await expect(call).rejects.toThrow("run cancelled");
+    expect(signals.map(signal => signal.aborted)).toEqual([true, true, true]);
+  });
+  it("reports a run cancel that lands while Google's error body is still arriving as the cancel, not as expired access", async () => {
+    let errorHeadersSent = false;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (input, init: RequestInit) => {
+      if (String(input).includes("userinfo")) return json({ email: "me@example.com" });
+      errorHeadersSent = true;
+      return new Response(new ReadableStream({ start(stream) { init.signal!.addEventListener("abort", () => stream.error(init.signal!.reason)); } }), { status: 401 });
+    }));
+    const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });
+    const run = new AbortController();
+    const call = tools.find(tool => tool.name === "googleCalendar_list_calendars")!.execute({}, { signal: run.signal });
+    await vi.waitFor(() => expect(errorHeadersSent).toBe(true));
+    run.abort(new Error("run cancelled"));
+    await expect(call).rejects.toThrow("run cancelled");
+  });
   it("includes account and mounts all nine tools with read-only hints", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async input => json(String(input).includes("userinfo") ? { email: "me@example.com" } : { items: [] })));
     const tools = await calendar.getAgentTools({ id: "agent", extensions: { googleCalendar: {} } }, { config: {}, resolveOAuth: async () => config.oauth });

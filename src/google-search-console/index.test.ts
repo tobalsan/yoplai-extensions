@@ -91,6 +91,32 @@ describe("Search Console tools with mocked Google HTTP", () => {
       expect.objectContaining({ dimensions: ["page", "query"], dimensionFilterGroups: [{ groupType: "and", filters: [{ dimension: "country", operator: "equals", expression: "usa" }] }] }),
     ]);
   });
+  it("waits past 15 seconds for a slow query when the tool deadline allows it", async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", async (input: string) => input.endsWith("/userinfo") ? json({ email: "editor@example.com" }) : await new Promise<Response>(resolve => { answer = resolve; }));
+    let settled = false;
+    const call = tool("search_analytics").execute({ siteUrl: "sc-domain:example.com", startDate: "2026-09-01", endDate: "2026-09-28" }, { signal: new AbortController().signal });
+    void call.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(settled).toBe(false);
+    answer(json({ rows: [{ keys: ["widgets"], clicks: 5, impressions: 50, ctr: 0.1, position: 2 }] }));
+    expect(await call).toMatchObject({ rows: [{ keys: ["widgets"], clicks: 5 }], account: "editor@example.com" });
+  });
+  it("aborts every in-flight Google request of a comparison when the tool deadline or run cancel fires", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
+      signals.push(init.signal!);
+      if (input.endsWith("/userinfo")) return json({ email: "editor@example.com" });
+      return await new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)));
+    });
+    const run = new AbortController();
+    const call = tool("compare_periods").execute({ siteUrl: "sc-domain:example.com" }, { signal: run.signal });
+    await vi.waitFor(() => expect(signals.length).toBeGreaterThanOrEqual(2));
+    run.abort(new Error("run cancelled"));
+    await expect(call).rejects.toThrow("run cancelled");
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  });
   it("times out a hanging HTTP call and allows the next call to progress", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValueOnce(json({ email: "editor@example.com" })).mockResolvedValueOnce(json({ siteEntry: [] }));
