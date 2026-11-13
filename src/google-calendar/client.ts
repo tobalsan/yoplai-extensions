@@ -10,7 +10,8 @@ export class CalendarRequestError extends Error {
   constructor(readonly status: number, readonly reason: string, detail = "") { super(`Google Calendar request failed (${reason}, HTTP ${status}${detail ? `: ${detail}` : ""})`); }
 }
 export class CalendarClient {
-  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  /** `signal` is the tool deadline; when given it alone bounds every request, else each request stops at 15 s. */
+  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch, private readonly signal?: AbortSignal) {}
   async account(): Promise<string> { const data = await this.request("https://www.googleapis.com/oauth2/v2/userinfo"); return String(data.email ?? ""); }
   private path(calendarId = "primary", eventId?: string) { return `/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ""}`; }
   private async zone(calendarId = "primary", explicit?: string): Promise<string> {
@@ -99,13 +100,13 @@ export class CalendarClient {
   private async request(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Google Calendar request timed out; retry later")); }, 15000); });
+    const timeout = this.signal ? [] : [new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Google Calendar request timed out; retry later")); }, 15000); })];
     try {
-      return await Promise.race([timeout, (async () => {
-        const response = await this.fetchImpl(path.startsWith("https://") ? path : `${BASE}${path}`, { ...init, signal: controller.signal, headers: { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
+      return await Promise.race([...timeout, (async () => {
+        const response = await this.fetchImpl(path.startsWith("https://") ? path : `${BASE}${path}`, { ...init, signal: this.signal ?? controller.signal, headers: { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
         if (!response.ok) {
           let reason = "", detail = "";
-          try { const payload = await response.json() as { error?: { status?: string; message?: string; errors?: Array<{ reason?: string }> } }; reason = `${payload.error?.status ?? ""} ${payload.error?.errors?.map(item => item.reason).join(" ") ?? ""}`; detail = [reason.trim(), payload.error?.message].filter(Boolean).join(" - "); } catch { /* An empty response still maps from its HTTP status. */ }
+          try { const payload = await response.json() as { error?: { status?: string; message?: string; errors?: Array<{ reason?: string }> } }; reason = `${payload.error?.status ?? ""} ${payload.error?.errors?.map(item => item.reason).join(" ") ?? ""}`; detail = [reason.trim(), payload.error?.message].filter(Boolean).join(" - "); } catch (error) { if (this.signal?.aborted) throw error; /* An empty response still maps from its HTTP status. */ }
           const mapped = googleFailureReason(response.status, reason, /rate.?limit|quota|daily.?limit|resource_exhausted/i) ?? "request_failed";
           throw new CalendarRequestError(response.status, mapped, detail);
         }

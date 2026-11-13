@@ -10,7 +10,8 @@ export class SearchConsoleRequestError extends Error {
   }
 }
 export class SearchConsoleClient {
-  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  /** `signal` is the tool deadline; when given it alone bounds every request, else each request stops at 15 s. */
+  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch, private readonly signal?: AbortSignal) {}
   async account(): Promise<string> {
     const data = await this.request("https://www.googleapis.com/oauth2/v2/userinfo");
     return String(data.email ?? "");
@@ -41,10 +42,10 @@ export class SearchConsoleClient {
   private async request(url: string, init: RequestInit = {}, siteUrl?: string): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Google Search Console request timed out; retry later")); }, 15000); });
+    const timeout = this.signal ? [] : [new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Google Search Console request timed out; retry later")); }, 15000); })];
     try {
-      return await Promise.race([timeout, (async () => {
-        const response = await this.fetchImpl(url, { ...init, signal: controller.signal, headers: { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
+      return await Promise.race([...timeout, (async () => {
+        const response = await this.fetchImpl(url, { ...init, signal: this.signal ?? controller.signal, headers: { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) } });
         if (!response.ok) {
           const text = await response.text();
           let detail = text;

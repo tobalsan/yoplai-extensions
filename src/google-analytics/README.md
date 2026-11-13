@@ -9,7 +9,7 @@ Read-only GA4 tools using host-managed Google OAuth. Connections may be personal
 3. Enable `googleAnalytics` for the agent and connect or reconnect in its extension settings, using **Just me** or **Whole team**.
 4. Give the connected Google account at least **Viewer** access to the GA4 property. Reconnecting cannot fix missing property access or disabled APIs.
 
-No service account, secrets, write scopes, or GA4 configuration changes are supported. Expired access, missing scopes, wrong accounts and rate limits return actionable refusals with `isError: true`. Property permissions and disabled APIs produce setup errors; requests time out after 30 seconds.
+No service account, secrets, write scopes, or GA4 configuration changes are supported. Expired access, missing scopes, wrong accounts and rate limits return actionable refusals with `isError: true`. Property permissions and disabled APIs produce setup errors; requests run until the tool deadline (the agent's `timeout`, else 300 seconds) and stop when the run is cancelled; called without a tool deadline, they time out after 30 seconds.
 
 ## Tools
 

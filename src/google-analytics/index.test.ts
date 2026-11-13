@@ -94,6 +94,32 @@ describe("Google Analytics tools with mocked Google HTTP", () => {
     await pending;
     expect(await selected.execute({})).toEqual({ properties: [], account: "editor@example.com" });
   });
+  it("waits past 30 seconds for a slow report when the tool deadline allows it", async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", async (input: string) => input.endsWith("/userinfo") ? json({ email: "editor@example.com" }) : await new Promise<Response>(resolve => { answer = resolve; }));
+    let settled = false;
+    const call = tool("run_report").execute({ property: "properties/1234", metrics: ["sessions"], dateRanges: [{ startDate: "2026-01-01", endDate: "2026-01-31" }] }, { signal: new AbortController().signal });
+    void call.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(45000);
+    expect(settled).toBe(false);
+    answer(json({ metricHeaders: [{ name: "sessions" }], rows: [{ metricValues: [{ value: "42" }] }], rowCount: 1 }));
+    expect(await call).toMatchObject({ rows: [{ metrics: { sessions: 42 } }], rowCount: 1, account: "editor@example.com" });
+  });
+  it("aborts the in-flight Google request when the tool deadline or run cancel fires", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal("fetch", async (input: string, init: RequestInit) => {
+      signals.push(init.signal!);
+      if (input.endsWith("/userinfo")) return json({ email: "editor@example.com" });
+      return await new Promise<Response>((_, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)));
+    });
+    const run = new AbortController();
+    const call = tool("run_report").execute({ property: "properties/1234", metrics: ["sessions"], dateRanges: [{ startDate: "2026-01-01", endDate: "2026-01-31" }] }, { signal: run.signal });
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    run.abort(new Error("run cancelled"));
+    await expect(call).rejects.toThrow("run cancelled");
+    expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
+  });
   it("surfaces ordinary API failures and permits a following read", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ email: "editor@example.com" })).mockResolvedValueOnce(json({ error: { message: "Invalid dimension" } }, 400)).mockResolvedValueOnce(json({ email: "editor@example.com" })).mockResolvedValueOnce(json({}));
     vi.stubGlobal("fetch", fetcher);
