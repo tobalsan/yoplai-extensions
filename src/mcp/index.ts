@@ -4,8 +4,9 @@ import path from "node:path";
 import { parseEnv } from "node:util";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { McpClientManager, OAuthConnectionRequired, type McpServerError, type McpClientFactory } from "./client-manager.js";
+import { McpClientManager, OAuthConnectionRequired, type McpServerError, type McpClientFactory, type McpToolDefinition } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
 import { logMcpUnavailable, sanitizeMessage, type McpLogPath } from "./logging.js";
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
@@ -322,13 +323,40 @@ export function resolveOAuthRedirectUri(config: McpRuntimeConfig): string {
 
 /** How long a tool-list manager dropped by a reset keeps serving running agents before it is closed. */
 const RETIRED_MANAGER_GRACE_MS = 15 * 60_000;
+/** How long an OAuth call session stays open without a call before it is closed. */
+const CALL_SESSION_IDLE_MS = 5 * 60_000;
+
+/** An OAuth tool-call connection shared by the calls that would send the same credential. */
+type CallSession = {
+  manager?: Promise<McpClientManager>;
+  tools?: Promise<McpToolDefinition[]>;
+  active: number;
+  idle?: ReturnType<typeof setTimeout>;
+};
+
+/** The server no longer knows the session (Streamable HTTP 404): it was not processed, so it can be sent again. */
+function isSessionGone(error: unknown): boolean {
+  return error instanceof StreamableHTTPError && error.code === 404;
+}
+
+/** Call-session key: a JSON tuple, so no field value (requester, server, path) can collide with another's. */
+export function callSessionKey(agentId: string, configPath: string, revision: string, requester: string | undefined, server: string, credential: string): string {
+  return JSON.stringify([agentId, configPath, revision, requester ?? null, server, credential]);
+}
 
 export function createMcpExtension(clientFactory?: McpClientFactory) {
   const loggedStates = new Map<string, number>();
   const loggedConfigErrors = new Set<string>();
   const managers = new Map<string, Promise<McpClientManager>>();
-  // Keys of cached tool-list managers. Every other manager key is single-use and closed by its own caller.
+  // Keys of cached tool-list managers. Call-session keys (below) are cached too; every other manager key is
+  // single-use and closed by its own caller.
   const toolListKeys = new Set<string>();
+  // OAuth tool calls reuse one connection per requester, server and stored access token, so a run's calls share
+  // one MCP session instead of opening one each. A changed credential (connect, disconnect, refresh, scope) is a
+  // new key, so the next call still uses it at once.
+  const callSessions = new Map<string, CallSession>();
+  // Retired call sessions whose running calls have not ended yet; stop() still closes them.
+  const drainingCallSessions = new Set<CallSession>();
   // Tool-list managers dropped by a reset, still serving tool handles held by running agents until their delayed close.
   const retired = new Map<Promise<McpClientManager>, ReturnType<typeof setTimeout>>();
   const oauthServers = new Set<string>();
@@ -664,6 +692,61 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       managers.delete(key);
       throw error;
     }
+  }
+
+  /**
+   * The stored credential an OAuth call by this requester would send, as a call-session key part. Undefined sends the
+   * call down the single-use path: no grant, a grant needing reconnect, or a token due for refresh (that path refreshes
+   * it, and the next call opens a session with the new token).
+   */
+  async function callCredential(agentId: string, server: string, requesterUserId?: string): Promise<string | undefined> {
+    const selected = await oauth?.resolve(agentId, server, requesterUserId);
+    if (!selected || selected.connection.state === "needs_reconnect") return undefined;
+    const { connection, scope } = selected;
+    if (connection.expiresAt && Date.parse(connection.expiresAt) - Date.now() <= 60_000) return undefined;
+    const owner = scope.type === "personal" ? `personal:${scope.userId}` : "team";
+    return `${owner}:${crypto.createHash("sha256").update(connection.tokens.access_token).digest("base64url")}`;
+  }
+
+  function holdCallSession(key: string): CallSession {
+    let session = callSessions.get(key);
+    if (!session) {
+      session = { active: 0 };
+      callSessions.set(key, session);
+    }
+    session.active++;
+    if (session.idle) clearTimeout(session.idle);
+    session.idle = undefined;
+    return session;
+  }
+
+  /** Stops handing the session to new calls. Its connection closes once its running calls end. */
+  function retireCallSession(key: string, session: CallSession): void {
+    if (callSessions.get(key) !== session) return;
+    callSessions.delete(key);
+    managers.delete(key);
+    drainingCallSessions.add(session);
+  }
+
+  function closeCallSession(session: CallSession): void {
+    drainingCallSessions.delete(session);
+    void session.manager?.then((manager) => manager.close()).catch(() => {});
+  }
+
+  /** Ends one call. A failed session is retired so the next call reconnects; a healthy one closes after idling. */
+  function releaseCallSession(key: string, session: CallSession, healthy: boolean): void {
+    session.active--;
+    if (!healthy) retireCallSession(key, session);
+    if (session.active > 0) return;
+    if (callSessions.get(key) !== session) {
+      closeCallSession(session);
+      return;
+    }
+    session.idle = setTimeout(() => {
+      retireCallSession(key, session);
+      closeCallSession(session);
+    }, CALL_SESSION_IDLE_MS);
+    session.idle.unref?.();
   }
 
   async function runApp<T>(ctx: McpAppsContext, serverName: string, milliseconds: number, operation: (manager: McpClientManager, signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -1245,10 +1328,14 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     oauthProbes.clear();
     oauthServers.clear();
     for (const timer of retired.values()) clearTimeout(timer);
-    const pending = [...managers.values(), ...retired.keys()];
+    for (const session of callSessions.values()) clearTimeout(session.idle);
+    const draining = [...drainingCallSessions].flatMap((session) => session.manager ? [session.manager] : []);
+    drainingCallSessions.clear();
+    const pending = [...managers.values(), ...retired.keys(), ...draining];
     managers.clear();
     toolListKeys.clear();
     retired.clear();
+    callSessions.clear();
     await Promise.all(pending.map((manager) => manager.then((resolved) => resolved.close(), () => {})));
     loggedStates.clear();
     loggedConfigErrors.clear();
@@ -1299,16 +1386,50 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
         const target = loaded.servers.find((server) => server.name === definition.server)!;
         if (target.type !== "http" || target.headers || !await isOAuthServer(agent.id, target, execution?.userId)) return tool.execute(params, execution);
         const requester = execution?.userId;
-        const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
-        const fresh = await getManager(key, agent.id, [target], "call", requester);
-        try {
-          const current = (await fresh.listTools()).find((entry) => entry.name === definition.name && entry.server === definition.server);
-          if (current) return await connectResponse(target.name, execution, await fresh.invokeTool(current.server, current.name, params, { signal: execution?.signal }));
-          const errors = fresh.getErrors().filter((error) => error.server === target.name);
-          if (errors.some((error) => error.auth)) return connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) });
+        const matches = (entry: McpToolDefinition) => entry.name === definition.name && entry.server === definition.server;
+        /** `ok` is false when the tool could not be called, so the connection is not worth keeping. */
+        const call = async (manager: McpClientManager, catalog: McpToolDefinition[]): Promise<{ ok: boolean; result: unknown }> => {
+          const current = catalog.find(matches);
+          if (current) return { ok: true, result: await connectResponse(target.name, execution, await manager.invokeTool(current.server, current.name, params, { signal: execution?.signal })) };
+          const errors = manager.getErrors().filter((error) => error.server === target.name);
+          if (errors.some((error) => error.auth)) return { ok: false, result: await connectResponse(target.name, execution, { isError: true, connected: false, provider: "mcp", reason: "not_connected", message: "Connect this MCP server from the agent's extensions.", authorizeUrl: extensionHub(agent.id) }) };
           const upstream = errors[0] ? ` (${sanitizeMessage(errors[0].message)})` : "";
-          return { isError: true, provider: "mcp", server: target.name, reason: "unavailable", message: `${target.name} is temporarily unavailable${upstream}. Retry later or continue without it.` };
-        } finally { managers.delete(key); await fresh.close(); }
+          return { ok: false, result: { isError: true, provider: "mcp", server: target.name, reason: "unavailable", message: `${target.name} is temporarily unavailable${upstream}. Retry later or continue without it.` } };
+        };
+        const credential = await callCredential(agent.id, target.name, requester);
+        if (!credential) {
+          const key = `${agent.id}:${configPath}:${requester ?? "anonymous"}:${crypto.randomUUID()}`;
+          const fresh = await getManager(key, agent.id, [target], "call", requester);
+          try { return (await call(fresh, await fresh.listTools())).result; }
+          finally { managers.delete(key); await fresh.close(); }
+        }
+        const key = callSessionKey(agent.id, configPath, revision, requester, target.name, credential);
+        for (let attempt = 1; ; attempt++) {
+          const session = holdCallSession(key);
+          const reused = session.manager !== undefined;
+          let healthy = false;
+          try {
+            session.manager ??= getManager(key, agent.id, [target], "call", requester);
+            const manager = await session.manager;
+            await manager.connect();
+            if (!manager.hasClient(target.name)) session.tools = undefined;
+            const listed = session.tools !== undefined;
+            let catalog = await (session.tools ??= manager.listTools());
+            // The agent's tool list may be newer than this session's catalog.
+            if (listed && !catalog.some(matches)) catalog = await (session.tools = manager.listTools());
+            const outcome = await call(manager, catalog);
+            healthy = outcome.ok && !(isRecord(outcome.result) && outcome.result.connected === false);
+            return outcome.result;
+          } catch (error) {
+            healthy = execution?.signal?.aborted === true;
+            session.tools = undefined;
+            // An idle session the server already closed: the call was not processed, send it on a new one.
+            if (reused && attempt === 1 && isSessionGone(error)) continue;
+            throw error;
+          } finally {
+            releaseCallSession(key, session, healthy);
+          }
+        }
       },
     }));
     const disconnected = await Promise.all(loaded.servers.filter((server): server is Extract<McpServerConfig, { type: "http" }> => server.type === "http" && !server.headers).map(async (server) => {

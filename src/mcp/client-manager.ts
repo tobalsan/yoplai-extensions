@@ -262,6 +262,9 @@ export class McpClientManager {
   private readonly toolIndex = new Map<string, { server: string; tool: string }>();
   private readonly errors: McpServerError[] = [];
   private readonly recoveries = new Map<string, Promise<boolean>>();
+  // Requests still running per client, so an auth refresh replacing a client closes it only once they end.
+  private readonly inFlight = new Map<McpClientHandle, number>();
+  private readonly replaced = new Set<McpClientHandle>();
   private connecting?: Promise<void>;
 
   private readonly clientFactory: McpClientFactory;
@@ -364,7 +367,8 @@ export class McpClientManager {
     }
     const client = this.clients.get(server.name);
     this.clients.delete(server.name);
-    if (client) {
+    if (client && this.inFlight.has(client)) this.replaced.add(client);
+    else if (client) {
       try {
         await abortable(withTimeout(client.close(), `MCP server "${server.name}" close timed out`), signal);
       } catch (error) {
@@ -509,7 +513,7 @@ export class McpClientManager {
     const client = this.clients.get(server);
     if (!client) throw new Error(`MCP server "${server}" is not connected`);
     try {
-      return await abortable(run(client), signal);
+      return await abortable(this.track(client, run(client)), signal);
     } catch (error) {
       signal?.throwIfAborted();
       const config = this.servers.find((item) => item.name === server);
@@ -519,7 +523,7 @@ export class McpClientManager {
           const refreshed = this.clients.get(server);
           if (refreshed) {
             try {
-              return await abortable(run(refreshed), signal);
+              return await abortable(this.track(refreshed, run(refreshed)), signal);
             } catch (retryError) {
               signal?.throwIfAborted();
               if (isUnauthorized(retryError)) {
@@ -541,6 +545,16 @@ export class McpClientManager {
     }
   }
 
+  private track<T>(client: McpClientHandle, task: Promise<T>): Promise<T> {
+    this.inFlight.set(client, (this.inFlight.get(client) ?? 0) + 1);
+    return task.finally(() => {
+      const left = this.inFlight.get(client)! - 1;
+      if (left > 0) { this.inFlight.set(client, left); return; }
+      this.inFlight.delete(client);
+      if (this.replaced.delete(client)) void client.close().catch(() => {});
+    });
+  }
+
   getErrors(): McpServerError[] {
     return [...this.errors];
   }
@@ -550,6 +564,8 @@ export class McpClientManager {
       try { await withTimeout(client.close(), `MCP server "${server}" close timed out`); }
       catch (error) { this.recordError(server, error); }
     }));
+    for (const client of this.replaced) void client.close().catch(() => {});
+    this.replaced.clear();
     this.clients.clear();
     this.toolIndex.clear();
   }
