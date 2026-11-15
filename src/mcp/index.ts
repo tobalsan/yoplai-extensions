@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseEnv } from "node:util";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { McpClientManager, OAuthConnectionRequired, type McpServerError, type McpClientFactory, type McpToolDefinition } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
@@ -335,7 +336,12 @@ type CallSession = {
 
 /** The server no longer knows the session (Streamable HTTP 404): it was not processed, so it can be sent again. */
 function isSessionGone(error: unknown): boolean {
-  return isRecord(error) && error.code === 404;
+  return error instanceof StreamableHTTPError && error.code === 404;
+}
+
+/** Call-session key: a JSON tuple, so no field value (requester, server, path) can collide with another's. */
+export function callSessionKey(agentId: string, configPath: string, revision: string, requester: string | undefined, server: string, credential: string): string {
+  return JSON.stringify([agentId, configPath, revision, requester ?? null, server, credential]);
 }
 
 export function createMcpExtension(clientFactory?: McpClientFactory) {
@@ -349,6 +355,8 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   // one MCP session instead of opening one each. A changed credential (connect, disconnect, refresh, scope) is a
   // new key, so the next call still uses it at once.
   const callSessions = new Map<string, CallSession>();
+  // Retired call sessions whose running calls have not ended yet; stop() still closes them.
+  const drainingCallSessions = new Set<CallSession>();
   // Tool-list managers dropped by a reset, still serving tool handles held by running agents until their delayed close.
   const retired = new Map<Promise<McpClientManager>, ReturnType<typeof setTimeout>>();
   const oauthServers = new Set<string>();
@@ -717,9 +725,11 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     if (callSessions.get(key) !== session) return;
     callSessions.delete(key);
     managers.delete(key);
+    drainingCallSessions.add(session);
   }
 
   function closeCallSession(session: CallSession): void {
+    drainingCallSessions.delete(session);
     void session.manager?.then((manager) => manager.close()).catch(() => {});
   }
 
@@ -1319,7 +1329,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     oauthServers.clear();
     for (const timer of retired.values()) clearTimeout(timer);
     for (const session of callSessions.values()) clearTimeout(session.idle);
-    const pending = [...managers.values(), ...retired.keys()];
+    const draining = [...drainingCallSessions].flatMap((session) => session.manager ? [session.manager] : []);
+    drainingCallSessions.clear();
+    const pending = [...managers.values(), ...retired.keys(), ...draining];
     managers.clear();
     toolListKeys.clear();
     retired.clear();
@@ -1391,7 +1403,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           try { return (await call(fresh, await fresh.listTools())).result; }
           finally { managers.delete(key); await fresh.close(); }
         }
-        const key = `${agent.id}:${configPath}:${revision}:${requester ?? "anonymous"}:${target.name}:${credential}`;
+        const key = callSessionKey(agent.id, configPath, revision, requester, target.name, credential);
         for (let attempt = 1; ; attempt++) {
           const session = holdCallSession(key);
           const reused = session.manager !== undefined;

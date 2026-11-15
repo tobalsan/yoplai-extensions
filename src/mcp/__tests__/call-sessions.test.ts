@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMcpExtension } from "../index.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { McpClientManager } from "../client-manager.js";
+import { callSessionKey, createMcpExtension } from "../index.js";
 import { McpOAuthStore, type OAuthConnection } from "../oauth.js";
 import { credentials } from "./credentials.js";
 import { tempDirs } from "./harness.js";
@@ -18,6 +20,7 @@ function upstream() {
   type Session = { token: string | undefined; lists: number; calls: number; closed: boolean };
   const sessions: Session[] = [];
   const failures: Array<(session: Session) => unknown> = [];
+  const holds: Array<Promise<void>> = [];
   const factory = async (server: { name: string }, token?: string) => {
     const session: Session = { token, lists: 0, calls: 0, closed: false };
     sessions.push(session);
@@ -29,6 +32,8 @@ function upstream() {
       async readResource() { return { contents: [] }; },
       async callTool(_name: string, args: unknown) {
         session.calls++;
+        const hold = holds.shift();
+        if (hold) await hold;
         const failure = failures.shift();
         if (failure) throw failure(session);
         return { content: [{ type: "text", text: `${token ?? "none"}:${JSON.stringify(args)}` }] };
@@ -42,6 +47,8 @@ function upstream() {
     callSessions: () => sessions.filter((session) => session.calls > 0),
     sessions,
     failNextCall(error: (session: Session) => unknown) { failures.push(error); },
+    /** The next call waits until the returned function is called. */
+    holdNextCall() { let release!: () => void; holds.push(new Promise<void>((resolve) => { release = resolve; })); return release; },
   };
 }
 
@@ -128,7 +135,7 @@ describe("OAuth MCP call sessions", () => {
     const { extension, fake, lookup } = await setup();
     try {
       await lookup({}, "bob");
-      fake.failNextCall(() => Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: Unknown session"), { code: 404 }));
+      fake.failNextCall(() => new StreamableHTTPError(404, "Error POSTing to endpoint: Unknown session"));
       await expect(lookup({ again: true }, "bob")).resolves.toMatchObject(text("bob-token", { again: true }));
       const [expired, renewed] = fake.callSessions();
       expect(expired).toMatchObject({ calls: 2, closed: true });
@@ -139,10 +146,46 @@ describe("OAuth MCP call sessions", () => {
   it("does not resend a call refused with 404 on a session opened for it", async () => {
     const { extension, fake, lookup } = await setup();
     try {
-      fake.failNextCall(() => Object.assign(new Error("Streamable HTTP error: Error POSTing to endpoint: Not Found"), { code: 404 }));
+      fake.failNextCall(() => new StreamableHTTPError(404, "Error POSTing to endpoint: Not Found"));
       await expect(lookup({}, "bob")).rejects.toThrow("Not Found");
       expect(fake.callSessions()).toHaveLength(1);
     } finally { await extension.stop(); }
+  });
+
+  it("does not resend a call whose application error carries code 404", async () => {
+    const { extension, fake, lookup } = await setup();
+    try {
+      await lookup({}, "bob");
+      fake.failNextCall(() => Object.assign(new Error("Record not found"), { code: 404 }));
+      await expect(lookup({}, "bob")).rejects.toThrow("Record not found");
+      expect(fake.callSessions()).toHaveLength(1);
+      expect(fake.callSessions()[0]!.calls).toBe(2);
+    } finally { await extension.stop(); }
+  });
+
+  it("resends at most once when the new session is refused with 404 too", async () => {
+    const { extension, fake, lookup } = await setup();
+    try {
+      await lookup({}, "bob");
+      fake.failNextCall(() => new StreamableHTTPError(404, "Error POSTing to endpoint: Unknown session"));
+      fake.failNextCall(() => new StreamableHTTPError(404, "Error POSTing to endpoint: Unknown session"));
+      await expect(lookup({}, "bob")).rejects.toThrow("Unknown session");
+      expect(fake.callSessions().map((session) => session.calls)).toEqual([2, 1]);
+    } finally { await extension.stop(); }
+  });
+
+  it("closes a failed session on stop while a sibling call still runs on it", async () => {
+    const { extension, fake, lookup } = await setup();
+    await lookup({}, "bob");
+    const release = fake.holdNextCall();
+    const sibling = lookup({ slow: true }, "bob");
+    fake.failNextCall(() => new TypeError("fetch failed"));
+    await expect(lookup({}, "bob")).rejects.toThrow("fetch failed");
+    expect(fake.callSessions()[0]!.closed).toBe(false);
+    await extension.stop();
+    expect(fake.callSessions()[0]!.closed).toBe(true);
+    release();
+    await sibling.catch(() => {});
   });
 
   it("drops a connection whose call failed, without retrying, and reconnects for the next call", async () => {
@@ -164,5 +207,50 @@ describe("OAuth MCP call sessions", () => {
     await lookup({}, "alice");
     await extension.stop();
     expect(fake.sessions.every((session) => session.closed)).toBe(true);
+  });
+
+  it("builds call-session keys that cannot collide", () => {
+    expect(callSessionKey("casey", "mcp.json", "r1", undefined, "remote", "team:h")).not.toBe(callSessionKey("casey", "mcp.json", "r1", "anonymous", "remote", "team:h"));
+    expect(callSessionKey("casey", "mcp.json", "r1", "bob:x", "remote", "team:h")).not.toBe(callSessionKey("casey", "mcp.json", "r1", "bob", "x:remote", "team:h"));
+  });
+});
+
+describe("MCP auth recovery on a shared connection", () => {
+  it("keeps a sibling call's connection open while another call refreshes after a 401", async () => {
+    type Client = { token?: string; closed: boolean };
+    const clients: Client[] = [];
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let calls = 0;
+    let stored = "old-token";
+    const manager = new McpClientManager([{ type: "http", name: "remote", url: "https://remote.example.test/mcp" }], {
+      tokenProvider: async () => stored,
+      onAuthFailure: async () => { stored = "new-token"; return { token: stored }; },
+      clientFactory: async (_server, token) => {
+        const client: Client = { token, closed: false };
+        clients.push(client);
+        return {
+          async listTools() { return []; },
+          async readResource() { return { contents: [] }; },
+          async callTool(name: string) {
+            calls++;
+            if (client.closed) throw new Error("transport closed");
+            if (name === "slow") { await slow; if (client.closed) throw new Error("transport closed"); return { content: [{ type: "text", text: `slow:${token}` }] }; }
+            if (token === "old-token") throw Object.assign(new Error("Unauthorized"), { code: 401 });
+            return { content: [{ type: "text", text: `fast:${token}` }] };
+          },
+          async close() { client.closed = true; },
+        };
+      },
+    });
+    await manager.connect();
+    const sibling = manager.invokeTool("remote", "slow", {});
+    await expect(manager.invokeTool("remote", "fast", {})).resolves.toMatchObject({ content: [{ text: "fast:new-token" }] });
+    expect(clients.map((client) => [client.token, client.closed])).toEqual([["old-token", false], ["new-token", false]]);
+    releaseSlow();
+    await expect(sibling).resolves.toMatchObject({ content: [{ text: "slow:old-token" }] });
+    await vi.waitFor(() => expect(clients[0]!.closed).toBe(true));
+    expect(calls).toBe(3);
+    await manager.close();
   });
 });
