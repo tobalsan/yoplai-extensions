@@ -38,7 +38,11 @@ describe("MCP Apps OAuth recovery deadline", () => {
     const fetching = new Promise<void>((resolve) => { entered = resolve; });
     let finish!: (value: Response) => void;
     const urls: string[] = [];
-    vi.stubGlobal("fetch", async (url: string | URL | Request) => { urls.push(String(url)); entered(); return new Promise<Response>((resolve) => { finish = resolve; }); });
+    vi.stubGlobal("fetch", async (url: string | URL | Request) => {
+      urls.push(String(url));
+      if (!String(url).includes(".well-known")) return Response.json({ access_token: "fresh", refresh_token: "rotated-refresh", token_type: "Bearer", expires_in: 3600 });
+      entered(); return new Promise<Response>((resolve) => { finish = resolve; });
+    });
     vi.spyOn(console, "error").mockImplementation(() => {});
     let hanging = true;
     const calls: string[] = [];
@@ -67,7 +71,8 @@ describe("MCP Apps OAuth recovery deadline", () => {
       await rejected;
       finish(Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] }));
       await vi.advanceTimersByTimeAsync(0);
-      expect(urls).toEqual(["https://auth.example.test/.well-known/oauth-authorization-server"]);
+      expect(urls).toEqual(["https://auth.example.test/.well-known/oauth-authorization-server", "https://auth.example.test/token"]);
+      await expect(store.read("casey", "remote", { type: "personal", userId: "viewer" })).resolves.toMatchObject({ tokens: { access_token: "fresh", refresh_token: "rotated-refresh" }, state: "connected" });
       expect(calls).toEqual([operation]);
       hanging = false;
       await expect(extension.mcpApps.callTool({ agentId: "casey", userId: "viewer" }, "remote", "data", {})).resolves.toEqual({ content: [{ type: "text", text: "healthy" }] });

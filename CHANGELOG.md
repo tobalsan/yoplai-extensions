@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- MCP OAuth refreshes share one request across status checks and tool loads, save rotated tokens after caller cancellation or timeout, and skip refreshing a token already replaced after a 401. Recent `invalid_grant` refusals keep the grant connected for a 15-minute issue window; structured refresh logs use token fingerprints only (ALG-692).
+
 - MCP tool calls to an OAuth server reuse one connection per requester and credential instead of opening a new MCP session (`initialize`, `tools/list`, then the call) for every call, so a loop of N calls opens one session instead of N. A changed credential still applies from the next call; idle connections close after 5 minutes and failed ones at once; a call to a session the server already dropped (HTTP 404) is resent once.
 - Google Analytics, Search Console and Calendar requests run until the tool deadline (the agent's `timeout`, else 300 s) instead of a fixed 30 s (Analytics) or 15 s (Search Console, Calendar), so a retry with a longer `timeout` can outlast a slow Google answer; cancelling the run aborts them. A deadline hit is now the gateway's own tool timeout (warn, 504) instead of an extension error. Without a tool deadline, the old 30 s / 15 s limits stay. Google's own HTTP errors are unchanged (ALG-601).
 - Google Drive `download_file` and `read_file` wait for file bytes (export and `alt=media`, including the PPTX body) until the tool deadline (the agent's `timeout`, else 300 s) instead of a fixed 30 s, so a slow Google export can finish; cancelling the run aborts it. `read_file` now follows the tool deadline and run cancel. Without a tool deadline, file bytes stop at 300 s. Metadata and every other Google request keep 30 s (ALG-696).

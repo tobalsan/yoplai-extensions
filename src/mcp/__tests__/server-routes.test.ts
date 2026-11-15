@@ -89,7 +89,7 @@ describe("MCP server cards and self-service routes", () => {
         ? extension.getAgentTools(agent, { userId: "alice", config: {} })
         : routes.routes.get("GET /mcp/oauth/status")!(routeContext({ agent: "casey" }, { user: { id: "alice" } })));
       await refreshing;
-      if (outcome === "timeout") await vi.advanceTimersByTimeAsync(10_001);
+      if (outcome === "timeout") await vi.advanceTimersByTimeAsync(30_001);
       else fail(new Error("provider unavailable"));
       await Promise.all(pending);
       expect(output.mock.calls).toHaveLength(1);
@@ -98,7 +98,7 @@ describe("MCP server cards and self-service routes", () => {
         server: "remote", agentId: "casey", userId: "alice", path: logPath === "recovery" ? "tools" : logPath, reason: "refresh_failed", scope: "team",
       });
       if (logPath !== "status") expect(info.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(expect.objectContaining({ reason: "refresh_failed", level: "info" }));
-      else expect(info.mock.calls).toEqual([]);
+      await vi.waitFor(() => expect(info.mock.calls.map(([line]) => JSON.parse(line)).filter((line) => line.msg === "[mcp] OAuth refresh")).toHaveLength(1));
     } finally { await extension.stop(); }
   });
 
