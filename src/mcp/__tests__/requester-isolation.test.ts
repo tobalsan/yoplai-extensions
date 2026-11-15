@@ -34,7 +34,7 @@ async function appsRequester() {
   return { dir, configPath, store, selected, extension };
 }
 describe("MCP requester isolation", () => {
-  it("cancels the viewer's OAuth metadata request and starts no token request after abort", async () => {
+  it("cancels the viewer's wait while its refresh continues and saves tokens", async () => {
     const dir = await directory();
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp", oauth: { clientId: "client" } } } }));
     const host = credentials();
@@ -46,7 +46,9 @@ describe("MCP requester isolation", () => {
     let upstreamSignal: AbortSignal | null | undefined;
     const requests: string[] = [];
     vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
-      requests.push(String(url)); upstreamSignal = init?.signal; started();
+      requests.push(String(url));
+      if (!String(url).includes(".well-known")) return Response.json({ access_token: "fresh", refresh_token: "rotated-refresh", token_type: "Bearer", expires_in: 3600 });
+      upstreamSignal = init?.signal; started();
       return new Promise<Response>((resolve) => { finish = resolve; });
     });
     const factory = vi.fn(async () => { throw new Error("must not connect after cancellation"); });
@@ -59,11 +61,12 @@ describe("MCP requester isolation", () => {
       await fetching;
       controller.abort();
       await expect(pending).rejects.toMatchObject({ name: "McpAppsError", reason: "aborted" });
-      expect(upstreamSignal?.aborted).toBe(true);
+      expect(upstreamSignal?.aborted).toBe(false);
     } finally {
       finish(Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] }));
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(requests).toEqual(["https://auth.example.test/.well-known/oauth-authorization-server"]);
+      expect(requests).toEqual(["https://auth.example.test/.well-known/oauth-authorization-server", "https://auth.example.test/token"]);
+      await expect(store.read("casey", "remote", { type: "personal", userId: "viewer" })).resolves.toMatchObject({ tokens: { access_token: "fresh", refresh_token: "rotated-refresh" } });
       expect(factory).not.toHaveBeenCalled();
       await extension.stop();
     }
@@ -186,6 +189,8 @@ describe("MCP requester isolation", () => {
     await expect(store.accessToken("casey", "claap", 60_000, "B")).resolves.toBe("team");
     await vi.advanceTimersByTimeAsync(10_001);
     await expect(refresh).resolves.toBeUndefined();
+    await expect(store.read("casey", "claap", { type: "personal", userId: "A" })).resolves.toMatchObject({ state: "connected" });
+    await vi.advanceTimersByTimeAsync(20_000);
     await expect(store.read("casey", "claap", { type: "personal", userId: "A" })).resolves.toMatchObject({ state: "needs_reconnect" });
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ state: "connected" });
   });

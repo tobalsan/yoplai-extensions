@@ -406,11 +406,43 @@ describe("McpClientManager", () => {
     await expect(manager.invokeTool("claap", "search", {}, { signal })).resolves.toEqual({ token: "fresh-token" });
     expect(signals).toEqual(phase === "invokeTool" ? [signal, signal] : [signal]);
     expect(refresh).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ name: "claap" }), "expired-token");
     expect(factory.mock.calls.map(([, token]) => token)).toEqual(
       phase === "reconnect" ? ["expired-token", "expired-token", "fresh-token"] : ["expired-token", "fresh-token"]
     );
     expect(close).toHaveBeenCalledTimes(phase === "connect" ? 0 : 1);
     expect(manager.getErrors()).toEqual([]);
+  });
+
+  it.each(["call", "read", "list"])("forwards the token used by a delayed %s after another request recovered", async (operation) => {
+    let token = "access-old";
+    let fail!: (error: Error) => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const held = () => { started(); return new Promise<never>((_resolve, reject) => { fail = reject; }); };
+    const factory = vi.fn(async (_server, currentToken): Promise<McpClientHandle> => ({
+      async listTools() { if (currentToken === "access-old" && operation === "list") return held(); return []; },
+      async readResource() { if (currentToken === "access-old") return held(); return { contents: [{ uri: "ui://example/view", text: currentToken }] }; },
+      async callTool(_name, args) {
+        if (currentToken === "access-old") {
+          if (operation === "call" && (args as { slow?: boolean }).slow) return held();
+          throw new Error("401 Unauthorized");
+        }
+        return { token: currentToken };
+      },
+      async close() {},
+    }));
+    const recover = vi.fn(async (_server: unknown, _failedToken?: string) => { token = "access-new"; return true; });
+    const manager = new McpClientManager([{ type: "http", name: "example", url: "https://mcp.example.test" }], { clientFactory: factory, tokenProvider: async () => token, onAuthFailure: recover });
+    await manager.connect();
+    try {
+      const slow = operation === "list" ? manager.listTools() : operation === "read" ? manager.readResource("example", "ui://example/view") : manager.invokeTool("example", "echo", { slow: true });
+      await entered;
+      await expect(manager.invokeTool("example", "echo", {})).resolves.toEqual({ token: "access-new" });
+      fail(new Error("401 Unauthorized"));
+      expect(await slow).toEqual(operation === "list" ? [] : operation === "read" ? { contents: [{ uri: "ui://example/view", text: "access-new" }] } : { token: "access-new" });
+      expect(recover.mock.calls.map(([, failed]) => failed)).toEqual(["access-old", "access-old"]);
+    } finally { await manager.close(); }
   });
 
   it("shares reconnect work across concurrent 401s", async () => {

@@ -105,7 +105,7 @@ export interface McpTokenResult {
   scope?: "personal" | "team";
 }
 export type McpTokenProvider = (server: McpServerConfig) => Promise<string | McpTokenResult | undefined>;
-type McpAuthRecovery = (server: McpServerConfig) => Promise<boolean | McpTokenResult>;
+type McpAuthRecovery = (server: McpServerConfig, failedAccessToken?: string) => Promise<boolean | McpTokenResult>;
 export type McpNotConnectedResponse = (server: string) => unknown;
 
 export interface McpClientManagerOptions {
@@ -296,8 +296,8 @@ export class McpClientManager {
         } catch (error) {
           this.options.signal?.throwIfAborted();
           if (!(error instanceof OAuthConnectionRequired) && (this.options.statusOnly ? classifyMcpError(error) === "authentication" : isUnauthorized(error))) {
-            if (this.options.statusOnly) error = await this.statusAuthFailure(server, error);
-            else if (await this.recover(server)) return;
+            if (this.options.statusOnly) error = await this.statusAuthFailure(server, error, this.tokenResults.get(server.name)?.token);
+            else if (await this.recover(server, this.options.signal, this.tokenResults.get(server.name)?.token)) return;
           }
           if (this.options.throwOnError) throw error;
           this.recordError(server.name, error);
@@ -333,8 +333,8 @@ export class McpClientManager {
     this.onConnected?.(server.name);
   }
 
-  private async statusAuthFailure(server: McpServerConfig, error: unknown): Promise<unknown> {
-    const result = await this.onAuthFailure?.(server);
+  private async statusAuthFailure(server: McpServerConfig, error: unknown, failedAccessToken?: string): Promise<unknown> {
+    const result = await this.onAuthFailure?.(server, failedAccessToken);
     if (result && typeof result !== "boolean") {
       this.tokenResults.set(server.name, result);
       if (result.error) return new OAuthConnectionRequired(result.reason ?? "refresh_failed", result.error);
@@ -342,11 +342,11 @@ export class McpClientManager {
     return error;
   }
 
-  private async recover(server: McpServerConfig, signal = this.options.signal): Promise<boolean> {
+  private async recover(server: McpServerConfig, signal = this.options.signal, failedAccessToken?: string): Promise<boolean> {
     const activeRecovery = this.recoveries.get(server.name);
     if (activeRecovery) return activeRecovery;
     signal?.throwIfAborted();
-    const recovery = this.recoverServer(server, signal);
+    const recovery = this.recoverServer(server, signal, failedAccessToken);
     this.recoveries.set(server.name, recovery);
     try {
       return await recovery;
@@ -355,10 +355,10 @@ export class McpClientManager {
     }
   }
 
-  private async recoverServer(server: McpServerConfig, signal?: AbortSignal): Promise<boolean> {
+  private async recoverServer(server: McpServerConfig, signal?: AbortSignal, failedAccessToken?: string): Promise<boolean> {
     if (!this.onAuthFailure) return false;
     signal?.throwIfAborted();
-    const recovery = await abortable(this.onAuthFailure(server), signal);
+    const recovery = await abortable(this.onAuthFailure(server, failedAccessToken), signal);
     signal?.throwIfAborted();
     if (typeof recovery !== "boolean") this.tokenResults.set(server.name, recovery);
     if (typeof recovery === "boolean" ? !recovery : !recovery.token) {
@@ -409,13 +409,14 @@ export class McpClientManager {
     };
     const groups = await Promise.all(
       [...this.clients.entries()].map(async ([server, client]) => {
+        const failedAccessToken = this.tokenResults.get(server)?.token;
         try {
           return await list(client, server);
         } catch (error) {
           signal?.throwIfAborted();
           const config = this.servers.find((item) => item.name === server);
-          if (config && this.options.statusOnly && classifyMcpError(error) === "authentication") error = await this.statusAuthFailure(config, error);
-          if (config && isUnauthorized(error) && !this.options.statusOnly && await this.recover(config, signal)) {
+          if (config && this.options.statusOnly && classifyMcpError(error) === "authentication") error = await this.statusAuthFailure(config, error, failedAccessToken);
+          if (config && isUnauthorized(error) && !this.options.statusOnly && await this.recover(config, signal, failedAccessToken)) {
             const refreshed = this.clients.get(server);
             if (refreshed) {
               try {
@@ -512,13 +513,14 @@ export class McpClientManager {
     signal?.throwIfAborted();
     const client = this.clients.get(server);
     if (!client) throw new Error(`MCP server "${server}" is not connected`);
+    const failedAccessToken = this.tokenResults.get(server)?.token;
     try {
       return await abortable(this.track(client, run(client)), signal);
     } catch (error) {
       signal?.throwIfAborted();
       const config = this.servers.find((item) => item.name === server);
       if (config && isUnauthorized(error)) {
-        if (await this.recover(config, signal)) {
+        if (await this.recover(config, signal, failedAccessToken)) {
           signal?.throwIfAborted();
           const refreshed = this.clients.get(server);
           if (refreshed) {

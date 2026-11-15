@@ -33,7 +33,7 @@ describe("McpOAuthStore", () => {
     vi.useFakeTimers();
     const pending = Array.from({ length: 4 }, () => store.accessToken("casey", "remote", 60_000, "alice", undefined, "call"));
     await refreshing;
-    if (outcome === "timeout") await vi.advanceTimersByTimeAsync(10_001);
+    if (outcome === "timeout") await vi.advanceTimersByTimeAsync(30_001);
     else fail(new Error("Refresh failed https://auth.example.test/token?token=abc\ntry again"));
     await expect(Promise.all(pending)).resolves.toEqual([undefined, undefined, undefined, undefined]);
     expect(output.mock.calls).toHaveLength(1);

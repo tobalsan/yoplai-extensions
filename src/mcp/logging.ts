@@ -7,6 +7,24 @@ export interface McpLogEvent extends McpLogContext {
   scope?: "personal" | "team";
 }
 
+export interface McpRefreshEvent {
+  agentId: string;
+  server: string;
+  scope: "personal" | "team";
+  path: McpLogPath;
+  statusOnly: boolean;
+  result: { status?: number; error?: string };
+  expires_in?: number;
+  saved: boolean;
+  dropped: boolean;
+  oldRefreshFp?: string;
+  newRefreshFp?: string;
+}
+
+export function logMcpRefresh(fields: McpRefreshEvent): void {
+  console.log(JSON.stringify({ level: "info", msg: "[mcp] OAuth refresh", ...fields }));
+}
+
 export function sanitizeMessage(message: string): string {
   return message
     .replace(/\?[^\s"'<>]*/g, "")

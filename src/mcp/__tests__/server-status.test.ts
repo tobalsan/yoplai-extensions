@@ -123,7 +123,7 @@ it.each(["invalid_grant", "invalid_client", "unauthorized_client"])("marks only 
   await extension.stop();
 });
 
-it("includes hanging refresh in the deadline and keeps the grant after a late authentication failure", async () => {
+it("includes hanging refresh in the caller deadline and records a late authentication failure", async () => {
   const dir = await dirs.make("mcp-refresh-timeout-");
   await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp" } } }));
   const host = credentials();
@@ -150,7 +150,7 @@ it("includes hanging refresh in the deadline and keeps the grant after a late au
   await expect(result).resolves.toMatchObject({ servers: [{ state: "unreachable", auth: "oauth", personalState: "connected" }] });
   finish(Response.json({ error: "invalid_grant" }, { status: 400 }));
   await new Promise((resolve) => setImmediate(resolve));
-  await expect(get(routeContext({ agent: "agent", server: "remote", live: "0" }))).resolves.toMatchObject({ servers: [{ personalState: "connected" }] });
+  await expect(get(routeContext({ agent: "agent", server: "remote", live: "0" }))).resolves.toMatchObject({ servers: [{ personalState: "needs_reconnect" }] });
   expect(factory).not.toHaveBeenCalled();
   await extension.stop();
 });
@@ -290,7 +290,7 @@ it("lists enabled and disabled catalog cards and legacy grants without network c
   await extension.stop();
 });
 
-it("does not refresh tokens when OAuth metadata arrives after the status deadline", async () => {
+it("saves refreshed tokens when OAuth metadata arrives after the status deadline", async () => {
   const dir = await dirs.make("mcp-late-metadata-");
   await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp" } } }));
   const host = credentials(); const store = new McpOAuthStore(dir, "http://localhost/callback", host);
@@ -309,6 +309,7 @@ it("does not refresh tokens when OAuth metadata arrives after the status deadlin
   await expect(result).resolves.toMatchObject({ servers: [{ state: "unreachable", teamState: "connected" }] });
   metadata(Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] }));
   await new Promise((resolve) => setImmediate(resolve));
-  expect(token).not.toHaveBeenCalled();
+  expect(token).toHaveBeenCalledOnce();
+  await expect(store.read("agent", "remote")).resolves.toMatchObject({ tokens: { access_token: "rotated", refresh_token: "rotated-refresh" }, state: "connected" });
   await extension.stop();
 });

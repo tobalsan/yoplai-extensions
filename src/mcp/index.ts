@@ -661,12 +661,12 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
           selectedScopes.set(server.name, selected.scope);
           return { ...await oauth.accessTokenResult(agentId, server.name, 60_000, requesterUserId, selected.scope, logPath, statusOnly, statusSignal), scope: selected.scope.type };
         },
-        onAuthFailure: async (server) => {
+        onAuthFailure: async (server, failedAccessToken) => {
           statusSignal?.throwIfAborted();
           if (server.type === "http" && !server.headers) {
             oauthServers.add(`${agentId}:${server.name}`);
             const scope = selectedScopes.get(server.name);
-            if (scope && oauth) return oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal);
+            if (scope && oauth) return oauth.refreshAccessTokenResult(agentId, server.name, requesterUserId, scope, logPath, statusOnly, statusSignal, failedAccessToken);
             return throwOnError ? { reason: "not_connected" } : false;
           }
           return false;

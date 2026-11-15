@@ -18,7 +18,7 @@ import { resolveAccountLabel } from "./account.js";
 import type { McpStaticOAuthClient } from "./loader.js";
 import type { McpTokenResult } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
-import { logMcpUnavailable, type McpLogContext, type McpLogPath } from "./logging.js";
+import { logMcpRefresh, logMcpUnavailable, type McpLogContext, type McpLogPath } from "./logging.js";
 
 export type CredentialScope = { type: "team" } | { type: "personal"; userId: string };
 export interface CredentialKey { agentId: string; integration: string; scope: CredentialScope }
@@ -65,6 +65,7 @@ export interface OAuthConnection {
   clientSource?: "cimd";
   tokens: OAuthTokens;
   connectedAt: string;
+  issuedAt?: string;
   authorizationServerUrl: string;
   expiresAt?: string;
   state?: OAuthState;
@@ -133,7 +134,7 @@ const oauthFetch: typeof fetch = async (input, init) => {
 
 export class McpOAuthStore {
   private readonly pending = new Map<string, PendingOAuthFlow>();
-  private readonly refreshes = new Map<string, { promise: Promise<McpTokenResult>; controller: AbortController; waiters: number; totalDeadline: boolean }>();
+  private readonly refreshes = new Map<string, Promise<McpTokenResult>>();
   private readonly accountLookups = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly dataDir: string, private readonly redirectUri: string, private readonly credentials?: ScopedCredentials, private readonly identify?: ServerIdentityResolver, private readonly clientMetadataUrl?: string) {}
@@ -320,8 +321,9 @@ export class McpOAuthStore {
     try {
       const info = await discoverOAuthServerInfo(pending.url, { fetchFn: oauthFetch });
       const tokens = await exchangeAuthorization(info.authorizationServerUrl, { metadata: info.authorizationServerMetadata, clientInformation: pending.client, fetchFn: oauthFetch, authorizationCode: code, codeVerifier: pending.codeVerifier, redirectUri: this.redirectUri, resource: new URL(pending.url) });
+      const issuedAt = new Date().toISOString();
       const account = await resolveAccountLabel({ serverUrl: pending.url, authorizationServerUrl: info.authorizationServerUrl, tokens });
-      await this.write(pending.agent, pending.server, { client: pending.client, ...(pending.clientSource ? { clientSource: pending.clientSource } : {}), tokens, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
+      await this.write(pending.agent, pending.server, { client: pending.client, ...(pending.clientSource ? { clientSource: pending.clientSource } : {}), tokens, issuedAt, connectedAt: new Date().toISOString(), authorizationServerUrl: info.authorizationServerUrl, expiresAt: expiry(tokens), state: "connected", identity: identityOf(pending.identity), ...(account ? { account } : {}) }, pending.scope, pending.identity);
       onConnected?.(pending);
       await pending.onComplete?.(pending.server);
       return pending;
@@ -358,42 +360,34 @@ export class McpOAuthStore {
     return exact ? { connection: exact, scope: exactScope } : undefined;
   }
 
-  private async dedupedRefresh(agent: string, server: string, connection: OAuthConnection, scope: CredentialScope, requesterUserId?: string, logPath: McpLogPath = "tools", statusOnly = false, statusSignal?: AbortSignal): Promise<McpTokenResult> {
-    if (statusOnly) return this.refreshConnection(agent, server, connection, scope, requesterUserId, logPath, statusOnly, statusSignal);
-    statusSignal?.throwIfAborted();
+  private async dedupedRefresh(agent: string, server: string, scope: CredentialScope, requesterUserId?: string, logPath: McpLogPath = "tools", statusOnly = false, statusSignal?: AbortSignal, skewMs?: number, failedAccessToken?: string): Promise<McpTokenResult> {
+    const expired = (): McpTokenResult => ({ reason: "refresh_failed", scope: scope.type, error: { category: "timeout", message: "MCP server status timed out" } });
+    if (statusSignal?.aborted) return statusOnly ? expired() : { reason: "refresh_failed", scope: scope.type };
     const key = JSON.stringify(this.key(agent, server, scope));
     let refresh = this.refreshes.get(key);
     if (!refresh) {
-      const controller = new AbortController();
-      const promise = this.refreshConnection(agent, server, connection, scope, requesterUserId, logPath, false, controller.signal, Boolean(statusSignal));
-      const pending = { promise, controller, waiters: 0, totalDeadline: Boolean(statusSignal) };
-      refresh = pending;
-      this.refreshes.set(key, pending);
-      void promise.finally(() => {
-        controller.abort();
+      refresh = this.refreshConnection(agent, server, scope, requesterUserId, logPath, statusOnly, skewMs, failedAccessToken);
+      this.refreshes.set(key, refresh);
+      const pending = refresh;
+      void pending.finally(() => {
         if (this.refreshes.get(key) === pending) this.refreshes.delete(key);
       }).catch(() => {});
     }
-    refresh.waiters++;
     let onAbort: (() => void) | undefined;
     try {
-      if (!statusSignal) {
-        if (!refresh.totalDeadline) return await refresh.promise;
-        return await withTimeout(refresh.promise, 10_000, "OAuth refresh timed out").catch(() => ({ reason: "refresh_failed" as const, scope: scope.type }));
-      }
-      return await Promise.race([
-        refresh.promise,
-        new Promise<never>((_resolve, reject) => {
-          onAbort = () => reject(statusSignal.reason);
+      const waiting = statusSignal ? Promise.race([
+        refresh,
+        new Promise<McpTokenResult>((resolve) => {
+          onAbort = () => resolve(expired());
           statusSignal.addEventListener("abort", onAbort, { once: true });
+          if (statusSignal.aborted) onAbort();
         }),
-      ]);
+      ]) : refresh;
+      const result = await (statusSignal ? waiting : withTimeout(waiting, 10_000, "OAuth refresh timed out").catch(expired));
+      const { error, ...plain } = result;
+      return statusOnly ? result : plain;
     } finally {
       if (onAbort) statusSignal?.removeEventListener("abort", onAbort);
-      if (--refresh.waiters === 0 && this.refreshes.get(key) === refresh) {
-        this.refreshes.delete(key);
-        refresh.controller.abort(statusSignal?.reason);
-      }
     }
   }
 
@@ -407,73 +401,104 @@ export class McpOAuthStore {
     const { connection, scope } = resolved;
     if (connection.state === "needs_reconnect") return { reason: "needs_reconnect", scope: scope.type };
     if (!connection.expiresAt || Date.parse(connection.expiresAt) - Date.now() > skewMs) return { token: connection.tokens.access_token, scope: scope.type };
-    return this.dedupedRefresh(agent, server, connection, scope, requesterUserId, logPath, statusOnly, statusSignal);
+    return this.dedupedRefresh(agent, server, scope, requesterUserId, logPath, statusOnly, statusSignal, skewMs);
   }
 
   async refreshAccessToken(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope, logPath: McpLogPath = "tools"): Promise<string | undefined> {
     return (await this.refreshAccessTokenResult(agent, server, requesterUserId, exactScope, logPath)).token;
   }
 
-  async refreshAccessTokenResult(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope, logPath: McpLogPath = "tools", statusOnly = false, statusSignal?: AbortSignal): Promise<McpTokenResult> {
+  async refreshAccessTokenResult(agent: string, server: string, requesterUserId?: string, exactScope?: CredentialScope, logPath: McpLogPath = "tools", statusOnly = false, statusSignal?: AbortSignal, failedAccessToken?: string): Promise<McpTokenResult> {
     const resolved = await this.resolveScoped(agent, server, requesterUserId, exactScope);
-    return resolved ? this.dedupedRefresh(agent, server, resolved.connection, resolved.scope, requesterUserId, logPath, statusOnly, statusSignal) : { reason: "not_connected" };
+    return resolved ? this.dedupedRefresh(agent, server, resolved.scope, requesterUserId, logPath, statusOnly, statusSignal, undefined, failedAccessToken) : { reason: "not_connected" };
   }
 
   private async refreshConnection(
     agent: string,
     server: string,
-    connection: OAuthConnection,
     scope: CredentialScope,
     requesterUserId?: string,
     logPath: McpLogPath = "tools",
     statusOnly = false,
-    statusSignal?: AbortSignal,
-    totalDeadline = false,
+    skewMs?: number,
+    failedAccessToken?: string,
   ): Promise<McpTokenResult> {
-    const expired = (): McpTokenResult => ({ reason: "refresh_failed", scope: scope.type, error: { category: "timeout", message: "MCP server status timed out" } });
+    const connection = await this.read(agent, server, scope);
+    if (!connection) return { reason: "not_connected", scope: scope.type };
+    if (connection.state === "needs_reconnect") return { reason: "needs_reconnect", scope: scope.type };
+    if (failedAccessToken !== undefined && connection.tokens.access_token !== failedAccessToken) return { token: connection.tokens.access_token, scope: scope.type };
+    if (skewMs !== undefined && (!connection.expiresAt || Date.parse(connection.expiresAt) - Date.now() > skewMs)) return { token: connection.tokens.access_token, scope: scope.type };
+    const controller = new AbortController();
     // An account label written meanwhile is not a competing grant: compare without it and keep it on save.
     const comparable = (value?: OAuthConnection) => value ? JSON.stringify({ ...value, account: undefined }) : undefined;
     const unchanged = async () => { const latest = await this.read(agent, server, scope); return latest && comparable(latest) === comparable(connection) ? latest : undefined; };
     const reconnect = async () => {
       const latest = await unchanged();
-      if (latest && !statusSignal?.aborted) await this.write(agent, server, { ...latest, state: "needs_reconnect" }, scope);
+      if (latest) await this.write(agent, server, { ...latest, state: "needs_reconnect" }, scope);
     };
     if (!connection.tokens.refresh_token) {
-      if (statusSignal?.aborted) return expired();
       await reconnect();
       return { reason: "needs_reconnect", scope: scope.type };
     }
     let refused: string | undefined;
+    let requested = false;
+    let status: number | undefined;
+    let oauthError: string | undefined;
+    let newRefreshFp: string | undefined;
+    let expiresIn: number | undefined;
+    let issued = false;
+    let saved = false;
     try {
       const fetchFn: typeof fetch = async (input, init) => {
         refused = undefined;
-        statusSignal?.throwIfAborted();
-        const signal = statusSignal && init?.signal ? AbortSignal.any([statusSignal, init.signal]) : statusSignal ?? init?.signal;
+        const signal = init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal;
         const response = await fetch(input, { ...init, signal });
+        if (requested) status = response.status;
         // Rebuild with the current global class: the SDK only reads error bodies that pass `instanceof Response`.
         const body = response.body ? await response.arrayBuffer() : null;
+        if (requested && body) {
+          try {
+            const payload = JSON.parse(new TextDecoder().decode(body));
+            if (typeof payload.error === "string" && /^[a-z_]+$/.test(payload.error)) oauthError = payload.error;
+            if (typeof payload.refresh_token === "string") newRefreshFp = filePart(payload.refresh_token).slice(0, 8);
+            if (typeof payload.expires_in === "number") expiresIn = payload.expires_in;
+          } catch { /* The SDK reports malformed token responses. */ }
+        }
         if (!response.ok) refused = `HTTP ${response.status}: ${body ? new TextDecoder().decode(body) : ""}`;
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       };
       const refreshing = (async () => {
         const metadata = await discoverAuthorizationServerMetadata(connection.authorizationServerUrl, { fetchFn });
-        statusSignal?.throwIfAborted();
+        controller.signal.throwIfAborted();
+        requested = true;
         return refreshAuthorization(connection.authorizationServerUrl, { metadata, clientInformation: connection.client, refreshToken: connection.tokens.refresh_token!, resource: this.resource(agent, server), fetchFn });
       })();
-      const tokens = await (totalDeadline ? refreshing : withTimeout(refreshing, 10_000, "OAuth refresh timed out"));
+      const tokens = await withTimeout(refreshing, 30_000, "OAuth refresh timed out");
+      issued = true;
+      const issuedAt = new Date().toISOString();
       const latest = await unchanged();
-      if (statusSignal?.aborted) return expired();
       if (!latest) return { reason: "not_connected", scope: scope.type };
-      await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, expiresAt: expiry(tokens), state: "connected" }, scope);
+      await this.write(agent, server, { ...connection, ...(latest.account ? { account: latest.account } : {}), tokens, issuedAt, expiresAt: expiry(tokens), state: "connected" }, scope);
+      saved = true;
       return { token: tokens.access_token, scope: scope.type };
     } catch (error) {
+      controller.abort();
       logMcpUnavailable("error", refused ?? (error instanceof Error ? error.message : String(error)), {
         agentId: agent, userId: requesterUserId, path: logPath, server, reason: "refresh_failed", scope: scope.type,
       });
-      if (statusSignal?.aborted) return expired();
-      const category = classifyMcpError(error);
-      if (!statusOnly || category === "authentication") await reconnect();
-      return { reason: "refresh_failed", scope: scope.type, ...(statusOnly ? { error: { category, message: error instanceof Error ? error.message : String(error) } } : {}) };
+      if (!oauthError && error instanceof Error) {
+        const code = "errorCode" in error ? error.errorCode : /"error"\s*:\s*"([a-z_]+)"/.exec(error.message)?.[1];
+        if (typeof code === "string" && /^[a-z_]+$/.test(code)) oauthError = code;
+      }
+      const invalidGrant = error instanceof Error && (error.name === "InvalidGrantError" || ("errorCode" in error && error.errorCode === "invalid_grant") || /\binvalid_grant\b/.test(error.message));
+      const category = invalidGrant ? "authentication" : classifyMcpError(error);
+      const recentlyIssued = connection.issuedAt && Date.now() - Date.parse(connection.issuedAt) < 15 * 60_000;
+      if (!(invalidGrant && recentlyIssued) && (!statusOnly || category === "authentication")) await reconnect();
+      return { reason: "refresh_failed", scope: scope.type, error: { category, message: error instanceof Error ? error.message : String(error) } };
+    } finally {
+      if (requested) logMcpRefresh({ agentId: agent, server, scope: scope.type, path: logPath, statusOnly,
+        result: { status, error: oauthError }, expires_in: expiresIn, saved, dropped: issued && !saved,
+        oldRefreshFp: filePart(connection.tokens.refresh_token).slice(0, 8), newRefreshFp });
     }
   }
 }
