@@ -24,6 +24,7 @@ The source directory is the build/install directory name. The extension ID is th
 | [`google-analytics`](src/google-analytics/README.md) | `googleAnalytics` | Read-only GA4 discovery, reports and page period comparisons | Host-managed Google OAuth and GA4 property access |
 | `gsheets` | `gsheets` | Spreadsheet discovery, reads, row appends, and range updates | Google service-account JSON |
 | `hiveage` | `hiveage` | Hiveage invoices, estimates, payments, and related records | Account subdomain and API key |
+| [`interview`](src/interview/README.md) | `interview` | Batch question forms with drafts, inline assistance, and same-session continuation | Gateway extension page hooks |
 | [`jira`](docs/specs/jira-extension-prd.md) | `jira` | Scoped Jira reads and guarded writes | Atlassian subdomain, email, and API token |
 | `lusha` | `lusha` | Fallback email, opt-in phone, and company enrichment after People Enrich found nothing; free usage/pricing and validation | Separate Lusha API key and credits |
 | [`mcp`](src/mcp/README.md) | `mcp` | Tools discovered from stdio or remote MCP servers | Agent `mcp.json` or non-empty shared catalog |
