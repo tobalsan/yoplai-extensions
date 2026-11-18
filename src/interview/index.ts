@@ -109,7 +109,7 @@ export function createInterviewExtension() {
         if (viewer !== form.ownerUserId || !await host.canUserAccessAgent?.(viewer, form.agentId)) return c.text("Not found", 404);
         const token = !auth?.impersonator ? issueToken(form) : undefined;
         const cookieTheme = c.req.header("cookie")?.match(/(?:^|;\s*)yoplai-theme=(light|dark)(?:;|$)/)?.[1];
-        return c.html(renderFormPage({ form: formView(form), token, apiBase: `${new URL(c.req.url).origin}${formPath(form)}`, theme: cookieTheme === "light" || cookieTheme === "dark" ? cookieTheme : null }), 200, { "Cache-Control": "no-store" });
+        return c.html(renderFormPage({ form: formView(form), token, apiBase: formPath(form), theme: cookieTheme === "light" || cookieTheme === "dark" ? cookieTheme : null }), 200, { "Cache-Control": "no-store" });
       });
       for (const operation of ["load", "draft", "submit", "assist"] as const) app.post(`/:agentId/:id/${operation}`, async (c) => {
         let form = store.get(c.req.param("agentId"), c.req.param("id"));
