@@ -292,13 +292,22 @@ export class GmailClient {
   private async request(path: string, init: RequestInit = {}, maxResponseBytes?: number, base = GMAIL_API_BASE) {
     const options = { ...init, headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...Object.fromEntries(new Headers(init.headers)) } };
     const send = () => this.fetchImpl(`${base}${path}`, options);
+    const method = init.method ?? "GET";
     let response: Response;
+    let retried = false;
     try { response = await send(); }
     catch (error) {
       // Retry a read once when fetch got no HTTP response (undici `TypeError: fetch failed`); aborts and writes are never retried.
-      if ((init.method ?? "GET") !== "GET" || !(error instanceof TypeError) || error.message !== "fetch failed" || init.signal?.aborted) throw error;
+      if (method !== "GET" || !(error instanceof TypeError) || error.message !== "fetch failed" || init.signal?.aborted) throw error;
+      retried = true;
       await new Promise((resolve) => setTimeout(resolve, 300));
       try { response = await send(); } catch { throw error; }
+    }
+    if (!retried && method === "GET" && !response.ok && [500, 502, 503, 504].includes(response.status) && !init.signal?.aborted) {
+      await response.body?.cancel().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      init.signal?.throwIfAborted();
+      response = await send();
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
@@ -308,7 +317,7 @@ export class GmailClient {
       throw new GmailRequestError(
         response.status,
         path,
-        init.method ?? "GET",
+        method,
         responseBody,
         payload?.error?.status ?? payload?.error?.errors?.[0]?.reason,
       );

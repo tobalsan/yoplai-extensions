@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ToolExecutionContext } from "../../tool-extension.js";
 import { describe, expect, it, vi } from "vitest";
-import { GmailClient } from "../client.js";
+import { GmailClient, GmailRequestError } from "../client.js";
 
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
 function uploaded(init: RequestInit): { mime: string; metadata?: unknown } {
@@ -110,9 +110,91 @@ describe("GmailClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each([429, 500])("surfaces an HTTP %i on a read without retrying", async (status) => {
-    const fetchImpl = vi.fn().mockResolvedValue(response({ error: { status: "UNAVAILABLE" } }, status));
-    await expect(new GmailClient("token", fetchImpl).getThread({ threadId: "t1" })).rejects.toMatchObject({ status, method: "GET" });
+  it.each([500, 502, 503, 504])("retries the account check once after HTTP %i", async (status) => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(response({ error: { message: "Temporary failure" } }, status))
+        .mockResolvedValueOnce(response({ emailAddress: "mailbox@example.com" }));
+      const outcome = new GmailClient("token", fetchImpl).account().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await outcome).toBe("mailbox@example.com");
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("surfaces the second Gmail error after a read retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(response({ error: { message: "Temporary failure" } }, 500))
+        .mockResolvedValueOnce(response({ error: { status: "UNAVAILABLE" } }, 503));
+      const outcome = new GmailClient("token", fetchImpl).account().catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(GmailRequestError);
+      expect(error).toMatchObject({
+        status: 503,
+        method: "GET",
+        message: 'Gmail request failed (HTTP 503) GET /profile: {"error":{"status":"UNAVAILABLE"}}',
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("surfaces an HTTP 503 after the network retry without a third attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(response({ error: { status: "UNAVAILABLE" } }, 503));
+      const outcome = new GmailClient("token", fetchImpl).getThread({ threadId: "t1" }).catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      expect(await outcome).toMatchObject({ status: 503, method: "GET" });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("surfaces a network error from the HTTP retry without a third attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      const networkError = new TypeError("fetch failed");
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(response({ error: { status: "UNAVAILABLE" } }, 503))
+        .mockRejectedValueOnce(networkError);
+      const outcome = new GmailClient("token", fetchImpl).getThread({ threadId: "t1" }).catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      expect(await outcome).toBe(networkError);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not resend an account check cancelled during the retry delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const cancelled = new Error("cancelled account check");
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response({ error: { status: "UNAVAILABLE" } }, 503));
+      const outcome = new GmailClient("token", fetchImpl).account({ signal: controller.signal }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1);
+      controller.abort(cancelled);
+      await vi.runAllTimersAsync();
+      expect(await outcome).toBe(cancelled);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("surfaces an HTTP 503 on a label write without retrying", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ error: { status: "UNAVAILABLE" } }, 503));
+    await expect(new GmailClient("token", fetchImpl).labelThread({ threadId: "t1", labelIds: ["LABEL"] })).rejects.toMatchObject({ status: 503, method: "POST" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces an HTTP 429 on a read without retrying", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ error: { status: "RESOURCE_EXHAUSTED" } }, 429));
+    await expect(new GmailClient("token", fetchImpl).getThread({ threadId: "t1" })).rejects.toMatchObject({ status: 429, method: "GET" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
