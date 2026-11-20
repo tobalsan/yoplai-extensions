@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Read invoices, estimates, and payments",
+  "category": "finance",
+  "minYoplai": "0.11.0"
+}

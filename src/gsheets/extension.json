@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Read and update Google Sheets",
+  "category": "data",
+  "minYoplai": "0.11.0"
+}

@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Read Notion pages and files",
+  "category": "productivity",
+  "minYoplai": "0.11.0"
+}

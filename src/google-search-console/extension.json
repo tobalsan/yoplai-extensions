@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Read search reports and inspect URLs",
+  "category": "data",
+  "minYoplai": "0.11.0"
+}

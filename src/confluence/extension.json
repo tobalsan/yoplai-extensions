@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Search Confluence pages and read attachments",
+  "category": "productivity",
+  "minYoplai": "0.11.0"
+}

@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Manage support tickets and articles",
+  "category": "support",
+  "minYoplai": "0.11.0"
+}

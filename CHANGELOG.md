@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- An older release does not replace the latest catalog.
 - Gmail reads, including the per-call account check, retry once after HTTP 500, 502, 503 or 504 to absorb brief Google outages (ALG-710).
 - MCP OAuth refreshes share one request across status checks and tool loads, save rotated tokens after caller cancellation or timeout, and skip refreshing a token already replaced after a 401. Recent `invalid_grant` refusals keep the grant connected for a 15-minute issue window; structured refresh logs use token fingerprints only (ALG-692).
 
@@ -31,6 +32,8 @@
 - MCP servers no longer read the host `oauth.providers` config. Set `oauth.clientId` (and `oauth.clientSecret` if the provider requires one) on the server in `mcp.json`, or use dynamic client registration. Installs that used `oauth.providers.google` or `hubspot` for an MCP server must add an `oauth` block to it, and users connect again once.
 
 ### Added
+
+- The release workflow publishes a catalog and one standalone archive for each extension after the tests pass.
 
 - Interview forms batch an agent's questions across chat and messaging surfaces, with drafts, inline assistance, owner-only access and durable same-session continuation (ALG-708).
 

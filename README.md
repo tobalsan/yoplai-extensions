@@ -10,7 +10,7 @@ Descriptors may set `tokenRequestFormat: "json"` for providers (e.g. Notion) who
 
 ## Extension catalog
 
-The source directory is the build/install directory name. The extension ID is the key used under `extensions` in Yoplai configuration; the two differ where noted.
+The source directory names the manual build directory in `dist/`. The extension ID names the release bundle and the key under `extensions` in Yoplai configuration.
 
 | Source directory | Extension ID | Purpose | Required setup |
 | --- | --- | --- | --- |
@@ -38,7 +38,30 @@ In multi-user Yoplai, credentials can be personal or shared: each user can add t
 
 Extension-specific operational documentation stays beside the owning slice or under `docs/specs/`. The authoritative host extension contract is maintained in the Yoplai repository rather than copied here.
 
+### Release assets
+
+On each push to `main`, the release workflow builds and tests the extensions before it publishes the archives, icons, and catalog. Yoplai reads [`catalog.json`](https://github.com/tobalsan/yoplai-extensions/releases/latest/download/catalog.json) from the latest release. Each archive URL includes its release tag.
+
+When an extension changes version, update `src/<folder>/extension.json`. Use `catalog: false` to keep an archive out of the catalog. Interview stays out of the catalog because it needs gateway hooks that its version field does not describe.
+
+Use Node 24 and pnpm 11 for a local release build.
+
+```bash
+pnpm install --frozen-lockfile
+GATEWAY_PDFJS_VERSION=5.4.296 pnpm build
+pnpm test
+node scripts/release.mjs
+node scripts/release-smoke.mjs
+```
+
+The release script replaces `release/`. It does not publish to GitHub. For a local catalog test, set the asset URL with `node scripts/release.mjs --base-url http://127.0.0.1:8000`.
+
 ## Usage
+
+Open **Admin → Extensions** to install an extension from the catalog. In
+multi-user mode, only a superadmin on the selected gateway can use the catalog.
+An ordinary admin cannot use it. Use the symlink method for manual installs and
+development.
 
 Build and symlink (or copy) individual built extension directories into `$YOPLAI_HOME/extensions` (`~/.yoplai/extensions` by default), or set `extensionsPath` in `yoplai.json`. `pnpm build` generates the ignored `dist/` tree and copies each available slice icon into its built directory; edit `src/`, not `dist/`.
 
