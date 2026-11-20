@@ -1,12 +1,12 @@
 import type { z } from "zod";
-import { createRequire } from "node:module";
-const PptxGenJS: typeof import("pptxgenjs").default = createRequire(import.meta.url)("pptxgenjs");
+import PptxModule = require("pptxgenjs");
 import { imageSize } from "image-size";
 import { readConversationFile, uploadDriveFile } from "./files.js";
 import type { ToolExecutionContext } from "../tool-extension.js";
 import type { DriveRequest } from "./files.js";
 import type { SlidesCreateParamsSchema, SlidesGetParamsSchema, SlidesBatchUpdateParamsSchema, SlideElementInput } from "./slides-models.js";
 
+const PptxGenJS = PptxModule as unknown as typeof import("pptxgenjs").default;
 const SLIDES = "https://slides.googleapis.com/v1/presentations";
 export class SlidesError extends Error {
   constructor(message: string, readonly status: number) { super(message); }

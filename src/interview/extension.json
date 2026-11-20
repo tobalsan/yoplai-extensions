@@ -1,0 +1,7 @@
+{
+  "version": "0.1.0",
+  "tagline": "Ask a group of questions in one form",
+  "category": "communication",
+  "minYoplai": "0.11.0",
+  "catalog": false
+}

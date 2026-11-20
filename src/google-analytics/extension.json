@@ -1,0 +1,6 @@
+{
+  "version": "0.1.0",
+  "tagline": "Read reports from Google Analytics",
+  "category": "data",
+  "minYoplai": "0.11.0"
+}
