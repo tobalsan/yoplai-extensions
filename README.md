@@ -58,6 +58,11 @@ The release script replaces `release/`. It does not publish to GitHub. For a loc
 
 ## Usage
 
+Open **Admin → Extensions** to install an extension from the catalog. In
+multi-user mode, only a superadmin on the selected gateway can use the catalog.
+An ordinary admin cannot use it. Use the symlink method for manual installs and
+development.
+
 Build and symlink (or copy) individual built extension directories into `$YOPLAI_HOME/extensions` (`~/.yoplai/extensions` by default), or set `extensionsPath` in `yoplai.json`. `pnpm build` generates the ignored `dist/` tree and copies each available slice icon into its built directory; edit `src/`, not `dist/`.
 
 A pre-rename install under `~/.aihub` still works, with a one-time deprecation warning, but the two kinds of fallback trigger differently:

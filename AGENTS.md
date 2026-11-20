@@ -25,6 +25,35 @@ pnpm build
 pnpm test
 ```
 
+## Release and catalog
+
+Add `src/<folder>/extension.json` for each new extension. Use these fields:
+
+| Field | Value |
+| --- | --- |
+| `version` | The extension version, in `major.minor.patch` format. |
+| `tagline` | A short summary of what the extension does. |
+| `category` | One of `communication`, `productivity`, `sales`, `support`, `data`, `search`, `finance`, or `developer`. |
+| `minYoplai` | The earliest Yoplai version that supports the extension. |
+| `docsUrl` | Optional. The default points to the source folder on `main`. |
+| `catalog` | Optional. Set it to `false` to omit the extension from the catalog. The release still includes its archive. |
+
+The release script uses the exported `id`, `displayName`, and `description`.
+The script rejects duplicate IDs, including IDs that differ only in case.
+Increase `version` for every change that users can see.
+
+Each push to `main`, including a merge, starts the release workflow. The
+workflow publishes a release if the build and tests pass.
+
+Before you open a pull request, run these commands from the repository root:
+
+```bash
+node scripts/release.mjs
+node scripts/release-smoke.mjs
+```
+
+The first command replaces `release/`. Neither command publishes a release.
+
 ## Conventions
 
 - TypeScript with strict mode
