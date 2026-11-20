@@ -1,0 +1,66 @@
+name: Release extensions
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: extension-release
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+        env:
+          GATEWAY_PDFJS_VERSION: "5.4.296"
+      - name: Test
+        run: pnpm test
+      - name: Build the catalog and archives
+        run: node scripts/release.mjs
+      - name: Test the archives
+        run: node scripts/release-smoke.mjs
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          tag=$(node -p 'require("./release/catalog.json").release')
+          latest_flag=--latest
+          if latest_tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>&1); then
+            latest_commit=$(git rev-parse --verify "refs/tags/${latest_tag}^{commit}")
+            if [[ "$latest_commit" != "$GITHUB_SHA" ]]; then
+              if git merge-base --is-ancestor "$GITHUB_SHA" "$latest_commit"; then
+                latest_flag=--latest=false
+              elif [[ $? -ne 1 ]]; then
+                echo 'Git cannot compare the release commits.' >&2
+                exit 1
+              fi
+            fi
+          elif [[ "$latest_tag" != 'release not found' ]]; then
+            printf '%s\n' "$latest_tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" "$latest_flag" --title "$tag" \
+            release/catalog.json release/*.tgz release/*.svg release/*.png
