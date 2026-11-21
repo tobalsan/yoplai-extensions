@@ -15,24 +15,9 @@ import { withTimeout } from "./timeout.js";
 import { createIconResolver, knownServer, normalizeServerIcon, siteLabel } from "./icon.js";
 import { buildOAuthClientMetadata } from "./client-metadata.js";
 import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
-import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps, type ResolvedToolExtensionConfig } from "../tool-extension.js";
+import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps } from "../tool-extension.js";
 
-const McpExtensionConfigSchema = z
-  .object({
-    configPath: z
-      .string()
-      .optional()
-      .describe(
-        "Path to the MCP servers config JSON (mcpServers map). Defaults to mcp.json in the agent directory."
-      ),
-    agentDir: z
-      .string()
-      .optional()
-      .describe(
-        "Directory used to resolve configPath and load a per-agent .env file. Defaults to the agent's workspace directory."
-      ),
-  })
-  .passthrough();
+const McpExtensionConfigSchema = z.object({}).passthrough();
 
 type AgentLike = {
   id: string;
@@ -79,47 +64,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function returnPath(value: unknown): string | undefined {
-  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f\\]/.test(value)) return undefined;
+  if (typeof value !== "string" || /[\p{Cc}\\]/u.test(value)) return undefined;
   try {
     const url = new URL(value, "https://yoplai.invalid");
     return url.origin === "https://yoplai.invalid" && !url.pathname.startsWith("//") ? `${url.pathname}${url.search}${url.hash}` : undefined;
   } catch { return undefined; }
 }
 
-function resolveEnvRefs(value: unknown): unknown {
-  if (typeof value === "string" && value.startsWith("$env:")) {
-    const envName = value.slice("$env:".length);
-    const envValue = process.env[envName];
-    if (envValue === undefined) {
-      throw new Error(`Env var "${envName}" not set`);
-    }
-    return envValue;
-  }
-  if (Array.isArray(value)) return value.map(resolveEnvRefs);
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, resolveEnvRefs(item)])
-    );
-  }
-  return value;
-}
-
-function resolveConfigRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? (resolveEnvRefs(value) as Record<string, unknown>) : {};
-}
-
-function resolveAgentDir(agent: AgentLike, config: ResolvedToolExtensionConfig): string {
-  const configured = config.merged.agentDir;
-  if (typeof configured === "string") return configured;
-  if (agent.workspaceDir) return agent.workspaceDir;
-  if (agent.workspace) return agent.workspace;
-  return process.cwd();
-}
-
-function resolveConfigPath(agent: AgentLike, config: ResolvedToolExtensionConfig): string {
-  const configured = config.merged.configPath;
-  if (typeof configured === "string") return configured;
-  return path.join(resolveAgentDir(agent, config), "mcp.json");
+function resolveAgentDir(agent: AgentLike): string | undefined {
+  return agent.workspaceDir || agent.workspace;
 }
 
 function readRawConfig(filePath: string): Record<string, unknown> {
@@ -241,17 +194,6 @@ function extensionHub(agentId: string): string {
   return `/agents/${encodeURIComponent(agentId)}/edit`;
 }
 
-function resolveExtensionConfig(
-  agent: AgentLike,
-  rootConfig: { extensions?: Record<string, unknown> }
-): ResolvedToolExtensionConfig {
-  const resolved = McpExtensionConfigSchema.parse({
-    ...resolveConfigRecord(rootConfig.extensions?.mcp),
-    ...resolveConfigRecord(agent.extensions?.mcp),
-  });
-  return { global: {}, root: {}, agent: resolved, merged: resolved };
-}
-
 let warnedLegacyHomeEnv = false;
 
 function trimValue(value: string | undefined): string | undefined {
@@ -260,11 +202,9 @@ function trimValue(value: string | undefined): string | undefined {
 }
 
 function resolveInterpolationEnv(
-  agent: AgentLike,
-  rootConfig: { env?: Record<string, string> },
-  resolved: ResolvedToolExtensionConfig
+  agentDir: string,
+  rootConfig: { env?: Record<string, string> }
 ): Record<string, string> {
-  const agentDir = resolveAgentDir(agent, resolved);
   const legacyHomeDir = trimValue(process.env.AIHUB_HOME);
   const homeDir = trimValue(process.env.YOPLAI_HOME) ?? legacyHomeDir;
   if (!trimValue(process.env.YOPLAI_HOME) && legacyHomeDir && !warnedLegacyHomeEnv) {
@@ -288,7 +228,6 @@ const baseExtension = defineToolExtension({
   configSchema: McpExtensionConfigSchema,
   agentConfigSchema: McpExtensionConfigSchema,
   requiredSecrets: [],
-  advancedConfigFields: ["configPath", "agentDir"],
   createTools() {
     return [];
   },
@@ -347,6 +286,7 @@ export function callSessionKey(agentId: string, configPath: string, revision: st
 export function createMcpExtension(clientFactory?: McpClientFactory) {
   const loggedStates = new Map<string, number>();
   const loggedConfigErrors = new Set<string>();
+  const warnedLegacyLocations = new Set<string>();
   const managers = new Map<string, Promise<McpClientManager>>();
   // Keys of cached tool-list managers. Call-session keys (below) are cached too; every other manager key is
   // single-use and closed by its own caller.
@@ -367,6 +307,15 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
   let connect: CredentialConnectHost | undefined;
   let resolveIcon: ReturnType<typeof createIconResolver> | undefined;
   let unregister: (() => void) | undefined;
+
+  function warnLegacyLocation(agent: AgentLike, root: { extensions?: Record<string, unknown> }): void {
+    if (warnedLegacyLocations.has(agent.id)) return;
+    if (![root.extensions?.mcp, agent.extensions?.mcp].some((value) =>
+      isRecord(value) && (Object.hasOwn(value, "configPath") || Object.hasOwn(value, "agentDir"))
+    )) return;
+    warnedLegacyLocations.add(agent.id);
+    console.warn(`[mcp] Ignoring legacy configPath or agentDir for agent "${agent.id}". MCP uses the workspace mcp.json.`);
+  }
 
   function logConfigErrors(loaded: LoadedMcpConfig, agentId: string, configPath: string, revision: string, userId?: string): void {
     for (const error of loaded.errors) {
@@ -392,8 +341,10 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
    * `loaded` holds what actually runs: local servers and catalog servers the agent enabled via `sharedServers`.
    */
   function mergedForAgent(agent: AgentLike, root: { extensions?: Record<string, unknown>; env?: Record<string, string> }) {
-    const resolved = resolveExtensionConfig(agent, root);
-    const configPath = resolveConfigPath(agent, resolved);
+    warnLegacyLocation(agent, root);
+    const agentDir = resolveAgentDir(agent);
+    if (!agentDir) return undefined;
+    const configPath = path.join(agentDir, "mcp.json");
     const localText = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
     const catalog = !runtime || configPath === catalogPath() ? {} : catalogServers();
     if (localText === undefined && !Object.keys(catalog).length) return undefined;
@@ -405,7 +356,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       catch { return false; }
     }));
     const enabled = new Set(Array.isArray(local.sharedServers) ? local.sharedServers.filter((item): item is string => typeof item === "string") : []);
-    const all = parseMcpConfig(JSON.stringify({ mcpServers: { ...(local.mcpServers as object), ...visible } }), resolveInterpolationEnv(agent, root, resolved));
+    const all = parseMcpConfig(JSON.stringify({ mcpServers: { ...(local.mcpServers as object), ...visible } }), resolveInterpolationEnv(agentDir, root));
     const shared = new Set(Object.keys(visible));
     const loaded: LoadedMcpConfig = { servers: all.servers.filter((server) => !shared.has(server.name) || enabled.has(server.name)), errors: all.errors };
     const fingerprint = crypto.createHash("sha256").update(JSON.stringify([localText ?? "", Object.entries(visible).filter(([key]) => enabled.has(key))])).digest("hex");
@@ -419,8 +370,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
 
   function configForAgent(agentId: string): { agent: AgentLike; path: string } | undefined {
     const agent = runtime?.getAgent(agentId);
-    if (!agent || !runtime) return undefined;
-    return { agent, path: resolveConfigPath(agent, resolveExtensionConfig(agent, runtime.getConfig())) };
+    const agentDir = agent && resolveAgentDir(agent);
+    if (!agent || !agentDir) return undefined;
+    return { agent, path: path.join(agentDir, "mcp.json") };
   }
 
   async function cardIcon(serverUrl: string, reported: unknown, favicon: string | Promise<string | undefined> | undefined): Promise<string | undefined> {
@@ -859,13 +811,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     function authRequired(c: RouteContext): unknown {
       return multiUserEnabled() && !userId(c) ? c.text("Authentication required", 401) : undefined;
     }
-    /** Whole-team MCP setup (shared mcp.json, team OAuth grants) is admin-only. */
+    /** Shared MCP config and team OAuth grants require management of the agent. */
     function canConfigureTeam(c: RouteContext): boolean {
-      if (!multiUserEnabled()) return true;
-      const auth = c.get?.("multiUserAuthContext");
-      const role = isRecord(auth) && isRecord(auth.user) ? auth.user.role : undefined;
-      const roles = Array.isArray(role) ? role : [role];
-      return roles.some((value) => value === "admin" || value === "superadmin");
+      return !multiUserEnabled() || c.get?.("mcpCanManageAgent") === true;
     }
     function isSuperadmin(c: RouteContext): boolean {
       if (!multiUserEnabled()) return true;
@@ -933,11 +881,11 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (!agentId || !config) return c.text("Unknown agent", 404);
       const unauthenticated = authRequired(c);
       if (unauthenticated) return unauthenticated;
+      if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       let input: unknown;
       try { input = await c.req.json?.(); }
       catch { return c.text("Invalid JSON body", 400); }
       if (!isRecord(input) || typeof input.url !== "string" || (input.credentialScope !== "personal" && input.credentialScope !== "team")) return c.text("URL and credentialScope are required", 400);
-      if (input.credentialScope === "team" && !canConfigureTeam(c)) return c.text("Team connections are unavailable", 403);
       let url: URL;
       try { url = new URL(input.url); }
       catch { return c.text("Invalid MCP server URL", 400); }
@@ -1103,6 +1051,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (!agentId || !name || !config) return c.text("Unknown agent or server", 404);
       const unauthenticated = authRequired(c);
       if (unauthenticated) return unauthenticated;
+      if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       let input: unknown;
       try { input = await c.req.json?.(); }
       catch { return c.text("Invalid JSON body", 400); }
@@ -1131,6 +1080,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       if (!agentId || !agent || !runtime) return c.text("Unknown agent", 404);
       const unauthenticated = authRequired(c);
       if (unauthenticated) return unauthenticated;
+      if (!canConfigureTeam(c)) return c.text("Team configuration is unavailable", 403);
       const merged = mergedForAgent(agent, runtime.getConfig());
       const server = merged?.all.servers.find((item) => item.name === name);
       if (!server || merged?.shared.has(server.name)) return c.text("Unknown user MCP server", 404);
@@ -1307,18 +1257,8 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     try { return mergedForAgent(agent, context.config) ? [baseExtension.systemPrompt] : undefined; } catch { return [baseExtension.systemPrompt]; }
   },
   validateAgentConfigs(config: { agents: AgentLike[]; extensions?: Record<string, unknown> }) {
-    const errors: string[] = [];
-    for (const agent of config.agents) {
-      try {
-        McpExtensionConfigSchema.parse({
-          ...resolveConfigRecord(config.extensions?.mcp),
-          ...resolveConfigRecord(agent.extensions?.mcp),
-        });
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-    }
-    return { valid: errors.length === 0, errors };
+    for (const agent of config.agents) warnLegacyLocation(agent, config);
+    return { valid: true, errors: [] };
   },
   async stop() {
     unregister?.();
@@ -1339,14 +1279,14 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     await Promise.all(pending.map((manager) => manager.then((resolved) => resolved.close(), () => {})));
     loggedStates.clear();
     loggedConfigErrors.clear();
+    warnedLegacyLocations.clear();
     await baseExtension.stop();
   },
   async getAgentTools(agent: AgentLike, context?: { userId?: string; config: { extensions?: Record<string, unknown>; env?: Record<string, string> } }) {
     if (!context) return [];
-    const extensionConfig = resolveExtensionConfig(agent, context.config);
-    const configPath = resolveConfigPath(agent, extensionConfig);
     const merged = mergedForAgent(agent, context.config);
     if (!merged) return [];
+    const { configPath } = merged;
     const revision = merged.fingerprint;
     const loaded = merged.loaded;
     logConfigErrors(loaded, agent.id, configPath, revision, context.userId);

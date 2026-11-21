@@ -41,7 +41,7 @@ ln -sfn "$PWD/dist/mcp" ~/.yoplai/extensions/mcp
 
 ## Enable an agent
 
-MCP is available automatically when the agent directory contains `mcp.json` or the shared catalog (below) is non-empty; an `enabled` flag is not required. Without either, no MCP tools or server cards appear. By default, the extension loads `mcp.json` from the agent directory.
+MCP is available automatically when the agent workspace contains `mcp.json` or the shared catalog (below) is non-empty; an `enabled` flag is optional. The extension reads each agent's local server entries from that workspace.
 
 ## Configure servers
 
@@ -74,17 +74,9 @@ DOCS_MCP_TOKEN=...
 
 The extension also reads process environment, root `env`, and `$YOPLAI_HOME/.env` (agent `.env` takes precedence).
 
-## Custom location
-
-Set `configPath` or `agentDir` when the defaults do not fit:
-
-```yaml
-extensions:
-  mcp:
-    configPath: /srv/yoplai/mcp/research.json
-```
-
 Unavailable or invalid servers are logged and skipped; tools from healthy servers remain available.
+
+For agents with writable sandboxes, place `mcp.json` in the workspace before the container starts so the gateway can mount it read-only. Use `{"mcpServers":{}}` when the agent has no local servers.
 
 ## OAuth servers
 
@@ -93,6 +85,8 @@ For an OAuth-protected remote MCP server such as Claap, configure only its URL:
 ```json
 { "mcpServers": { "claap": { "url": "https://api.claap.io/mcp" } } }
 ```
+
+In multi-user mode, agent managers can add, enable, disable, edit or remove shared server entries, refresh their icons and manage team OAuth grants. **Just me** on a new server keeps its OAuth grant personal while the server entry is shared. Members can connect or disconnect their own OAuth grant for an existing server.
 
 The agent's extension list at `/agents/<agent-id>/edit` shows every configured MCP server as its own card. **Add custom extension** accepts an HTTP(S) URL and **Just me** or **Whole team**; a detected OAuth server starts authorization immediately, unless **Just me** is chosen and you already have a usable personal connection for that URL from another agent. A server without OAuth is connected directly. Existing stdio and hand-configured HTTP servers also appear as cards with their configuration read-only. **Disconnect** deletes the selected OAuth credential but keeps the server; **Remove** deletes the server from the shared `mcp.json` for everyone, after confirmation in the UI. HTTP servers without a server-provided icon get the website icon of their host, then of its root domain (e.g. `api.claap.io` → `claap.io`); hits are cached in `<YOPLAI_HOME>/mcp/icons.json`. Servers added from the UI get a readable key from their site (`mcp.linear.app` → `linear`, then `linear_2`), and cards show the server-reported name and description (`serverInfo.title`/`description`; sentence-like titles are split at the first colon or dash) once connected, saved as `displayName`/`description` on UI-added `mcp.json` entries. Any server entry, stdio included, may set optional `displayName` and `description` to override the card label (yoplai-only keys; other MCP clients ignore them). A small built-in table labels hosted servers whose serverInfo is generic (`calendarmcp.googleapis.com` → Google Calendar with its icon); `displayName` still wins. Servers without an icon show the official MCP logo. Missing app icons use the generic MCP icon. Tool refusals link back to that agent edit page.
 
@@ -156,7 +150,7 @@ Cards and catalog rows use this order: known server icon, saved or live server-r
 
 `POST /mcp/servers/icon/refresh?agent=&server=` refreshes an existing local HTTP server with the requester's effective credentials. `POST /mcp/catalog/icon/refresh?server=` is superadmin-only and tries an unauthenticated connection because catalog entries hold no credentials. Both bypass favicon hits and memoized misses, preserve an old favicon on failure, audit `mcp.server.update` on field `icon`, and return `{ status: "updated" | "unchanged" | "not_connected", server }`. User OAuth servers without a usable connection return `not_connected` without refreshing; a sign-in-only catalog server still refreshes its website favicon and captures its own icon when an agent later connects.
 
-The web details page offers **Refresh icon** for local HTTP servers; the admin catalog offers it per row. Deploy the extension endpoints before the web controls.
+Agent managers can use **Refresh icon** on local HTTP server details. Superadmins can refresh icons in the catalog.
 
 ## Label overrides
 

@@ -14,9 +14,9 @@ export function routeApp() {
 }
 
 /** Route context where `scope` defaults to "team"; responses are `{ body, status }`. */
-export function routeContext(query: Record<string, string>, identity: Record<string, unknown> = { user: { id: "user-a" } }) {
+export function routeContext(query: Record<string, string>, identity: Record<string, unknown> = { user: { id: "user-a" } }, managesAgent?: boolean) {
   return {
-    get: () => identity,
+    get: (key: string) => key === "multiUserAuthContext" ? identity : key === "mcpCanManageAgent" ? managesAgent : undefined,
     req: { query: (name: string) => name === "scope" ? (query[name] ?? "team") : query[name] },
     json: (body: unknown) => body,
     text: (body: string, status?: number) => ({ body, status }),
