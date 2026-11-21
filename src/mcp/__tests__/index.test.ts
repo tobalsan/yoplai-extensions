@@ -40,7 +40,6 @@ describe("mcp extension", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.MCP_CONFIG_PATH;
     delete process.env.YOPLAI_HOME;
     delete process.env.AIHUB_HOME;
   });
@@ -83,51 +82,6 @@ describe("mcp extension", () => {
       )
     ).toEqual([expect.stringContaining("MCP tools")]);
     await mockedExtension.stop();
-  });
-
-  it("rejects invalid MCP config fields even with enabled false", async () => {
-    await expect(
-      extension.getAgentTools?.(
-        {
-          id: "casey",
-          workspaceDir: "/tmp/unused",
-          extensions: { mcp: { enabled: false, configPath: 123 } },
-        },
-        { config: { extensions: {} } }
-      )
-    ).rejects.toThrow("Expected string");
-  });
-
-  it("validates invalid MCP config fields without an enabled flag", async () => {
-    await expect(
-      extension.getAgentTools?.(
-        {
-          id: "casey",
-          workspaceDir: "/tmp/unused",
-          extensions: { mcp: { configPath: 123 } },
-        },
-        { config: { extensions: {} } }
-      )
-    ).rejects.toThrow("Expected string");
-
-    expect(
-      extension.validateAgentConfigs({
-        agents: [{ id: "casey", extensions: { mcp: { configPath: 123 } } }],
-        extensions: {},
-      })
-    ).toMatchObject({ valid: false });
-  });
-
-  it("validates malformed enabled mcp config fields", () => {
-    const result = extension.validateAgentConfigs({
-      agents: [
-        { id: "casey", extensions: { mcp: { enabled: true, configPath: 123 } } },
-      ],
-      extensions: {},
-    });
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.join("\n")).toContain("Expected string");
   });
 
   it("surfaces tools from opted-in mcp.json configs", async () => {
@@ -380,49 +334,44 @@ describe("mcp extension", () => {
     }
   });
 
-  it("resolves $env references in mcp extension config paths", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-config-"));
-    const configPath = path.join(configDir, "custom-mcp.json");
-    process.env.MCP_CONFIG_PATH = configPath;
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ mcpServers: { local: { command: "node" } } })
-    );
-
-    const connect = vi.fn();
-    const mockedExtension = createMcpExtension(async (server) => {
-      connect(server);
-      return {
-        async listTools() {
-          return [
-            {
-              server: server.name,
-              name: "echo",
-              description: "Echo input",
-              visibility: ["model" as const, "app" as const],
-              inputSchema: { type: "object" },
-            },
-          ];
-        },
-        async readResource() { return { contents: [] }; },
-        async callTool(_name, args) {
-          return args;
-        },
-        async close() {},
-      };
-    });
-
-    const tools = await mockedExtension.getAgentTools(
-      {
-        id: "casey",
-        extensions: { mcp: { enabled: true, configPath: "$env:MCP_CONFIG_PATH" } },
-      },
-      { config: { extensions: {} } }
-    );
-
-    expect(connect).toHaveBeenCalledWith({ type: "stdio", name: "local", command: "node" });
-    expect(tools).toHaveLength(1);
-    await mockedExtension.stop();
+  it.each(["root", "agent"] as const)("ignores legacy MCP locations in the %s config", async (scope) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-location-"));
+    const workspace = path.join(dir, "workspace");
+    fs.mkdirSync(workspace);
+    const alternateFile = path.join(dir, "mcp.json");
+    fs.writeFileSync(alternateFile, JSON.stringify({ mcpServers: { alternate: { command: "fixture-command" } } }));
+    fs.writeFileSync(path.join(dir, ".env"), "MCP_LOCATION_FIXTURE=alternate-command\n");
+    fs.writeFileSync(path.join(workspace, ".env"), "MCP_LOCATION_FIXTURE=workspace-command\n");
+    const factory = vi.fn(async () => ({
+      async listTools() { return []; },
+      async readResource() { return { contents: [] }; },
+      async callTool() { return "pong"; },
+      async close() {},
+    }));
+    const mockedExtension = createMcpExtension(factory);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const legacy of [{ configPath: alternateFile }, { agentDir: dir }]) {
+        const overrides = { mcp: legacy };
+        const agent = { id: "sample-agent", workspaceDir: workspace, extensions: scope === "agent" ? overrides : {} };
+        const config = { extensions: scope === "root" ? overrides : {} };
+        expect(mockedExtension.validateAgentConfigs({ ...config, agents: [agent] })).toEqual({ valid: true, errors: [] });
+        await expect(mockedExtension.getAgentTools(agent, { config })).resolves.toEqual([]);
+      }
+      expect(factory).not.toHaveBeenCalled();
+      fs.writeFileSync(path.join(workspace, "mcp.json"), JSON.stringify({ mcpServers: { local: { command: "${MCP_LOCATION_FIXTURE}" } } }));
+      await mockedExtension.getAgentTools(
+        { id: "sample-agent", workspaceDir: workspace, extensions: { mcp: { configPath: "$env:MCP_UNUSED_LEGACY_SETTING" } } },
+        { config: { extensions: { mcp: { agentDir: dir } } } },
+      );
+      expect(factory).toHaveBeenCalledExactlyOnceWith(
+        { type: "stdio", name: "local", command: "workspace-command" }, undefined, expect.anything(),
+      );
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("sample-agent"));
+    } finally {
+      await mockedExtension.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("prefers YOPLAI_HOME over AIHUB_HOME and does not warn", async () => {

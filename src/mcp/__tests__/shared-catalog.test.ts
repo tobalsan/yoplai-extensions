@@ -11,9 +11,9 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-function ctx(role: string, body?: unknown, query: Record<string, string> = {}) {
+function ctx(role: string, body?: unknown, query: Record<string, string> = {}, managesAgent = false) {
   return {
-    get: () => ({ user: { id: "u1", role } }),
+    get: (key: string) => key === "mcpCanManageAgent" ? managesAgent : { user: { id: "u1", role } },
     req: { query: (key: string) => query[key], json: async () => body },
     json: (value: unknown) => value,
     text: (value: string, status?: number) => ({ value, status }),
@@ -101,15 +101,15 @@ describe("shared MCP catalog", () => {
     expect(t.started).toEqual([]);
     const tools = { config: {}, userId: "u1" };
     expect(await t.extension.getAgentTools(t.agent, tools)).toEqual([]);
-    const on = await t.call("POST /mcp/servers/shared", ctx("user", { enabled: true }, { agent: "a1", server: "docs" }));
+    const on = await t.call("POST /mcp/servers/shared", ctx("admin", { enabled: true }, { agent: "a1", server: "docs" }, true));
     expect(on.server).toMatchObject({ shared: true, enabled: true, state: "connected" });
     expect((await t.read(path.join(t.agentDir, "mcp.json"))).sharedServers).toEqual(["docs"]);
     expect((await t.extension.getAgentTools(t.agent, tools)).map((tool: any) => tool.name)).toEqual(["mcp__docs__ping"]);
     expect(t.record).toHaveBeenCalledWith(expect.objectContaining({ action: "mcp.server.enable", targetId: "docs" }));
-    await t.call("POST /mcp/servers/shared", ctx("user", { enabled: false }, { agent: "a1", server: "docs" }));
+    await t.call("POST /mcp/servers/shared", ctx("admin", { enabled: false }, { agent: "a1", server: "docs" }, true));
     expect((await t.read(path.join(t.agentDir, "mcp.json"))).sharedServers).toEqual([]);
     expect(await t.extension.getAgentTools(t.agent, tools)).toEqual([]);
-    expect(await t.call("POST /mcp/servers/shared", ctx("user", { enabled: true }, { agent: "a1", server: "nope" }))).toMatchObject({ status: 404 });
+    expect(await t.call("POST /mcp/servers/shared", ctx("admin", { enabled: true }, { agent: "a1", server: "nope" }, true))).toMatchObject({ status: 404 });
     await t.extension.stop();
   });
 
@@ -163,7 +163,7 @@ describe("shared MCP catalog", () => {
       claap: { url: "https://other.example.test/mcp" }, dup: { url: "https://DUP.example.test/mcp" }, extra: { url: "https://extra.example.test/mcp" } } });
     const list = await t.call("GET /mcp/servers", ctx("user", undefined, { agent: "a1" }));
     expect(list.servers.map((s: any) => [s.name, s.shared ?? false])).toEqual([["claap", false], ["mine", false], ["extra", true]]);
-    await t.call("POST /mcp/servers/shared", ctx("user", { enabled: true }, { agent: "a1", server: "extra" }));
+    await t.call("POST /mcp/servers/shared", ctx("admin", { enabled: true }, { agent: "a1", server: "extra" }, true));
     expect(await t.read(path.join(t.agentDir, "mcp.json"))).toMatchObject({ keep: 1, sharedServers: ["extra"] });
     await t.extension.stop();
   });
@@ -203,7 +203,7 @@ describe("shared MCP catalog", () => {
 
   it("allocates a local key that avoids catalog keys", async () => {
     const t = await setup({}, { mcpServers: { docs: { url: "https://other.example.test/mcp" } } });
-    await t.call("POST /mcp/servers", ctx("superadmin", { url: "https://docs.test/mcp", credentialScope: "team" }, { agent: "a1" }));
+    await t.call("POST /mcp/servers", ctx("superadmin", { url: "https://docs.test/mcp", credentialScope: "team" }, { agent: "a1" }, true));
     expect(Object.keys((await t.read(path.join(t.agentDir, "mcp.json"))).mcpServers)).toEqual(["docs_2"]);
     await t.extension.stop();
   });

@@ -28,14 +28,15 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("GET /mcp/oauth/status")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
     await expect(routes.routes.get("POST /mcp/oauth/disconnect")!(anonymous("team"))).resolves.toMatchObject({ status: 400 });
   });
-  it("keeps team connections read-only for non-admins", async () => {
+  it("keeps team connections read-only for callers without agent management", async () => {
     const work = await dirs.make("mcp-route-");
     await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401 }));
     const extension = createMcpExtension();
     await extension.start({ credentials: hostCredentials, getDataDir: () => work, getConfig: () => ({ extensions: { multiUser: { enabled: true } } }), getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }) });
     const routes = app(); extension.registerRoutes(routes);
-    const as = (role: string, query: Record<string, string>) => ({ ...context(query), get: () => ({ user: { id: "user-a", role } }) });
+    const as = (role: string, query: Record<string, string>) =>
+      routeContext(query, { user: { id: "user-a", role } }, role === "admin");
     const member = { agent: "casey", server: "claap", scope: "team" };
 
     await expect(routes.routes.get("GET /mcp/oauth/authorize")!(as("user", member))).resolves.toMatchObject({ status: 403 });
@@ -109,10 +110,11 @@ describe("MCP OAuth routes", () => {
     await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toMatchObject({ servers: [{ name: "broken", auth: "static" }] });
   });
 
-  it("loads OAuth status from the merged root config path", async () => {
+  it("loads OAuth status from the workspace despite a legacy root config path", async () => {
     const work = await dirs.make("mcp-route-");
     const configPath = path.join(work, "root-mcp.json");
-    await fs.writeFile(configPath, JSON.stringify({ mcpServers: { rooted: { url: "https://root.test/mcp", headers: { Authorization: "Bearer key" } } } }));
+    await fs.writeFile(configPath, JSON.stringify({ mcpServers: { alternate: { url: "https://alternate.test/mcp", headers: {} } } }));
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { workspace: { url: "https://workspace.test/mcp", headers: {} } } }));
     const extension = createMcpExtension();
     await extension.start({ credentials: hostCredentials,
       getDataDir: () => work,
@@ -122,7 +124,7 @@ describe("MCP OAuth routes", () => {
     const routes = app(); extension.registerRoutes(routes);
 
     await expect(routes.routes.get("GET /mcp/oauth/status")!(context({ agent: "casey" }))).resolves.toEqual({ servers: [
-      { name: "rooted", url: "https://root.test/mcp", auth: "static", state: "static" },
+      { name: "workspace", url: "https://workspace.test/mcp", auth: "static", state: "static" },
     ], canConfigureTeam: true });
   });
 
@@ -151,16 +153,13 @@ describe("MCP OAuth routes", () => {
     }));
     const { createMcpExtension: createExtension } = await import("../index.js");
     const work = await dirs.make("mcp-route-");
-    const rootConfigPath = path.join(work, "root-mcp.json");
-    const agentConfigPath = path.join(work, "agent-mcp.json");
-    await fs.writeFile(rootConfigPath, JSON.stringify({ mcpServers: { wrong: { url: "https://wrong.test/mcp" } } }));
-    await fs.writeFile(agentConfigPath, JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
+    await fs.writeFile(path.join(work, "mcp.json"), JSON.stringify({ mcpServers: { claap: { url: "https://api.claap.io/mcp" } } }));
     const extension = createExtension();
     const record = vi.fn();
     await extension.start({ audit: { record }, credentials: hostCredentials,
       getDataDir: () => work,
-      getConfig: () => ({ extensions: { mcp: { configPath: rootConfigPath } } }),
-      getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true, configPath: agentConfigPath } } }),
+      getConfig: () => ({}),
+      getAgent: () => ({ id: "casey", workspace: work, extensions: { mcp: { enabled: true } } }),
     });
     const routes = app(); extension.registerRoutes(routes);
 

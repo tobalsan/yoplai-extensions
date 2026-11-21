@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { credentials } from "./credentials.js";
-import { routeApp, tempDirs } from "./harness.js";
+import { routeApp, routeContext, tempDirs } from "./harness.js";
 
 const dirs = tempDirs();
 afterEach(async () => {
@@ -34,7 +34,7 @@ async function oauthRoutes(exchangeError?: string) {
   const app = routeApp();
   extension.registerRoutes(app);
   return async (route: string, query: Record<string, string>, body?: unknown): Promise<Response> => app.routes.get(route)!({
-    get: () => ({ user: { id: "user-a", role: "admin" } }),
+    get: routeContext(query, { user: { id: "user-a", role: "admin" } }, true).get,
     req: { query: (key: string) => query[key], json: async () => body },
     json: (value: unknown) => Response.json(value),
     text: (value: string, status = 200) => new Response(value, { status }),

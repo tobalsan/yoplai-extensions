@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Shared MCP server settings and team OAuth grants require agent management. The MCP extension loads the agent workspace's `mcp.json` and ignores legacy `configPath` and `agentDir` settings (ALG-741).
+
 ### Fixed
 
 - An older release does not replace the latest catalog.
