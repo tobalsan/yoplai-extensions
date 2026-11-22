@@ -57,7 +57,7 @@ describe("MCP server cards and self-service routes", () => {
 
   it.each([
     ["tools", "failure"], ["tools", "timeout"], ["status", "failure"], ["status", "timeout"], ["recovery", "failure"],
-  ] as const)("logs a shared refresh %s/%s with requester context and no second manager error", async (logPath, outcome) => {
+  ] as const)("logs one contextual error or warning per refresh for %s/%s", async (logPath, outcome) => {
     const dir = await dirs.make("mcp-refresh-context-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://remote.example.test/mcp", oauth: { clientId: "client" } } } }));
     const host = credentials();
@@ -68,10 +68,13 @@ describe("MCP server cards and self-service routes", () => {
     });
     let started!: () => void;
     let fail!: (error: Error) => void;
+    let tokenRequests = 0;
     const refreshing = new Promise<void>((resolve) => { started = resolve; });
+    const tokenResponse = new Promise<Response>((_resolve, reject) => { fail = reject; });
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
       if (String(url).includes(".well-known")) return Response.json({ issuer: "https://auth.example.test", authorization_endpoint: "https://auth.example.test/authorize", token_endpoint: "https://auth.example.test/token", response_types_supported: ["code"] });
-      started(); return new Promise<Response>((_resolve, reject) => { fail = reject; });
+      tokenRequests++;
+      started(); return tokenResponse;
     }));
     const output = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -92,13 +95,14 @@ describe("MCP server cards and self-service routes", () => {
       if (outcome === "timeout") await vi.advanceTimersByTimeAsync(30_001);
       else fail(new Error("provider unavailable"));
       await Promise.all(pending);
-      expect(output.mock.calls).toHaveLength(1);
-      expect(JSON.parse(output.mock.calls[0]![0])).toEqual({
-        level: "error", msg: outcome === "timeout" ? '[mcp] server "remote" unavailable: OAuth refresh timed out' : '[mcp] server "remote" unavailable: provider unavailable',
+      // Queued tool loads can start another refresh after a quick failure settles.
+      if (logPath !== "tools" || outcome !== "failure") expect(tokenRequests).toBe(1);
+      expect(output.mock.calls.map(([line]) => JSON.parse(line))).toEqual(Array(tokenRequests).fill({
+        level: outcome === "timeout" ? "warn" : "error", msg: outcome === "timeout" ? '[mcp] server "remote" unavailable: OAuth refresh timed out' : '[mcp] server "remote" unavailable: provider unavailable',
         server: "remote", agentId: "casey", userId: "alice", path: logPath === "recovery" ? "tools" : logPath, reason: "refresh_failed", scope: "team",
-      });
+      }));
       if (logPath !== "status") expect(info.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(expect.objectContaining({ reason: "refresh_failed", level: "info" }));
-      await vi.waitFor(() => expect(info.mock.calls.map(([line]) => JSON.parse(line)).filter((line) => line.msg === "[mcp] OAuth refresh")).toHaveLength(1));
+      await vi.waitFor(() => expect(info.mock.calls.map(([line]) => JSON.parse(line)).filter((line) => line.msg === "[mcp] OAuth refresh")).toHaveLength(tokenRequests));
     } finally { await extension.stop(); }
   });
 

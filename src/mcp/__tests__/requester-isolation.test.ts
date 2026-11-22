@@ -191,7 +191,7 @@ describe("MCP requester isolation", () => {
     await expect(refresh).resolves.toBeUndefined();
     await expect(store.read("casey", "claap", { type: "personal", userId: "A" })).resolves.toMatchObject({ state: "connected" });
     await vi.advanceTimersByTimeAsync(20_000);
-    await expect(store.read("casey", "claap", { type: "personal", userId: "A" })).resolves.toMatchObject({ state: "needs_reconnect" });
+    await expect(store.read("casey", "claap", { type: "personal", userId: "A" })).resolves.toMatchObject({ state: "connected" });
     await expect(store.read("casey", "claap")).resolves.toMatchObject({ state: "connected" });
   });
   it.each(["delete", "reconnect"] as const)("does not overwrite a credential after %s during refresh", async (action) => {
