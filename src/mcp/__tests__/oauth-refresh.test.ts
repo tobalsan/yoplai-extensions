@@ -111,7 +111,7 @@ it.each([true, false])("shares failure handling from the initiating status=%s ca
   const store = await setup();
   let fail!: (error: Error) => void;
   const bodies = endpoint(() => new Promise((_resolve, reject) => { fail = reject; }));
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
   const first = store.accessTokenResult("agent", "example", 60_000, undefined, undefined, statusOnly ? "status" : "tools", statusOnly);
   await turn();
   const second = store.accessTokenResult("agent", "example", 60_000, undefined, undefined, statusOnly ? "tools" : "status", !statusOnly);
@@ -120,11 +120,13 @@ it.each([true, false])("shares failure handling from the initiating status=%s ca
   const results = await Promise.all([first, second]);
   expect(results[statusOnly ? 0 : 1]).toEqual({ reason: "refresh_failed", scope: "team", error: { category: "network", message: "fetch failed" } });
   expect(results[statusOnly ? 1 : 0]).toEqual({ reason: "refresh_failed", scope: "team" });
-  expect((await store.read("agent", "example"))?.state).toBe(statusOnly ? "connected" : "needs_reconnect");
+  expect((await store.read("agent", "example"))?.state).toBe("connected");
   expect(bodies).toHaveLength(1);
+  expect(output).toHaveBeenCalledOnce();
+  expect(JSON.parse(output.mock.calls[0]![0])).toMatchObject({ level: "warn", reason: "refresh_failed" });
 });
 
-it("keeps a hung refresh shared after all callers leave, then aborts its HTTP request at 30 seconds and permits another attempt", async () => {
+it("keeps a hung tools refresh shared after callers leave, then aborts it at 30 seconds and permits another attempt", async () => {
   const store = await setup();
   let upstreamSignal: AbortSignal | null | undefined;
   const bodies = endpoint(async (init) => {
@@ -135,10 +137,10 @@ it("keeps a hung refresh shared after all callers leave, then aborts its HTTP re
   const output = vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const first = store.accessTokenResult("agent", "example", 60_000, undefined, undefined, "status", true);
+  const first = store.accessTokenResult("agent", "example");
   await turn();
   await vi.advanceTimersByTimeAsync(10_001);
-  await expect(first).resolves.toMatchObject({ reason: "refresh_failed", error: { category: "timeout" } });
+  await expect(first).resolves.toMatchObject({ reason: "refresh_failed" });
   expect(upstreamSignal?.aborted).toBe(false);
   const second = store.accessTokenResult("agent", "example");
   await turn();
@@ -161,12 +163,25 @@ it.each([true, false].flatMap((statusOnly) => ["parsed", "message"].flatMap((for
     if (form === "message") throw new Error('HTTP 400: {"error":"invalid_grant","error_description":"Refused"}');
     return Response.json({ error: "invalid_grant", error_description: "Refused" }, { status: 400 });
   });
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
   const result = await store.refreshAccessTokenResult("agent", "example", undefined, undefined, statusOnly ? "status" : "tools", statusOnly);
   expect(result).toMatchObject({ reason: "refresh_failed", scope: "team" });
   if (statusOnly) expect(result.error).toMatchObject({ category: "authentication", message: form === "parsed" ? "Refused" : expect.stringContaining("invalid_grant") });
   else expect(result).not.toHaveProperty("error");
   expect(await store.read("agent", "example")).toMatchObject({ state: age === 5 ? "connected" : "needs_reconnect", tokens: grant.tokens });
+  expect(output).toHaveBeenCalledOnce();
+  expect(JSON.parse(output.mock.calls[0]![0])).toMatchObject({ level: "error", reason: "refresh_failed" });
+});
+
+it.each([true, false])("requires reconnect when the token endpoint returns HTTP 401 with an OAuth error (status=%s)", async (statusOnly) => {
+  const store = await setup();
+  endpoint(async () => Response.json({ error: "access_denied", error_description: "Refused" }, { status: 401 }));
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
+  const result = await store.refreshAccessTokenResult("agent", "example", undefined, undefined, statusOnly ? "status" : "tools", statusOnly);
+  expect(result).toEqual({ reason: "refresh_failed", scope: "team", ...(statusOnly ? { error: { category: "authentication", message: "Refused" } } : {}) });
+  expect(await store.read("agent", "example")).toMatchObject({ state: "needs_reconnect" });
+  expect(output).toHaveBeenCalledOnce();
+  expect(JSON.parse(output.mock.calls[0]![0])).toMatchObject({ level: "error", reason: "refresh_failed" });
 });
 
 it("records the issue time of rotated tokens without changing the connection time", async () => {

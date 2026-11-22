@@ -483,17 +483,19 @@ export class McpOAuthStore {
       return { token: tokens.access_token, scope: scope.type };
     } catch (error) {
       controller.abort();
-      logMcpUnavailable("error", refused ?? (error instanceof Error ? error.message : String(error)), {
-        agentId: agent, userId: requesterUserId, path: logPath, server, reason: "refresh_failed", scope: scope.type,
-      });
       if (!oauthError && error instanceof Error) {
         const code = "errorCode" in error ? error.errorCode : /"error"\s*:\s*"([a-z_]+)"/.exec(error.message)?.[1];
         if (typeof code === "string" && /^[a-z_]+$/.test(code)) oauthError = code;
       }
       const invalidGrant = error instanceof Error && (error.name === "InvalidGrantError" || ("errorCode" in error && error.errorCode === "invalid_grant") || /\binvalid_grant\b/.test(error.message));
-      const category = invalidGrant ? "authentication" : classifyMcpError(error);
+      // The SDK can drop the HTTP status when it parses an OAuth error body.
+      const unauthorized = status === 401 && refused !== undefined;
+      const category = invalidGrant || unauthorized ? "authentication" : classifyMcpError(error);
+      logMcpUnavailable(category === "timeout" || category === "network" ? "warn" : "error", refused ?? (error instanceof Error ? error.message : String(error)), {
+        agentId: agent, userId: requesterUserId, path: logPath, server, reason: "refresh_failed", scope: scope.type,
+      });
       const recentlyIssued = connection.issuedAt && Date.now() - Date.parse(connection.issuedAt) < 15 * 60_000;
-      if (!(invalidGrant && recentlyIssued) && (!statusOnly || category === "authentication")) await reconnect();
+      if (category === "authentication" && !(invalidGrant && recentlyIssued)) await reconnect();
       return { reason: "refresh_failed", scope: scope.type, error: { category, message: error instanceof Error ? error.message : String(error) } };
     } finally {
       if (requested) logMcpRefresh({ agentId: agent, server, scope: scope.type, path: logPath, statusOnly,

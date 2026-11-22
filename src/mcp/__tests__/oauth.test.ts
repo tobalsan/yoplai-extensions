@@ -12,7 +12,7 @@ const dirs: string[] = [];
 afterEach(async () => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); hostCredentials = credentials(); await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))); });
 
 describe("McpOAuthStore", () => {
-  it.each(["failure", "timeout"])("logs one contextual error for a shared refresh %s", async (outcome) => {
+  it.each([["failure", "error"], ["timeout", "warn"]])("logs one contextual %s at %s for a shared refresh and allows retry", async (outcome, level) => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-refresh-log-")); dirs.push(dataDir);
     const store = new McpOAuthStore(dataDir, "http://localhost/callback", hostCredentials);
     await store.write("casey", "remote", {
@@ -41,17 +41,13 @@ describe("McpOAuthStore", () => {
     expect(line.startsWith('{"level"')).toBe(true);
     expect(line).not.toMatch(/[\r\n]|token=abc|expired-secret|refresh-secret/);
     expect(JSON.parse(line)).toEqual({
-      level: "error", msg: outcome === "timeout"
+      level, msg: outcome === "timeout"
         ? '[mcp] server "remote" unavailable: OAuth refresh timed out'
         : '[mcp] server "remote" unavailable: Refresh failed https://auth.example.test/token try again',
       server: "remote", agentId: "casey", userId: "alice", path: "call", reason: "refresh_failed", scope: "team",
     });
-    await expect(store.accessToken("casey", "remote")).resolves.toBeUndefined();
-    expect(output.mock.calls).toHaveLength(1);
-    const flagged = await store.read("casey", "remote");
-    await store.write("casey", "remote", { ...flagged!, state: "connected" });
     fetcher.mockImplementation(async () => { throw new Error("another attempt failed"); });
-    await expect(store.refreshAccessToken("casey", "remote", "alice", undefined, "status")).resolves.toBeUndefined();
+    await expect(store.accessTokenResult("casey", "remote", 60_000, "alice", undefined, "status", true)).resolves.toMatchObject({ reason: "refresh_failed" });
     expect(output.mock.calls).toHaveLength(2);
     expect(JSON.parse(output.mock.calls[1]![0])).toMatchObject({ level: "error", reason: "refresh_failed", path: "status" });
   });
