@@ -9,7 +9,7 @@ const dirs = tempDirs();
 const callback = "https://yoplai.example.com/api/mcp/oauth/callback";
 const documentUrl = "https://yoplai.example.com/api/mcp/oauth/client-metadata.json";
 const serverUrl = "https://mcp.example.test/mcp";
-afterEach(async () => { vi.unstubAllGlobals(); await dirs.cleanup(); });
+afterEach(async () => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); await dirs.cleanup(); });
 
 describe("CIMD token requests through the real MCP SDK", () => {
   it.each([
@@ -17,6 +17,7 @@ describe("CIMD token requests through the real MCP SDK", () => {
     { name: "only secret methods", methods: ["client_secret_basic", "client_secret_post"] },
     { name: "omitted auth methods", methods: undefined },
   ])("exchanges and refreshes as a public client with $name", async ({ methods }) => {
+    vi.stubEnv("YOPLAI_MCP_OAUTH_CIMD", "on");
     const requests: Request[] = [];
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);

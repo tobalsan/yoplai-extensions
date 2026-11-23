@@ -1,15 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { credentials } from "./credentials.js";
 import { tempDirs } from "./harness.js";
 
 vi.mock("../account.js", () => ({ resolveAccountLabel: vi.fn().mockResolvedValue(undefined) }));
+
+const checkGatewayReachability = vi.hoisted(() => vi.fn());
+vi.mock("../gateway-reachability.js", () => ({ checkGatewayReachability }));
 
 const dirs = tempDirs();
 const callback = "https://yoplai.example.com/api/mcp/oauth/callback";
 const documentUrl = "https://yoplai.example.com/api/mcp/oauth/client-metadata.json";
 const serverUrl = "https://mcp.example.test/mcp";
 
+beforeEach(() => {
+  vi.stubEnv("YOPLAI_MCP_OAUTH_CIMD", undefined);
+  checkGatewayReachability.mockReset().mockResolvedValue({ public: true, reason: "public DNS address" });
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.doUnmock("@modelcontextprotocol/sdk/client/auth.js");
   vi.resetModules();
   await dirs.cleanup();
@@ -51,6 +61,46 @@ describe("MCP OAuth client metadata documents", () => {
     }));
     expect(new URL(flow.authorizationUrl).searchParams.has("prompt")).toBe(false);
     expect(new URL(flow.authorizationUrl).searchParams.has("access_type")).toBe(false);
+  });
+
+  it.each([
+    { mode: "auto", clientId: "registered", checksDns: true },
+    { mode: "off", clientId: "registered", checksDns: false },
+    { mode: "on", clientId: documentUrl, checksDns: false },
+  ])("chooses $clientId for a private gateway in $mode mode", async ({ mode, clientId, checksDns }) => {
+    vi.stubEnv("YOPLAI_MCP_OAUTH_CIMD", mode);
+    checkGatewayReachability.mockResolvedValue({ public: false, reason: "only non-public addresses" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const sdk = authServer();
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => sdk);
+    const { McpOAuthStore } = await import("../oauth.js");
+    const store = new McpOAuthStore(await dirs.make("mcp-cimd-"), callback, credentials(), undefined, documentUrl);
+
+    await store.begin("assistant", "tools", serverUrl);
+
+    if (checksDns) {
+      expect(checkGatewayReachability).toHaveBeenCalledExactlyOnceWith(new URL(callback).hostname);
+      expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('"reason":"only non-public addresses"'));
+    } else {
+      expect(checkGatewayReachability).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    }
+    expect(sdk.registerClient).toHaveBeenCalledTimes(clientId === "registered" ? 1 : 0);
+    expect(sdk.startAuthorization).toHaveBeenCalledWith("https://auth.example.test", expect.objectContaining({
+      clientInformation: expect.objectContaining({ client_id: clientId }),
+    }));
+  });
+
+  it("keeps the missing registration error for a private gateway without DCR", async () => {
+    checkGatewayReachability.mockResolvedValue({ public: false, reason: "no public DNS addresses" });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const sdk = authServer({ registration_endpoint: undefined });
+    vi.doMock("@modelcontextprotocol/sdk/client/auth.js", () => sdk);
+    const { McpOAuthStore } = await import("../oauth.js");
+    const store = new McpOAuthStore(await dirs.make("mcp-cimd-"), callback, credentials(), undefined, documentUrl);
+
+    await expect(store.begin("assistant", "tools", serverUrl)).rejects.toThrow("OAuth server does not support dynamic client registration");
+    expect(sdk.registerClient).not.toHaveBeenCalled();
   });
 
   it("uses the current document after a CIMD grant needs reconnect on a new host", async () => {
@@ -107,6 +157,7 @@ describe("MCP OAuth client metadata documents", () => {
 
     expect(sdk.registerClient).not.toHaveBeenCalled();
     expect(sdk.startAuthorization).toHaveBeenCalledWith("https://auth.example.test", expect.objectContaining({ clientInformation: { client_id: "static", client_secret: "static-secret", redirect_uris: [callback] }, scope: "configured:scope" }));
+    expect(checkGatewayReachability).not.toHaveBeenCalled();
     expect(new URL(flow.authorizationUrl).searchParams.get("access_type")).toBe("offline");
     expect(new URL(flow.authorizationUrl).searchParams.get("prompt")).toBe("consent");
   });
@@ -151,6 +202,7 @@ describe("MCP OAuth client metadata documents", () => {
     await store.begin("assistant", "tools", serverUrl);
 
     expect(sdk.registerClient).not.toHaveBeenCalled();
+    expect(checkGatewayReachability).not.toHaveBeenCalled();
     expect(sdk.startAuthorization).toHaveBeenCalledWith("https://auth.example.test", expect.objectContaining({ clientInformation: { client_id: clientId, redirect_uris: [callback] } }));
   });
 
