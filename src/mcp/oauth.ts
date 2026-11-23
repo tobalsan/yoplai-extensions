@@ -18,6 +18,7 @@ import { resolveAccountLabel } from "./account.js";
 import type { McpStaticOAuthClient } from "./loader.js";
 import type { McpTokenResult } from "./client-manager.js";
 import { classifyMcpError } from "./errors.js";
+import { checkGatewayReachability } from "./gateway-reachability.js";
 import { logMcpRefresh, logMcpUnavailable, type McpLogContext, type McpLogPath } from "./logging.js";
 
 export type CredentialScope = { type: "team" } | { type: "personal"; userId: string };
@@ -267,19 +268,30 @@ export class McpOAuthStore {
     if (connection) await this.write(agent, server, { ...connection, state: "needs_reconnect" }, scope);
   }
 
+  private async reachableClientMetadataUrl(): Promise<string | undefined> {
+    const mode = process.env.YOPLAI_MCP_OAUTH_CIMD;
+    if (!this.clientMetadataUrl || mode === "off") return undefined;
+    if (mode === "on") return this.clientMetadataUrl;
+    const { hostname } = new URL(this.redirectUri);
+    const reachability = await checkGatewayReachability(hostname);
+    if (reachability.public) return this.clientMetadataUrl;
+    console.log(JSON.stringify({ level: "info", msg: "[mcp] OAuth CIMD skipped for private gateway", hostname, reason: reachability.reason }));
+    return undefined;
+  }
+
   async begin(agent: string, server: string, url: string, staticClient?: McpStaticOAuthClient, scope: CredentialScope = TEAM, onComplete?: (targetId: string) => Promise<void>, actor?: AuditActor, returnTo?: string): Promise<{ state: string; authorizationUrl: string }> {
     if (!this.credentials) throw new Error("The host scoped credential store is unavailable");
     const info = await discoverOAuthServerInfo(url, { fetchFn: oauthFetch });
-    const dynamic = Boolean(info.authorizationServerMetadata?.registration_endpoint);
-    const cimd = info.authorizationServerMetadata?.client_id_metadata_document_supported === true && this.clientMetadataUrl;
-    if (!staticClient && !cimd && !dynamic) {
-      throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId (and oauth.clientSecret if the provider requires one) on this server in mcp.json");
-    }
     const preRegistered = staticClient;
     const identity = { url, clientId: staticClient?.clientId };
     const existing = await this.read(agent, server, scope, identity);
     const reusableClient = existing?.clientSource === "cimd" ? undefined : existing?.client;
-    const clientSource = !preRegistered && !reusableClient && cimd ? "cimd" as const : undefined;
+    const cimdCandidate = info.authorizationServerMetadata?.client_id_metadata_document_supported === true && this.clientMetadataUrl;
+    const cimd = !preRegistered && !reusableClient && cimdCandidate ? await this.reachableClientMetadataUrl() : undefined;
+    if (!preRegistered && !info.authorizationServerMetadata?.registration_endpoint && !(cimd || (cimdCandidate && reusableClient))) {
+      throw new Error("OAuth server does not support dynamic client registration; set oauth.clientId (and oauth.clientSecret if the provider requires one) on this server in mcp.json");
+    }
+    const clientSource = cimd ? "cimd" as const : undefined;
     // MCP scope selection: without a configured list, request every scope the resource advertises (some servers reject an empty scope).
     const scopes = staticClient?.scopes?.length ? staticClient.scopes : info.resourceMetadata?.scopes_supported ?? [];
     const client: OAuthClientInformationFull = preRegistered
