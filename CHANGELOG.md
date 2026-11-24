@@ -9,6 +9,7 @@
 ### Fixed
 
 - MCP OAuth refresh timeouts and network errors log warnings and leave connections available for the next attempt. Refused grants still log errors and can require reconnecting (ALG-740).
+- Exa search tools return page text again, `exa_search` live crawling uses the current `contents` options, and `exa_code` sends `tokensNum`, so it no longer fails with HTTP 400.
 - An older release does not replace the latest catalog.
 - Gmail reads, including the per-call account check, retry once after HTTP 500, 502, 503 or 504 to absorb brief Google outages (ALG-710).
 - MCP OAuth refreshes share one request across status checks and tool loads, save rotated tokens after caller cancellation or timeout, and skip refreshing a token already replaced after a 401. Recent `invalid_grant` refusals keep the grant connected for a 15-minute issue window; structured refresh logs use token fingerprints only (ALG-692).

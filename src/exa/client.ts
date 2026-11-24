@@ -62,8 +62,12 @@ export class ExaClient {
       query: input.query,
       numResults: input.numResults ?? 8,
       type: input.type ?? "auto",
-      livecrawl: input.livecrawl ?? "fallback",
-      contents: { maxCharacters: input.maxCharacters ?? 10_000 },
+      contents: {
+        text: { maxCharacters: input.maxCharacters ?? 10_000 },
+        // "preferred" = always fetch live; "fallback" = cache, live on miss.
+        // /search uses only the cache unless one of these is set.
+        ...(input.livecrawl === "preferred" ? { maxAgeHours: 0 } : { livecrawl: "fallback" }),
+      },
     });
   }
 
@@ -79,7 +83,7 @@ export class ExaClient {
       "/context",
       {
         query: input.query,
-        tokens,
+        tokensNum: tokens,
       },
       CODE_TIMEOUT_MS,
     );
@@ -90,7 +94,7 @@ export class ExaClient {
       query: input.query,
       numResults: input.numResults ?? 8,
       type: "deep",
-      contents: { maxCharacters: 10_000 },
+      contents: { text: { maxCharacters: 10_000 } },
     });
   }
 
@@ -107,7 +111,7 @@ export class ExaClient {
       query: input.company,
       numResults: input.numResults ?? 5,
       type: "auto",
-      contents: { maxCharacters: 10_000 },
+      contents: { text: { maxCharacters: 10_000 } },
       includeDomains: COMPANY_DOMAINS,
     });
   }
@@ -117,7 +121,7 @@ export class ExaClient {
       query: linkedinQuery(input.query, input.type ?? "all"),
       numResults: input.numResults ?? 5,
       type: "auto",
-      contents: { maxCharacters: 10_000 },
+      contents: { text: { maxCharacters: 10_000 } },
       includeDomains: ["linkedin.com"],
     });
   }

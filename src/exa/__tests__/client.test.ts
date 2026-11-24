@@ -48,8 +48,7 @@ describe("Exa extension request handling", () => {
         query: "exa api",
         numResults: 8,
         type: "auto",
-        livecrawl: "fallback",
-        contents: { maxCharacters: 10_000 },
+        contents: { text: { maxCharacters: 10_000 }, livecrawl: "fallback" },
       }),
     );
   });
@@ -72,8 +71,7 @@ describe("Exa extension request handling", () => {
         query: "exa api",
         numResults: 3,
         type: "fast",
-        livecrawl: "preferred",
-        contents: { maxCharacters: 2000 },
+        contents: { text: { maxCharacters: 2000 }, maxAgeHours: 0 },
       }),
     );
   });
@@ -87,7 +85,7 @@ describe("Exa extension request handling", () => {
 
     expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.exa.ai/context");
     expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe(
-      JSON.stringify({ query: "zod transform", tokens: 5000 }),
+      JSON.stringify({ query: "zod transform", tokensNum: 5000 }),
     );
   });
 
@@ -113,7 +111,7 @@ describe("Exa extension request handling", () => {
         query: "state of LLM agents",
         numResults: 8,
         type: "deep",
-        contents: { maxCharacters: 10_000 },
+        contents: { text: { maxCharacters: 10_000 } },
       }),
     );
   });
@@ -147,7 +145,7 @@ describe("Exa extension request handling", () => {
         query: "Anthropic",
         numResults: 5,
         type: "auto",
-        contents: { maxCharacters: 10_000 },
+        contents: { text: { maxCharacters: 10_000 } },
         includeDomains: [
           "bloomberg.com",
           "reuters.com",
@@ -178,7 +176,7 @@ describe("Exa extension request handling", () => {
         query: expectedQuery,
         numResults: 5,
         type: "auto",
-        contents: { maxCharacters: 10_000 },
+        contents: { text: { maxCharacters: 10_000 } },
         includeDomains: ["linkedin.com"],
       }),
     );
