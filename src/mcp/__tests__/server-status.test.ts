@@ -34,7 +34,7 @@ it("returns stored fast cards and grant labels without any network work", async 
   const get = app.routes.get("GET /mcp/servers")!;
   const result = await get(routeContext({ agent: "agent", live: "0" }));
   expect(result).toMatchObject({ servers: [
-    { name: "personal", title: "My server", description: "Saved description", url: "https://personal.example.test/mcp", iconUrl: "https://personal.example.test/icon.png", auth: "oauth", personalState: "needs_reconnect", teamState: "disconnected", personalAccount: "alice@example.test", state: "disconnected", status: "pending" },
+    { name: "personal", title: "My server", description: "Saved description", url: "https://personal.example.test/mcp", iconUrl: undefined, auth: "oauth", personalState: "needs_reconnect", teamState: "disconnected", personalAccount: "alice@example.test", state: "disconnected", status: "pending" },
     { name: "team", auth: "oauth", teamState: "connected", state: "disconnected", status: "pending" },
     { name: "plain", auth: "none", state: "disconnected", status: "pending" },
     { name: "static", auth: "static", state: "disconnected", status: "pending" },

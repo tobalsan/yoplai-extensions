@@ -30,7 +30,7 @@ function isNonPublicIpv4(a: number, b: number): boolean {
   );
 }
 
-function isNonPublicAddress(address: string): boolean {
+export function isNonPublicAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 4) {
     const [a = 0, b = 0] = address.split(".").map(Number);

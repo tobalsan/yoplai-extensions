@@ -9,9 +9,21 @@ import { credentials } from "./credentials.js";
 import { routeApp, routeContext, tempDirs } from "./harness.js";
 
 const dirs = tempDirs();
+const SERVER_ICON = "data:image/png;base64,iVBORw0KGgo=";
+const NEW_ICON = "data:image/gif;base64,R0lGODlh";
+const OLD_ICON = "data:image/jpeg;base64,/9j/";
+
+function pngResponse() {
+  return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), { headers: { "content-type": "image/png" } });
+}
+
+function gifResponse() {
+  return new Response("GIF89a", { headers: { "content-type": "image/gif" } });
+}
+
 afterEach(async () => { vi.useRealTimers(); vi.unstubAllGlobals(); await dirs.cleanup(); });
 
-// Approved in ALG-570 Testing Decisions: routes + persisted files cover capture/restarts,
+// Approved by Pom on ALG-808: routes + persisted files cover capture/restarts,
 // auth and editor behavior; fake remote clients do not cover SDK transport or browser rendering.
 async function setup(entry: Record<string, unknown>, icon: () => string | undefined = () => "https://icons.test/server.png") {
   const home = await dirs.make("mcp-icons-");
@@ -20,7 +32,11 @@ async function setup(entry: Record<string, unknown>, icon: () => string | undefi
   const file = path.join(agentDir, "mcp.json");
   const host = credentials();
   await fs.writeFile(file, JSON.stringify({ mcpServers: { remote: entry } }));
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "https://icons.test/server.png") return pngResponse();
+    if (url === "https://icons.test/new.gif") return gifResponse();
+    return new Response(null, { status: 404 });
+  }));
   const factory: McpClientFactory = async () => ({
     async listTools() { return []; },
     async readResource() { return { contents: [] }; },
@@ -38,13 +54,13 @@ async function setup(entry: Record<string, unknown>, icon: () => string | undefi
 it("saves a managed server icon and serves it after restart without network", async () => {
   const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true });
   const first = await t.start();
-  await expect(first.call("GET /mcp/servers", { agent: "agent", server: "remote" })).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/server.png" }] });
-  expect((await t.read()).mcpServers.remote.serverIcon).toBe("https://icons.test/server.png");
+  await expect(first.call("GET /mcp/servers", { agent: "agent" })).resolves.toMatchObject({ servers: [{ iconUrl: SERVER_ICON }] });
+  expect((await t.read()).mcpServers.remote.serverIcon).toBe(SERVER_ICON);
   await first.extension.stop();
   const network = vi.fn(() => { throw new Error("unexpected network"); });
   vi.stubGlobal("fetch", network);
   const fresh = await t.start(network);
-  await expect(fresh.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/server.png" }] });
+  await expect(fresh.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: SERVER_ICON }] });
   expect(network).not.toHaveBeenCalled();
   await fresh.extension.stop();
 });
@@ -54,26 +70,26 @@ it("captures an enabled shared server icon for catalog and agent cards", async (
   await fs.writeFile(t.file, JSON.stringify({ mcpServers: {}, sharedServers: ["shared"] }));
   await fs.writeFile(path.join(t.home, "mcp.json"), JSON.stringify({ mcpServers: { shared: { url: "https://shared.example.test/mcp" } } }));
   const live = await t.start();
-  await expect(live.call("GET /mcp/servers", { agent: "agent", server: "shared" })).resolves.toMatchObject({ servers: [{ shared: true, iconUrl: "https://icons.test/server.png" }] });
-  expect(JSON.parse(await fs.readFile(path.join(t.home, "mcp.json"), "utf8")).mcpServers.shared.serverIcon).toBe("https://icons.test/server.png");
-  await expect(live.call("GET /mcp/catalog")).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/server.png" }] });
-  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/server.png" }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent" })).resolves.toMatchObject({ servers: [{ shared: true, iconUrl: SERVER_ICON }] });
+  expect(JSON.parse(await fs.readFile(path.join(t.home, "mcp.json"), "utf8")).mcpServers.shared.serverIcon).toBe(SERVER_ICON);
+  await expect(live.call("GET /mcp/catalog")).resolves.toMatchObject({ servers: [{ iconUrl: SERVER_ICON }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: SERVER_ICON }] });
   await live.extension.stop();
 });
 
 it("refreshes a user icon, persists it, and keeps it when initialize later omits icons", async () => {
-  let reported: string | undefined = "https://icons.test/new.png";
+  let reported: string | undefined = "https://icons.test/new.gif";
   const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true, serverIcon: "https://icons.test/old.png" }, () => reported);
   const live = await t.start();
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: "https://icons.test/new.png" } });
-  expect((await t.read()).mcpServers.remote.serverIcon).toBe("https://icons.test/new.png");
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: NEW_ICON } });
+  expect((await t.read()).mcpServers.remote.serverIcon).toBe(NEW_ICON);
   reported = undefined;
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "unchanged", server: { iconUrl: "https://icons.test/new.png" } });
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "unchanged", server: { iconUrl: NEW_ICON } });
   await live.extension.stop();
 });
 
 it("never reports updated when saving a managed icon fails, and keeps the old icon on disk", async () => {
-  const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true, serverIcon: "https://icons.test/old.png" }, () => "https://icons.test/new.png");
+  const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true, serverIcon: OLD_ICON }, () => "https://icons.test/new.gif");
   const before = await fs.readFile(t.file, "utf8");
   const live = await t.start();
   const rename = syncFs.renameSync;
@@ -85,9 +101,9 @@ it("never reports updated when saving a managed icon fails, and keeps the old ic
   spy.mockRestore();
   expect(result.status).toBe("save_failed");
   expect(result.error).toContain("disk full");
-  expect(result.server.iconUrl).toBe("https://icons.test/old.png");
+  expect(result.server.iconUrl).toBe(OLD_ICON);
   expect(await fs.readFile(t.file, "utf8")).toBe(before);
-  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: "https://icons.test/old.png" }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: OLD_ICON }] });
   await live.extension.stop();
 });
 
@@ -108,8 +124,8 @@ it("refreshes the unauthenticated catalog icon and returns it to the admin", asy
   const catalogFile = path.join(t.home, "mcp.json");
   await fs.writeFile(catalogFile, JSON.stringify({ mcpServers: { shared: { url: "https://shared.example.test/mcp" } } }));
   const live = await t.start();
-  await expect(live.call("POST /mcp/catalog/icon/refresh", { server: "shared" })).resolves.toMatchObject({ status: "updated", server: { name: "shared", iconUrl: "https://icons.test/server.png" } });
-  expect(JSON.parse(await fs.readFile(catalogFile, "utf8")).mcpServers.shared.serverIcon).toBe("https://icons.test/server.png");
+  await expect(live.call("POST /mcp/catalog/icon/refresh", { server: "shared" })).resolves.toMatchObject({ status: "updated", server: { name: "shared", iconUrl: SERVER_ICON } });
+  expect(JSON.parse(await fs.readFile(catalogFile, "utf8")).mcpServers.shared.serverIcon).toBe(SERVER_ICON);
   await live.extension.stop();
 });
 
@@ -119,7 +135,7 @@ it("leaves an unconnected OAuth user server untouched and requires sign-in", asy
   const network = vi.fn(() => { throw new Error("must connect first"); });
   vi.stubGlobal("fetch", network);
   const live = await t.start(network);
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "not_connected", server: { iconUrl: "https://icons.test/kept.png" } });
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "not_connected", server: { iconUrl: undefined } });
   expect(await fs.readFile(t.file, "utf8")).toBe(original);
   expect(network).not.toHaveBeenCalled();
   await live.extension.stop();
@@ -131,7 +147,7 @@ it("allows connected personal OAuth refresh and leaves hand-edited entries byte-
   await store.write("agent", "remote", { client: { client_id: "client", redirect_uris: [] }, tokens: { access_token: "dummy", token_type: "Bearer" }, connectedAt: "2026-01-01T00:00:00Z", authorizationServerUrl: "https://auth.example.test" }, { type: "personal", userId: "user-a" });
   const original = await fs.readFile(t.file, "utf8");
   const live = await t.start();
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "not_saved", server: { iconUrl: "https://icons.test/server.png" } });
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "not_saved", server: { iconUrl: SERVER_ICON } });
   expect(await fs.readFile(t.file, "utf8")).toBe(original);
   await live.extension.stop();
 });
@@ -142,10 +158,12 @@ it("returns not_connected for a catalog requiring sign-in and still replaces its
   await fs.writeFile(file, JSON.stringify({ mcpServers: { shared: { url: "https://shared.example.test/mcp" } } }));
   await fs.mkdir(path.join(t.home, "mcp"));
   await fs.writeFile(path.join(t.home, "mcp/icons.json"), JSON.stringify({ "shared.example.test": "https://icons.test/old.png" }));
-  vi.stubGlobal("fetch", vi.fn(async () => new Response('<link rel="icon" href="https://icons.test/new.png">', { headers: { "content-type": "text/html" } })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "https://icons.test/server.png" ? pngResponse()
+    : new Response('<link rel="icon" href="https://icons.test/server.png">', { headers: { "content-type": "text/html" } })));
   const live = await t.start(async () => { throw Object.assign(new Error("Unauthorized"), { code: 401 }); }, true);
   await expect(live.call("POST /mcp/catalog/icon/refresh", { server: "shared" }, undefined, "admin")).resolves.toMatchObject({ status: 403 });
-  await expect(live.call("POST /mcp/catalog/icon/refresh", { server: "shared" })).resolves.toMatchObject({ status: "not_connected", server: { iconUrl: "https://icons.test/new.png" } });
+  await expect(live.call("POST /mcp/catalog/icon/refresh", { server: "shared" })).resolves.toMatchObject({ status: "not_connected", server: { iconUrl: SERVER_ICON } });
+  expect(JSON.parse(await fs.readFile(path.join(t.home, "mcp/icons.json"), "utf8"))).toEqual({ "shared.example.test": SERVER_ICON });
   expect(JSON.parse(await fs.readFile(file, "utf8")).mcpServers.shared).not.toHaveProperty("serverIcon");
   await live.extension.stop();
 });
@@ -193,29 +211,36 @@ it("times out a catalog initialize, closes a late client, and keeps serving othe
 it("retries a memoized favicon miss, replaces a cached hit, and keeps a hit on a later miss", async () => {
   const t = await setup({ url: "https://remote.example.test/mcp", yoplaiManaged: true }, () => undefined);
   let found: string | undefined;
-  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, options?: RequestInit) =>
-    found && !String(input).includes(".well-known") && options?.method !== "POST"
-      ? new Response(`<link rel="icon" href="${found}">`, { headers: { "content-type": "text/html" } })
-      : new Response(null, { status: 404 })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "https://icons.test/server.png") return pngResponse();
+    if (url === "https://icons.test/new.gif") return gifResponse();
+    if (found && url === "https://remote.example.test/") return new Response(`<link rel="icon" href="${found}">`, { headers: { "content-type": "text/html" } });
+    return new Response(null, { status: 404 });
+  }));
   const live = await t.start();
   await expect(live.call("GET /mcp/servers", { agent: "agent" })).resolves.toMatchObject({ servers: [{ iconUrl: undefined }] });
-  found = "https://icons.test/retried.png";
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: "https://icons.test/retried.png" } });
-  found = "https://icons.test/changed.png";
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: "https://icons.test/changed.png" } });
+  found = "https://icons.test/server.png";
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: SERVER_ICON } });
+  found = "https://icons.test/new.gif";
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "updated", server: { iconUrl: NEW_ICON } });
   found = undefined;
-  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "unchanged", server: { iconUrl: "https://icons.test/changed.png" } });
+  await expect(live.call("POST /mcp/servers/icon/refresh", { agent: "agent", server: "remote" })).resolves.toMatchObject({ status: "unchanged", server: { iconUrl: NEW_ICON } });
   await live.extension.stop();
 });
 
 it("uses the known icon before a reported icon and cached favicon on every card surface", async () => {
   const t = await setup({ url: "https://calendarmcp.googleapis.com/mcp/v1", yoplaiManaged: true, serverIcon: "https://icons.test/saved.png" });
   await fs.writeFile(path.join(t.home, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1", serverIcon: "https://icons.test/catalog.png" } } }));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (new URL(url).hostname === "ssl.gstatic.com") return gifResponse();
+    if (url === "https://icons.test/server.png") return pngResponse();
+    return new Response(null, { status: 404 });
+  }));
   const live = await t.start();
-  const expected = "https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png";
-  await expect(live.call("GET /mcp/servers", { agent: "agent", server: "remote" })).resolves.toMatchObject({ servers: [{ iconUrl: expected }] });
-  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: expected }] });
-  await expect(live.call("GET /mcp/catalog")).resolves.toMatchObject({ servers: [{ iconUrl: expected }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent", server: "remote" })).resolves.toMatchObject({ servers: [{ iconUrl: undefined }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent" })).resolves.toMatchObject({ servers: [{ iconUrl: NEW_ICON }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent", live: "0" })).resolves.toMatchObject({ servers: [{ iconUrl: NEW_ICON }] });
+  await expect(live.call("GET /mcp/catalog")).resolves.toMatchObject({ servers: [{ iconUrl: NEW_ICON }] });
   await live.extension.stop();
 });
 
@@ -249,10 +274,14 @@ it("bounds user refresh connection to ten seconds without a separate OAuth probe
   await live.extension.stop();
 });
 
-it("preserves existing live absolute HTTP icons for stdio servers without persisting metadata", async () => {
+it("inlines live stdio icons without downloading them on named status reads", async () => {
   const t = await setup({ command: "node", yoplaiManaged: true });
   const live = await t.start();
-  await expect(live.call("GET /mcp/servers", { agent: "agent", server: "remote" })).resolves.toMatchObject({ servers: [{ type: "stdio", iconUrl: "https://icons.test/server.png" }] });
+  await expect(live.call("GET /mcp/servers", { agent: "agent" })).resolves.toMatchObject({ servers: [{ type: "stdio", iconUrl: SERVER_ICON }] });
+  const network = vi.fn(() => new Promise<Response>(() => {}));
+  vi.stubGlobal("fetch", network);
+  await expect(live.call("GET /mcp/servers", { agent: "agent", server: "remote" })).resolves.toMatchObject({ servers: [{ type: "stdio", state: "connected", iconUrl: undefined }] });
+  expect(network).not.toHaveBeenCalled();
   expect((await t.read()).mcpServers.remote).not.toHaveProperty("serverIcon");
   await live.extension.stop();
 });

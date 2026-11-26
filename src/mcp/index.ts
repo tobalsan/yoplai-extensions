@@ -12,7 +12,7 @@ import { logMcpUnavailable, sanitizeMessage, type McpLogPath } from "./logging.j
 import { McpStaticOAuthClientSchema, parseMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "./loader.js";
 import { adaptMcpTools, McpCallToolResultSchema, sanitizeSegment } from "./tool-adapter.js";
 import { withTimeout } from "./timeout.js";
-import { createIconResolver, knownServer, normalizeServerIcon, siteLabel } from "./icon.js";
+import { createIconResolver, dataIcon, inlineIcon, knownServer, normalizeServerIcon, siteLabel } from "./icon.js";
 import { buildOAuthClientMetadata } from "./client-metadata.js";
 import { McpOAuthStore, McpOAuthFlowError, hasProtectedResourceAuthServers, type ScopedCredentials, type CredentialScope, type AuditActor, type PendingOAuthFlow } from "./oauth.js";
 import { defineToolExtension, McpAppsError, type McpAppsContext, type McpApps } from "../tool-extension.js";
@@ -175,7 +175,7 @@ function saveServerTitle(filePath: string, name: string, title: string): void {
   } catch { /* label is best-effort */ }
 }
 
-/** Captured icons are metadata for <img> only; never inline them or open them as documents. */
+/** Captured icons are data URIs for <img> only. */
 /** Returns the write error message when saving failed; undefined when saved or nothing to save. */
 function saveServerIcon(filePath: string, name: string, icon: string, shared = false): string | undefined {
   try {
@@ -375,9 +375,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     return { agent, path: path.join(agentDir, "mcp.json") };
   }
 
-  async function cardIcon(serverUrl: string, reported: unknown, favicon: string | Promise<string | undefined> | undefined): Promise<string | undefined> {
-    return knownServer(serverUrl)?.iconUrl ?? normalizeServerIcon(reported, serverUrl)
-      ?? await favicon;
+  async function cardIcon(serverUrl: string | undefined, reported: string | undefined, favicon?: string | Promise<string | undefined>): Promise<string | undefined> {
+    const known = serverUrl && knownServer(serverUrl) ? dataIcon(await favicon) : undefined;
+    return known ?? dataIcon(reported) ?? dataIcon(await favicon);
   }
 
   async function serverCard(agentId: string, server: McpServerConfig, requesterUserId?: string, shared?: { enabled: boolean }, mode: "default" | "fast" | "status" = "default", refreshIcon = false) {
@@ -397,7 +397,9 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
     let connected = false;
     let failure: McpServerError | undefined;
     const statusController = mode === "status" ? new AbortController() : undefined;
-    let iconUrl = server.type === "http" && isRecord(rawServer) ? normalizeServerIcon(rawServer.serverIcon, server.url) : undefined;
+    const savedIcon = server.type === "http" && isRecord(rawServer) ? normalizeServerIcon(rawServer.serverIcon, server.url) : undefined;
+    let iconUrl = dataIcon(savedIcon);
+    let reportedIcon: string | undefined;
     let iconSaveError: string | undefined;
     const rawText = (field: string) => isRecord(rawServer) && typeof rawServer[field] === "string" && rawServer[field].trim() ? rawServer[field].trim() : undefined;
     // Optional yoplai-only fields on any server entry (stdio too); MCP clients ignore unknown keys.
@@ -426,16 +428,12 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
           if ((title || description) && managed && config) saveLabel(config.path, server.name, { title, description });
         }
         if (shared && title && !rawText("displayName") && rawText("serverTitle") !== title) saveServerTitle(catalogPath(), server.name, title);
-        const icon = server.type === "http" && manager.hasClient(server.name) ? normalizeServerIcon(manager.getServerIcons(server.name), server.url) : undefined;
-        if (icon) {
-          // Keep the saved icon when the write fails, so the card matches what is on disk.
-          iconSaveError = rawPath ? saveServerIcon(rawPath, server.name, icon, !!shared) : undefined;
-          if (!iconSaveError) iconUrl = icon;
-        } else if (server.type === "stdio") {
-          try {
-            const legacy = new URL(manager.getServerIcon(server.name) ?? "");
-            if (legacy.protocol === "http:" || legacy.protocol === "https:") iconUrl = legacy.toString();
-          } catch { /* Keep existing stdio icon handling separate from HTTP icon capture. */ }
+        if (mode === "default" || refreshIcon) {
+          if (server.type === "http" && manager.hasClient(server.name)) {
+            reportedIcon = normalizeServerIcon(manager.getServerIcons(server.name), server.url);
+          } else if (server.type === "stdio") {
+            reportedIcon = normalizeServerIcon(manager.getServerIcon(server.name));
+          }
         }
       };
       if (mode === "status") await withTimeout(check(), 10_000, "MCP server status timed out");
@@ -463,6 +461,13 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       if (failure.category === "network" || failure.category === "timeout") state = "unreachable";
       else if (failure.category === "protocol" || failure.category === "configuration") state = "disconnected";
     }
+    if (mode === "default" || refreshIcon) {
+      const icon = await inlineIcon(reportedIcon) ?? (reportedIcon === savedIcon ? iconUrl : await inlineIcon(savedIcon));
+      if (icon && server.type === "http" && rawPath && icon !== savedIcon) {
+        iconSaveError = saveServerIcon(rawPath, server.name, icon, !!shared);
+      }
+      if (icon && !iconSaveError) iconUrl = icon;
+    }
     if (refreshIcon && server.type === "http" && !(oauthServer && (state === "needs_reconnect" || (!personal && !team)))) await resolveIcon?.refresh(server.url);
     return {
       name: server.name,
@@ -470,7 +475,7 @@ export function createMcpExtension(clientFactory?: McpClientFactory) {
       ...(description ? { description } : {}),
       type: server.type,
       ...(server.type === "http" ? { url: server.url } : {}),
-      iconUrl: server.type === "http" ? await cardIcon(server.url, iconUrl, refreshIcon ? resolveIcon?.cached(server.url) : siteIcon) : iconUrl,
+      iconUrl: await cardIcon(server.type === "http" ? server.url : undefined, iconUrl, refreshIcon && server.type === "http" ? resolveIcon?.cached(server.url) : siteIcon),
       auth,
       ...(mode === "fast" ? { status: "pending" } : {}),
       ...(mode === "status" && failure ? { error: failure.message } : {}),
@@ -832,7 +837,7 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
     }
     async function catalogCard(name: string, entry: Record<string, unknown>, cached = false) {
       const url = entry.url as string;
-      return { name, url, iconUrl: await cardIcon(url, entry.serverIcon, cached ? resolveIcon?.cached(url) : resolveIcon?.(url)), ...(typeof entry.displayName === "string" ? { displayName: entry.displayName } : {}), ...(typeof entry.description === "string" ? { description: entry.description } : {}) };
+      return { name, url, iconUrl: await cardIcon(url, normalizeServerIcon(entry.serverIcon, url), cached ? resolveIcon?.cached(url) : resolveIcon?.(url)), ...(typeof entry.displayName === "string" ? { displayName: entry.displayName } : {}), ...(typeof entry.description === "string" ? { description: entry.description } : {}) };
     }
     /** Catalog routes are superadmin-only; returns an error response or undefined when allowed. */
     function catalogDenied(c: RouteContext) {
@@ -979,10 +984,10 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       let notConnected = false;
       let error: string | undefined;
       let saveError: string | undefined;
+      let reportedIcon: string | undefined;
       try {
         await withTimeout(manager.connect(), 10_000, "MCP server status timed out");
-        const icon = normalizeServerIcon(manager.getServerIcons(name), server.url);
-        if (manager.hasClient(name) && icon) saveError = saveServerIcon(catalogPath(), name, icon, true);
+        if (manager.hasClient(name)) reportedIcon = normalizeServerIcon(manager.getServerIcons(name), server.url);
         notConnected = manager.getErrors().some((error) => error.category === "authentication");
       } catch (failure) {
         controller.abort(failure);
@@ -991,6 +996,9 @@ h1{color:${success ? "#137333" : "#c5221f"};font-size:20px;margin:0 0 12px}p{col
       } finally {
         void manager.close().catch(() => {});
       }
+      const savedIcon = normalizeServerIcon(entry.serverIcon, server.url);
+      const icon = await inlineIcon(reportedIcon) ?? (reportedIcon === savedIcon ? undefined : await inlineIcon(savedIcon));
+      if (icon && icon !== savedIcon) saveError = saveServerIcon(catalogPath(), name, icon, true);
       await resolveIcon?.refresh(server.url);
       const card = await catalogCard(name, catalogServers()[name] ?? entry, true);
       if (saveError) error = saveError;

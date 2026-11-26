@@ -39,9 +39,9 @@ describe("MCP routes with multi-user enabled", () => {
     await fs.writeFile(path.join(home, "mcp.json"), JSON.stringify({
       mcpServers: { shared: { url: "https://shared.example.test/mcp", headers: {} } },
     }));
-    const fetchMcp = vi.fn(async (input: string | URL | Request) => new Response(null, {
-      status: String(input).endsWith("/mcp") ? 401 : 404,
-    }));
+    const fetchMcp = vi.fn(async (input: string | URL | Request) => String(input) === "https://docs.example.test/icon.png"
+      ? new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), { headers: { "content-type": "image/png" } })
+      : new Response(null, { status: String(input).endsWith("/mcp") ? 401 : 404 }));
     vi.stubGlobal("fetch", fetchMcp);
     const begin = vi.spyOn(McpOAuthStore.prototype, "begin").mockResolvedValue({
       state: "fixture", authorizationUrl: "https://identity.example.test/authorize",
