@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
+import { isNonPublicAddress } from "./gateway-reachability.js";
 import { raceTimeout } from "./timeout.js";
 
 export interface ServerIcon {
@@ -9,10 +11,11 @@ export interface ServerIcon {
   theme?: "light" | "dark";
 }
 
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"]);
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"]);
+const MAX_DATA_URI_BYTES = 64 * 1024;
 
 /** Normalize server metadata both before saving and after reading it. Render only through <img>, never inline or as a document. */
-export function normalizeServerIcon(input: unknown, serverUrl: string): string | undefined {
+export function normalizeServerIcon(input: unknown, serverUrl?: string): string | undefined {
   const icons: ServerIcon[] = typeof input === "string" ? [{ src: input }] : Array.isArray(input)
     ? input.filter((icon): icon is ServerIcon => !!icon && typeof icon === "object" && typeof icon.src === "string") : [];
   const ranked = [...icons].sort((a, b) => Number(a.theme === "dark") - Number(b.theme === "dark")
@@ -21,7 +24,7 @@ export function normalizeServerIcon(input: unknown, serverUrl: string): string |
     try {
       if (icon.src.startsWith("data:")) {
         const data = icon.src.match(/^data:([^;,]+)(;base64)?,([\s\S]+)$/i);
-        if (!data || Buffer.byteLength(icon.src, "utf8") > 32 * 1024 || !IMAGE_TYPES.has(data[1].toLowerCase())) continue;
+        if (!data || Buffer.byteLength(icon.src, "utf8") > MAX_DATA_URI_BYTES || !IMAGE_TYPES.has(data[1].toLowerCase())) continue;
         const svg = data[1].toLowerCase() === "image/svg+xml";
         if (!data[2] && !svg) continue;
         if (data[2] && (!/^[A-Za-z0-9+/]+={0,2}$/.test(data[3]) || data[3].length % 4 === 1)) continue;
@@ -50,6 +53,62 @@ export function siteLabel(hostname: string): string {
 }
 
 const TIMEOUT_MS = 5_000;
+
+export function dataIcon(icon: string | undefined): string | undefined {
+  return icon?.startsWith("data:") ? icon : undefined;
+}
+
+function canDownloadIcon(url: URL): boolean {
+  const host = url.hostname.replace(/\.$/, "");
+  const address = host.replace(/^\[|\]$/g, "");
+  return (url.protocol === "http:" || url.protocol === "https:")
+    && host !== "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local")
+    && !(isIP(address) && isNonPublicAddress(address));
+}
+
+async function downloadIcon(src: string, signal: AbortSignal): Promise<string | undefined> {
+  let url = new URL(src);
+  for (let redirects = 0; redirects <= 3 && canDownloadIcon(url); redirects++) {
+    signal.throwIfAborted();
+    const response = await fetch(url.href, { redirect: "manual", signal });
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      const location = response.headers.get("location");
+      if (!location || ![301, 302, 303, 307, 308].includes(response.status)) return undefined;
+      url = new URL(location, url);
+      continue;
+    }
+
+    const type = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+    if (!type || !IMAGE_TYPES.has(type)) {
+      void response.body?.cancel().catch(() => {});
+      return undefined;
+    }
+    const reader = response.body?.getReader();
+    if (!reader) return undefined;
+    const chunks: Uint8Array[] = [];
+    const maxBytes = Math.floor((MAX_DATA_URI_BYTES - `data:${type};base64,`.length) / 4) * 3;
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) return undefined;
+        chunks.push(value);
+      }
+    } finally {
+      void reader.cancel().catch(() => {});
+    }
+    return normalizeServerIcon(`data:${type};base64,${Buffer.concat(chunks).toString("base64")}`);
+  }
+  return undefined;
+}
+
+export async function inlineIcon(src: string | undefined): Promise<string | undefined> {
+  if (!src || dataIcon(src)) return src;
+  return raceTimeout(downloadIcon(src, AbortSignal.timeout(TIMEOUT_MS)).catch(() => undefined), TIMEOUT_MS);
+}
 
 function rootDomain(hostname: string): string | undefined {
   if (/^[\d.]+$/.test(hostname) || hostname.includes(":")) return undefined;
@@ -102,7 +161,7 @@ export function knownServer(url: string): { title: string; iconUrl: string } | u
   try { return KNOWN_SERVERS[new URL(url).host.toLowerCase()]; } catch { return undefined; }
 }
 
-/** Resolves website icons for HTTP MCP servers, persisted as a hostname → icon URL map. */
+/** Resolves website icons for HTTP MCP servers and caches their data URIs by hostname. */
 export function createIconResolver(dataDir: string) {
   const file = path.join(dataDir, "mcp", "icons.json");
   let cache: Record<string, string> = {};
@@ -114,34 +173,39 @@ export function createIconResolver(dataDir: string) {
     const root = rootDomain(hostname);
     const known = knownServer(serverUrl)?.iconUrl;
     const [hostIcon, rootIcon] = known ? [known] : await Promise.all([findIcon(`${protocol}//${hostname}`), root ? findIcon(`${protocol}//${root}`) : undefined]);
-    const icon = hostIcon ?? rootIcon;
-    if (icon) {
-      cache[hostname] = icon;
-      try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, `${JSON.stringify(cache, null, 2)}\n`);
-      } catch { /* cache is best-effort */ }
-    }
-    return icon;
+    return inlineIcon(hostIcon ?? rootIcon);
+  }
+
+  function startLookup(serverUrl: string, hostname: string): Promise<string | undefined> {
+    const result = lookup(serverUrl).then((icon) => {
+      if (pending.get(hostname) !== result) return dataIcon(cache[hostname]);
+      if (icon) {
+        cache[hostname] = icon;
+        try {
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, `${JSON.stringify(cache, null, 2)}\n`);
+        } catch { /* cache is best-effort */ }
+      }
+      return icon;
+    }).catch(() => undefined);
+    pending.set(hostname, result);
+    return result;
   }
 
   const cached = (serverUrl: string): string | undefined => {
-    try { return cache[new URL(serverUrl).hostname]; } catch { return undefined; }
+    try { return dataIcon(cache[new URL(serverUrl).hostname]); } catch { return undefined; }
   };
   const refresh = (serverUrl: string): Promise<string | undefined> => {
     let hostname: string;
     try { hostname = new URL(serverUrl).hostname; } catch { return Promise.resolve(undefined); }
-    pending.delete(hostname);
-    const result = lookup(serverUrl).catch(() => undefined);
-    pending.set(hostname, result);
-    return result;
+    return startLookup(serverUrl, hostname);
   };
   return Object.assign((serverUrl: string): Promise<string | undefined> => {
     let hostname: string;
     try { hostname = new URL(serverUrl).hostname; } catch { return Promise.resolve(undefined); }
-    if (cache[hostname]) return Promise.resolve(cache[hostname]);
+    const saved = cached(serverUrl);
+    if (saved) return Promise.resolve(saved);
     // Misses stay memoized for the process lifetime to avoid re-probing on every refresh.
-    if (!pending.has(hostname)) pending.set(hostname, lookup(serverUrl).catch(() => undefined));
-    return pending.get(hostname)!;
+    return pending.get(hostname) ?? startLookup(serverUrl, hostname);
   }, { cached, refresh });
 }

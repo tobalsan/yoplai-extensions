@@ -115,7 +115,9 @@ describe("MCP server cards and self-service routes", () => {
     } };
     await fs.writeFile(file, JSON.stringify(original));
     vi.stubEnv("MCP_TOKEN", "secret");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "https://docs.example.test/icon.png"
+      ? new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), { headers: { "content-type": "image/png" } })
+      : { status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
       async listTools() { return [{ server: server.name, name: "ping", description: "Ping", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
       async readResource() { return { contents: [] }; },
@@ -130,7 +132,7 @@ describe("MCP server cards and self-service routes", () => {
     const list = await routes.routes.get("GET /mcp/servers")!(context({ agent: "agent-a" }));
     expect(list.servers).toEqual([
       expect.objectContaining({ name: "local", type: "stdio", state: "connected", readOnly: true }),
-      expect.objectContaining({ name: "docs", type: "http", state: "connected", iconUrl: "https://docs.example.test/icon.png", readOnly: true }),
+      expect.objectContaining({ name: "docs", type: "http", state: "connected", iconUrl: "data:image/png;base64,iVBORw0KGgo=", readOnly: true }),
     ]);
     const added = await routes.routes.get("POST /mcp/servers")!(context({ agent: "agent-a" }, { url: "https://new.example.test/mcp", credentialScope: "team" }));
     expect(added.server).toMatchObject({ type: "http", auth: "none", state: "connected", readOnly: false });
@@ -374,7 +376,9 @@ describe("MCP server config routes", () => {
   it("labels known hosted MCP servers that report generic server info", async () => {
     const dir = await dirs.make("mcp-servers-");
     await fs.writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { calendar: { url: "https://calendarmcp.googleapis.com/mcp/v1", yoplaiManaged: true } } }));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new URL(url).hostname === "ssl.gstatic.com"
+      ? new Response("GIF89a", { headers: { "content-type": "image/gif" } })
+      : { status: 200 }));
     const factory = vi.fn(async (server: { name: string }) => ({
       async listTools() { return [{ server: server.name, name: "list_events", description: "List", visibility: ["model" as const, "app" as const], inputSchema: { type: "object" } }]; },
       async readResource() { return { contents: [] }; },
@@ -386,10 +390,10 @@ describe("MCP server config routes", () => {
     await extension.start({ getDataDir: () => dir, getConfig: () => ({}), getAgent: () => ({ id: "agent-a", workspaceDir: dir }) });
     const routes = app(); extension.registerRoutes(routes);
     const list = await routes.routes.get("GET /mcp/servers")!(context({ agent: "agent-a" }));
-    expect(list.servers).toEqual([expect.objectContaining({ name: "calendar", title: "Google Calendar", iconUrl: "https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png" })]);
+    expect(list.servers).toEqual([expect.objectContaining({ name: "calendar", title: "Google Calendar", iconUrl: "data:image/gif;base64,R0lGODlh" })]);
     // Persisted so file-based views (admin Top extensions) show the same label and icon.
     expect(JSON.parse(await fs.readFile(path.join(dir, "mcp.json"), "utf8")).mcpServers.calendar.displayName).toBe("Google Calendar");
-    expect(JSON.parse(await fs.readFile(path.join(dir, "mcp", "icons.json"), "utf8"))["calendarmcp.googleapis.com"]).toBe("https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png");
+    expect(JSON.parse(await fs.readFile(path.join(dir, "mcp", "icons.json"), "utf8"))["calendarmcp.googleapis.com"]).toBe("data:image/gif;base64,R0lGODlh");
   });
 
   it("renders a styled, escaped OAuth result page", async () => {

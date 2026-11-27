@@ -4,6 +4,7 @@
 
 ### Changed
 
+- MCP cards and the catalog use inline server icons, with cached reads available after restart.
 - Shared MCP server settings and team OAuth grants require agent management. The MCP extension loads the agent workspace's `mcp.json` and ignores legacy `configPath` and `agentDir` settings (ALG-741).
 
 ### Fixed
