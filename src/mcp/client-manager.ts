@@ -6,6 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { ListToolsResultSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType, JsonSchemaValidator, jsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 
@@ -16,6 +17,7 @@ import type { ServerIcon } from "./icon.js";
 import type { McpServerConfig } from "./loader.js";
 import { logMcpUnavailable, type McpLogContext, type McpLogEvent, type McpLogLevel } from "./logging.js";
 import { withTimeout as withDeadline } from "./timeout.js";
+import { toolPages } from "./tool-pages.js";
 
 const withTimeout = <T>(task: Promise<T>, message: string): Promise<T> => withDeadline(task, 10_000, message);
 
@@ -158,8 +160,23 @@ export class SdkMcpClientHandle implements McpClientHandle {
   }
 
   async listTools(options?: { signal?: AbortSignal }): Promise<McpToolDefinition[]> {
-    const result = await withRequestSignal(options?.signal, (signal) => this.client.listTools(undefined, { signal }));
-    return result.tools.map((tool) => ({
+    const tools = await withRequestSignal(options?.signal, async (signal) => {
+      const tools: Tool[] = [];
+      const pages = toolPages(this.serverName, signal, (params) =>
+        // The SDK retains abort listeners after responses. Relay cancellation only to the active page.
+        withRequestSignal(signal, (pageSignal) =>
+          this.client.request({ method: "tools/list", params }, ListToolsResultSchema, { signal: pageSignal }),
+        ),
+      );
+      for await (const page of pages) {
+        for (const tool of page) tools.push(tool);
+      }
+      // SDK 1.29's listTools replaces its validator and task caches per page.
+      // Publish the full catalog at once so a partial listing never replaces them.
+      (this.client as unknown as { cacheToolMetadata(tools: Tool[]): void }).cacheToolMetadata(tools);
+      return tools;
+    });
+    return tools.map((tool) => ({
       server: this.serverName,
       name: tool.name,
       description: tool.description ?? `MCP tool ${tool.name} from ${this.serverName}`,
