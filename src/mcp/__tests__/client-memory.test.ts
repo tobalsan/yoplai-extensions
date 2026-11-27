@@ -38,6 +38,97 @@ async function schemaServer(outputSchema: Record<string, unknown>) {
   return connect(server);
 }
 
+const listedTool = (name: string) => ({ name, inputSchema: { type: "object" as const } });
+
+describe("MCP tool pagination", () => {
+  it("returns all three pages in server order", async () => {
+    const server = new Server({ name: "paged-tools", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+      switch (params?.cursor) {
+        case undefined: return { tools: [listedTool("zebra"), listedTool("otter")], nextCursor: "second" };
+        case "second": return { tools: [listedTool("seal"), listedTool("tern")], nextCursor: "third" };
+        case "third": return { tools: [listedTool("ibis")] };
+        default: throw new Error("Unknown cursor");
+      }
+    });
+    const client = await connect(server);
+    expect((await client.listTools()).map(({ name }) => name)).toEqual(["zebra", "otter", "seal", "tern", "ibis"]);
+  });
+
+  it("stops on an empty cursor", async () => {
+    const server = new Server({ name: "empty-cursor", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+      if (params?.cursor !== undefined) throw new Error("Listing should have ended");
+      return { tools: [listedTool("lookup")], nextCursor: "" };
+    });
+    const client = await connect(server);
+    expect((await client.listTools()).map(({ name }) => name)).toEqual(["lookup"]);
+  });
+
+  it("rejects a null cursor as an invalid MCP response", async () => {
+    const server = new Server({ name: "null-cursor", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [], nextCursor: null }));
+    const client = await connect(server);
+    await expect(client.listTools()).rejects.toThrow(/nextCursor/);
+  });
+
+  it("validates structured output for a tool from an earlier page", async () => {
+    const server = new Server({ name: "paged-output", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor === "second"
+      ? { tools: [listedTool("summarize")] }
+      : { tools: [{
+        ...listedTool("count"),
+        outputSchema: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+      }], nextCursor: "second" });
+    server.setRequestHandler(CallToolRequestSchema, async () => ({
+      content: [], structuredContent: { count: "seven" },
+    }));
+    const client = await connect(server);
+    await client.listTools();
+    await expect(client.callTool("count", {})).rejects.toThrow("Structured content does not match");
+  });
+
+  it("rejects a repeated cursor with the server name", async () => {
+    const server = new Server({ name: "repeated-cursor", version: "1" }, { capabilities: { tools: {} } });
+    let pages = 0;
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [], nextCursor: ++pages < 3 ? "repeat" : undefined,
+    }));
+    const client = await connect(server);
+    await expect(client.listTools()).rejects.toThrow(/MCP server "memory".*repeated cursor/i);
+  });
+
+  it("rejects a catalog that requires more than 1000 pages", async () => {
+    const server = new Server({ name: "long-catalog", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+      const page = Number(params?.cursor ?? "1");
+      return { tools: [], nextCursor: page < 1001 ? String(page + 1) : undefined };
+    });
+    const client = await connect(server);
+    await expect(client.listTools()).rejects.toThrow(/MCP server "memory".*1000 pages/i);
+  });
+
+  it("cancels a pending page without returning a partial catalog", async () => {
+    const caller = new AbortController();
+    const server = new Server({ name: "slow-catalog", version: "1" }, { capabilities: { tools: {} } });
+    let cancellations = 0;
+    server.setNotificationHandler(CancelledNotificationSchema, async () => {
+      cancellations++;
+    });
+    server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => {
+      if (params?.cursor === "second") {
+        caller.abort(new Error("catalog cancelled"));
+        return new Promise(() => {});
+      }
+      return { tools: [listedTool("lookup")], nextCursor: "second" };
+    });
+    const client = await connect(server);
+    await expect(client.listTools({ signal: caller.signal })).rejects.toThrow("catalog cancelled");
+    await new Promise(setImmediate);
+    expect(cancellations).toBe(1);
+  }, 1_000);
+});
+
 describe("MCP client memory", () => {
   it("compiles identical output schemas once across 200 rounds and fresh clients", async () => {
     const compile = vi.spyOn(AjvJsonSchemaValidator.prototype, "getValidator");

@@ -88,6 +88,21 @@ describe("resolveAccountLabel", () => {
     expect(unsafe.callTool).not.toHaveBeenCalled();
   });
 
+  it("finds a safe whoami tool on the second page", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({}, 404)));
+    const paged: AccountSession = {
+      listTools: async (params?: { cursor: string }) => params?.cursor === "second"
+        ? { tools: [{ name: "whoami" }] }
+        : { tools: [{ name: "list_notes" }], nextCursor: "second" },
+      callTool: async ({ name }) => {
+        if (name !== "whoami") throw new Error("Unknown tool");
+        return { structuredContent: { email: "paged@example.test" } };
+      },
+      close: async () => {},
+    };
+    await expect(resolveAccountLabel({ ...base, connect: async () => paged })).resolves.toBe("paged@example.test");
+  });
+
   it("returns undefined when every source fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("down"); }));
     await expect(resolveAccountLabel({ ...base, connect: vi.fn().mockRejectedValue(new Error("no")) })).resolves.toBeUndefined();

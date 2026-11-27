@@ -3,11 +3,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 
+import { toolPages } from "./tool-pages.js";
+
 /** Best-effort "who is connected" label for an OAuth MCP connection; never throws and stays within one deadline. */
 
 export interface AccountTool { name: string; inputSchema?: { required?: string[] }; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }
 export interface AccountSession {
-  listTools(): Promise<{ tools: AccountTool[] }>;
+  listTools(params?: { cursor: string }): Promise<{ tools: AccountTool[]; nextCursor?: string }>;
   callTool(request: { name: string; arguments?: Record<string, unknown> }): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -119,7 +121,8 @@ async function lookupAccount(lookup: AccountLookup, signal: AbortSignal): Promis
     if (label) return label;
   } catch { /* try the next source */ }
 
-  const known = HOST_LOOKUPS[new URL(lookup.serverUrl).host.toLowerCase()];
+  const host = new URL(lookup.serverUrl).host.toLowerCase();
+  const known = HOST_LOOKUPS[host];
   try {
     if (known && "rest" in known) { const label = extractAccountLabel(await fetchJson(known.rest, tokens.access_token, signal)); if (label) return label; }
     else if (known) {
@@ -131,8 +134,11 @@ async function lookupAccount(lookup: AccountLookup, signal: AbortSignal): Promis
   try {
     if (signal.aborted) return undefined;
     return await viaSession(lookup, signal, async (session) => {
-      const tool = (await session.listTools()).tools.find(isSafeWhoami);
-      return tool ? extractAccountLabel(await session.callTool({ name: tool.name, arguments: {} })) : undefined;
+      for await (const page of toolPages(host, signal, (params) => session.listTools(params))) {
+        const tool = page.find(isSafeWhoami);
+        if (tool) return extractAccountLabel(await session.callTool({ name: tool.name, arguments: {} }));
+      }
+      return undefined;
     });
   } catch { return undefined; }
 }

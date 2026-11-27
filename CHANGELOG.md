@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- MCP tool discovery reads every catalog page, making tools beyond the first page available to agents (ALG-819).
+
 - MCP OAuth refresh timeouts and network errors log warnings and leave connections available for the next attempt. Refused grants still log errors and can require reconnecting (ALG-740).
 - Exa search tools return page text again, `exa_search` live crawling uses the current `contents` options, and `exa_code` sends `tokensNum`, so it no longer fails with HTTP 400.
 - An older release does not replace the latest catalog.
